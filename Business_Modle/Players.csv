@@ -1,0 +1,14 @@
+name,type,region_focus,reward_form,approx_scale_note,anti_cheat_mechanism,official_site
+LifePoints,問卷賺錢平台,台灣站,LifePoints 換禮品卡、PayPal現金,,Kantar Qubed 反詐機制、機器學習偵測異常行為、限制VPN與多帳號。每月阻擋12萬+ 詐騙作答,https://www.lifepointspanel.com/zh-tw/
+Rakuten Insight,問卷賺錢平台,台灣站,樂天點數、現金,覆蓋14+地區、全球數百萬會員,全球面板，採用帳號驗證、風控與反詐機制（未公開細節）,https://member.insight.rakuten.com.tw/
+Toluna Influencers,問卷賺錢平台,全球,積分兌換禮券、現金,全球成千上萬會員,帳號/裝置監控、異常行為偵測與驗證（官方未公開完整細節）,https://www.toluna.com/
+Swagbucks,問卷賺錢平台,美國,SB點數兌換禮品卡、PayPal現金,老牌回饋平台，數百萬使用者,帳號與IP風控、行為檢測（未公開細節）,https://www.swagbucks.com/
+Premise,問卷賺錢平台,全球,PayPal現金,全球多國任務市場App，持續擴張 （任務依城市而異）,結合人工與自動品質管控、機器學習反詐欺與防偽造（Anti-Spoofing）,https://premise.com/
+OpinionWorld,問卷賺錢平台,台灣,點數兌換PayPal現金、禮券,全球市場資料搜集小組之一，台灣分站,僅限台灣居民、帳號與IP風控（未公開細節）,https://www.opinionworld.tw/
+iX:Panel,問卷賺錢平台,台灣,點數兌換現金、禮券,台灣消費者線上樣本約30萬人,會員制、Email/手機驗證、IP與帳號異常風控（推測）,https://www.ixpanel.com/
+東方快線市調會員網,問卷賺錢平台,台灣,儲值金兌換現金、禮券,東方線上集團網路市調會員樣本，零門檻小額收入,會員制、手機簡訊認證、IP與帳號風控（未公開細節）,https://www.panelpower.com.tw/
+Surveyon,問卷賺錢平台,亞洲,點數兌換現金、OPEN POINT等,每日固定調查、穩定出卷的亞洲面板,APP帳號制與基礎風控（未公開細節）,https://surveyon.com/ (APP為主)
+EmailCash,問卷賺錢平台,台灣,e元兌換現金、禮券,台灣老牌會員獎勵網，營運超過20年,IP/帳號風控、基本行為檢查（推測，平台未公開細節）,https://www.facebook.com/emailcash/
+SurveyCake,線上問卷SaaS,台灣,不提供獎勵機制（工具型）,台灣知名企業級雲端問卷服務，提供70+範本、20+題型,Google reCAPTCHA、人機驗證；密碼保護；回收數量上限；選項數量上限；文字不重複驗證；瀏覽器與IP記錄、填答隔離區等,https://www.surveycake.com/
+Typeform,線上問卷SaaS,全球,不提供獎勵機制（工具型）,全球知名高質感互動表單平台，支援RWD與多語系,可限制總回覆數、設定截止日期、利用Email與Cookies方案限制每人一次作答、嵌入頁面自訂防重複邏輯,https://www.typeform.com/
+SurveyMonkey,線上問卷SaaS,全球,不提供獎勵機制（工具型）,全球主流企業級問卷工具之一,IP限制、多次作答控制、登入驗證與邏輯題型輔助偵測（依方案而異）,https://www.surveymonkey.com/
