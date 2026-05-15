@@ -11,13 +11,13 @@
 | 里程碑 | 完成 / 總數 | 備註 |
 |---|---|---|
 | M0 基礎設施 | 3 / 3 | 完成 |
-| M1 Move Contracts | 0 / 7 | |
+| M1 Move Contracts | 1 / 7 | |
 | M2 Backend | 0 / 9 | |
 | M3 Frontend | 0 / 9 | |
 | M4 整合 & Demo | 0 / 2 | |
-| **合計** | **3 / 30** | |
+| **合計** | **4 / 30** | |
 
-下一步：**T1.1 — `reward_coin` module**
+下一步：**T1.2 — `participant_sbt` module**
 
 ---
 
@@ -43,20 +43,23 @@
 - [x] 共用 cache（pnpm store、Sui CLI binary）
 - TDD
   - [x] CI 三個 job 全綠
-  - [ ] 故意推 typo PR 驗證會被擋下（push 後於 GitHub 驗證）
+  - [-] 故意推 typo PR 驗證會被擋下（push 後於 GitHub 驗證）
 
 ---
 
 ## ⛓ M1 Move Contracts
 
-### [ ] T1.1 — `reward_coin` module
-- [ ] `init` 發行 TreasuryCap（capped 1B）
-- [ ] admin 開放 `mint`、任何人開放 `burn`
+### [x] T1.1 — `reward_coin` module
+- [x] `init` 發行 TreasuryCap（capped 1B，9 decimals）
+- [x] admin 開放 `mint`、任何人開放 `burn`
+- [x] `transfer_admin`（production key rotation）
 - TDD
-  - [ ] `test_mint_by_admin_succeeds`
-  - [ ] `test_mint_by_non_admin_aborts`
-  - [ ] `test_total_supply_capped`
-  - [ ] `test_burn_reduces_supply`
+  - [x] `test_mint_by_admin_succeeds`
+  - [x] `test_mint_by_non_admin_aborts`
+  - [x] `test_total_supply_capped`
+  - [x] `test_burn_reduces_supply`
+  - [x] `test_transfer_admin_by_admin_succeeds`
+  - [x] `test_transfer_admin_by_non_admin_aborts`
 
 ### [ ] T1.2 — `participant_sbt` module（護照機制）
 - [ ] struct `ParticipantSBT`（含 status: ACTIVE / REVOKED / SUPERSEDED）
