@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # ── Move smart-contract tests ─────────────────────────────────────────────
+  move-test:
+    name: Move Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve latest Sui testnet release
+        id: sui
+        run: |
+          DATA=$(curl -sSL \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/MystenLabs/sui/releases?per_page=30")
+          TAG=$(echo "$DATA" | jq -r \
+            '[.[] | select(.tag_name | startswith("testnet-v"))] | .[0].tag_name')
+          URL=$(echo "$DATA" | jq -r \
+            '[.[] | select(.tag_name | startswith("testnet-v"))] | .[0].assets[]
+             | select(.name | endswith("ubuntu-x86_64.tgz"))
+             | .browser_download_url' | head -1)
+          echo "tag=$TAG"   >> $GITHUB_OUTPUT
+          echo "url=$URL"   >> $GITHUB_OUTPUT
+
+      - name: Cache Sui CLI
+        id: cache-sui
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/sui
+          key: sui-${{ steps.sui.outputs.tag }}-ubuntu-x86_64
+
+      - name: Install Sui CLI
+        if: steps.cache-sui.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/sui-install
+          curl -sSfL "${{ steps.sui.outputs.url }}" | tar xz -C /tmp/sui-install
+          mkdir -p ~/.local/bin
+          find /tmp/sui-install -name 'sui' -type f | head -1 \
+            | xargs -I{} cp {} ~/.local/bin/sui
+          chmod +x ~/.local/bin/sui
+
+      - name: Add Sui CLI to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Verify Sui CLI
+        run: sui --version
+
+      - name: Cache Move dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.move
+          key: move-deps-${{ hashFiles('contracts/Move.toml') }}
+          restore-keys: move-deps-
+
+      - name: Run Move tests
+        working-directory: contracts
+        run: sui move test
+
+  # ── TypeScript / Node.js backend + scripts tests ──────────────────────────
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: surveysui
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: surveysui_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck scripts
+        run: pnpm --filter @surveysui/scripts typecheck
+
+      - name: Test scripts
+        run: pnpm --filter @surveysui/scripts test
+
+      - name: Typecheck backend
+        run: pnpm --filter @surveysui/backend typecheck
+
+      - name: Test backend
+        run: pnpm --filter @surveysui/backend test
+        env:
+          DATABASE_URL: postgresql://surveysui:testpassword@localhost:5432/surveysui_test
+
+  # ── Frontend: Vitest unit tests + Playwright E2E ─────────────────────────
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck frontend
+        run: pnpm --filter @surveysui/frontend typecheck
+
+      - name: Test frontend (Vitest)
+        run: pnpm --filter @surveysui/frontend test
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright with system deps
+        run: pnpm --filter @surveysui/frontend exec playwright install --with-deps chromium
+
+      - name: Test E2E (Playwright)
+        run: pnpm --filter @surveysui/frontend test:e2e

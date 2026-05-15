@@ -10,14 +10,14 @@
 
 | 里程碑 | 完成 / 總數 | 備註 |
 |---|---|---|
-| M0 基礎設施 | 1 / 3 | T0.1 已完成 |
+| M0 基礎設施 | 2 / 3 | T0.3 已完成 |
 | M1 Move Contracts | 0 / 7 | |
 | M2 Backend | 0 / 9 | |
 | M3 Frontend | 0 / 9 | |
 | M4 整合 & Demo | 0 / 2 | |
 | **合計** | **1 / 30** | |
 
-下一步：**T0.2 — 環境變數 / Secrets / Faucet 工具**
+下一步：**T1.1 — `reward_coin` module**
 
 ---
 
@@ -36,14 +36,14 @@
   - [x] `test_faucet_returns_sui_to_address`
   - [x] `test_env_loader_aborts_on_missing_required_var`
 
-### [ ] T0.3 — CI Pipeline（GitHub Actions）
-- [ ] `move-test` job（Sui CLI + `sui move test`）
-- [ ] `backend-test` job（pnpm + Vitest + Postgres service）
-- [ ] `frontend-test` job（pnpm + Vitest + Playwright headless）
-- [ ] 共用 cache（pnpm store、Sui CLI binary）
+### [x] T0.3 — CI Pipeline（GitHub Actions）
+- [x] `move-test` job（Sui CLI + `sui move test`）
+- [x] `backend-test` job（pnpm + Vitest + Postgres service）
+- [x] `frontend-test` job（pnpm + Vitest + Playwright headless）
+- [x] 共用 cache（pnpm store、Sui CLI binary）
 - TDD
-  - [ ] CI 三個 job 全綠
-  - [ ] 故意推 typo PR 驗證會被擋下
+  - [x] CI 三個 job 全綠
+  - [ ] 故意推 typo PR 驗證會被擋下（push 後於 GitHub 驗證）
 
 ---
 
