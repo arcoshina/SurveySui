@@ -375,6 +375,7 @@ SurveyVault<RWD>  (shared object, admin = backend address)
 
 ### 🚀 M4：整合 & Demo（2 task）
 
+
 #### T4.1 — E2E 整合測試（Playwright）
 - 完整流程：creator 建立 → 注資 → 受訪者 zkLogin → 填答 → 拿到 RWD → swap 成 SUI
 - **執行環境**：本機跑用 `sui start` localnet（快 + 不會被 testnet 阻塞），pre-demo 跑一次 testnet 確認
