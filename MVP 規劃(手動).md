@@ -79,22 +79,23 @@
 
 **Flow B：填答 & 拿獎勵**
 
-1. 點擊發起者分享的問卷連結，連到前端網站（RWD，mobile-first）。  
+1. 點擊發起者分享的問卷連結，連到前端網站（RWD）。  
 2. 引導社群登入註冊/連錢包。
-3. 進入問卷：
+   - 在 **testnet** 上填答，需要加入從 faucet 領測試Sui功能和流程
+1. 進入問卷：
    - 後端驗證：  
      - 該活動尚有剩餘名額  
      - 該地址未領過（避免重複領獎/女巫）  
      - 未通過導向適當說明頁面  
-4. 填完問卷（前端表單，暫存於後端）  
+2. 填完問卷（前端表單，暫存於後端）  
      - 填完顯示預覽，讓受訪者能再次確認內容  
-5. 受訪者送出問卷
+3. 受訪者送出問卷 (在 Testnet)
      - 後端再次檢查資格及表單完整性
      - 後端呼叫合約發起 PTB：  
-       - 從 RewardVault 轉出 stacked RewardCoin 獎勵給該地址  
+       - 從 RewardVault 在 **Mainnet** 上 空投 stacked RewardCoin 獎勵給該地址  
        - 問卷結果加密後上鏈 (發起人可選)
        - 前端顯示結果
-6. 受訪者在鏈上資訊確認：  
+4. 受訪者在鏈上資訊確認：  
    - 收到正確的 Rewardcoin  
    - 進階：額外的參與積分/token
 
@@ -116,90 +117,3 @@
 4. 送出結果：
    - 依照設定方法送出結果 (e-mail通知、鏈上記錄，之類的)
 
-
-# 編輯進度到此
-
-
-## MVP 功能列表（對齊 Sui 賽道版）
-
-### A. 前台／後台（產品層）
-
-1. 帳號與活動管理（簡化版）
-   - Email 註冊／登入。  
-   - 問卷活動列表：建立／關閉／刪除活動。  
-   - 每個活動對應一個鏈上 RewardVault ID。
-
-2. 問卷建立
-   - 僅提供少數常用模板：  
-     - 概念測試（5–10 題）。  
-     - 滿意度調查（5–10 題）。  
-   - 題型：單選、多選、1–5 分量表。  
-   - 不做進階邏輯（跳題）—為了把資源集中在金流/DeFi 這一側。
-
-3. 發佈與填答體驗
-   - 問卷 public link + QR code（維持你原本 MVP 的優點）。
-   - RWD 響應式設計，手機填寫順暢。 
-
-4. 基本分析
-   - 回覆數、完成率、平均填答時間。  
-   - 單選／多選長條圖、量表平均分數與簡單分布圖。  
-   - 支援匯出 CSV（以方便後續進階分析）。
-
-
-### B. On-chain 核心（Sui Move + PTB）
-
-1. RewardVault 模組
-   - create_vault(creator, coin, reward_per_user, max_recipients)。  
-   - fund_vault(vault, additional_funds)。  
-   - close_vault_and_refund(creator)：結束活動，把剩餘資金退回或轉入另一合約。
-
-2. RewardTicket 模組
-   - issue_ticket(vault, recipient_addr)：檢查剩餘名額、標記該地址已領。  
-   - redeem_ticket(ticket)：從 vault 轉出 reward_per_user 的 coin 到持有者；或由系統批次兌換。  
-
-3. Programmable Transaction Blocks 用法
-   - 創建活動時：一筆 PTB 同時完成「create_vault + fund_vault」。
-   - 受訪者領獎時：  
-     - 一筆 PTB 完成「issue_ticket + （可選）redeem_ticket」；或兩階段設計，用來展示不同金融 workflow。  
-   - 結束活動：一筆 PTB 完成「close_vault_and_refund + optional deposit into DeFi 策略」。
-
-
-### C. 安全與風險控管（MVP 等級）
-
-- 每個 vault 只允許預設的合約方法提領，不可被任意地址抽乾。  
-- 在 off-chain 層加上簡單的防濫用：  
-  - 同一地址／IP／Email 僅能領一次（MVP 可以先從地址＋Email）。
-- 前端清楚顯示：  
-  - 已發放份數／剩餘份數／vault 價值。  
-- 合約層可以加一個「每日發放上限」參數，避免誤設置超大獎勵被機器人瞬間抽空。
-
-
-## 哪些你原本 MVP 要「砍掉」或「延後」
-
-為了更聚焦 Sui 賽道評審想看的東西，可以刻意先不做：
-
-- 複雜問卷邏輯（跳題、矩陣題等）。
-- 多種獎勵類型（先鎖定一種最主流的鏈上資產：SUI 或穩定幣）。  
-- 多金流入金方式（信用卡／本地金流），因為現在 vault 注資直接用鏈上轉帳即可。 
-- 進階分析／顧問模組（留給 pitch 或未來 roadmap）。
-
-這樣可以讓你在 hackathon 期間把時間集中在：
-- 合約安全性與資產所有權處理正確。  
-- PTB 流程設計得漂亮（Demo 好講故事）。  
-- 創業者端的 UX 夠直覺，真的做到「建立活動 → 一鍵注資 → 分享 → 自動發獎 → 結束活動退剩餘資金」。
-
-
-## 如果你要馬上做 Demo，可以的情境腳本
-
-- 情境：  
-  「一個台北小型品牌要驗證新包裝設計，願意拿出 100 USDC 當問卷獎勵。」  
-
-- Demo 步驟：
-  1. 創業者登入 → 建立活動 → 設定每人 1 USDC，上限 80 人 → 連接 Sui wallet 注資 100 USDC（包含 buffer）。  
-  2. 展示 on-chain vault 已建立，前台顯示「預算 100 USDC，可發 80 份」。  
-  3. 找現場一位評審／觀眾掃 QR code → 填問卷 → 填入 Sui 地址 → 點提交。  
-  4. 畫面顯示「恭喜完成，1 USDC 已發送到你的錢包」，評審在 Sui wallet 看到收到資產。  
-  5. 回到創業者 dashboard，看到已完成 1 份、已發放 1 USDC、剩餘 99 USDC。  
-  6. 最後示範「結束活動」→ vault 關閉，剩餘資金退回創業者錢包或自動轉入一個 yield vault。  
-
-這樣一套 flow 非常對齊「Payments & DeFi today disconnected → on Sui, payments become programmable financial actions」的敘事，也完全呼應你原本產品核心——問卷＋獎勵——只是把「獎勵金流」升級到鏈上 programmable money。 
