@@ -30,3 +30,7 @@ Thumbs.db
 
 # Sui
 contracts/build/
+
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
