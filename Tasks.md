@@ -13,11 +13,11 @@
 | M0 基礎設施 | 3 / 3 | 完成 |
 | M1 Move Contracts | 6 / 7 | T1.7 延後（待實際對 testnet 部署驗證）|
 | M2 Backend | 8 / 9 | |
-| M3 Frontend | 0 / 9 | |
+| M3 Frontend | 6 / 9 | |
 | M4 整合 & Demo | 0 / 2 | |
-| **合計** | **17 / 30** | |
+| **合計** | **23 / 30** | |
 
-下一步：**T2.9 — Admin key 安全**
+下一步：**T3.7 — Swap UI（RWD ↔ SUI）**
 
 ---
 
@@ -226,56 +226,56 @@
 
 ## 🎨 M3 Frontend
 
-### [ ] T3.1 — Vite + React + @mysten/dapp-kit + Tailwind
-- [ ] 四路由：`/create`、`/dashboard`、`/s/:id`、`/swap`
-- [ ] `<SuiClientProvider>` + `<WalletProvider>` 包 App root
-- [ ] Testnet 連線設定
-- [ ] `index.html` 全站通用 OG meta tags（baseline）
+### [x] T3.1 — Vite + React + @mysten/dapp-kit + Tailwind
+- [x] 四路由：`/create`、`/dashboard`、`/s/:id`、`/swap`
+- [x] `<SuiClientProvider>` + `<WalletProvider>` 包 App root
+- [x] Testnet 連線設定
+- [x] `index.html` 全站通用 OG meta tags（baseline）
 - TDD
-  - [ ] Playwright smoke test：四個路由皆可載入
+  - [x] Playwright smoke test：四個路由皆可載入
 
-### [ ] T3.2 — 發起者：建立問卷頁
-- [ ] Markdown editor + 預覽欄
-- [ ] 設定獎勵金額、名額、截止日
+### [x] T3.2 — 發起者：建立問卷頁
+- [x] Markdown editor + 預覽欄
+- [x] 設定獎勵金額、名額、截止日
 - TDD
-  - [ ] `test_form_validation_blocks_invalid_input`
-  - [ ] `test_preview_renders_markdown`
-  - [ ] `test_submit_calls_create_api`
+  - [x] `test_form_validation_blocks_invalid_input`
+  - [x] `test_preview_renders_markdown`
+  - [x] `test_submit_calls_create_api`
 
-### [ ] T3.3 — 發起者：注資頁（連錢包簽 PTB）
-- [ ] 預估 SUI 消耗顯示
-- [ ] 一鍵 PTB：swap → create → fund → share_vault
-- [ ] 失敗 atomic rollback
+### [x] T3.3 — 發起者：注資頁（連錢包簽 PTB）
+- [x] 預估 SUI 消耗顯示（CPMM 反向公式 + 1% 滑點緩衝）
+- [x] 一鍵 PTB：swap_b_to_a → create → share_vault（Sui PTB atomic 語意）
+- [x] 失敗 atomic rollback（PTB 任一步驟失敗自動 rollback）
 - TDD
-  - [ ] `test_estimated_cost_calculation`
-  - [ ] `test_ptb_constructed_correctly`（snapshot test）
-  - [ ] `test_wallet_rejection_handled`
+  - [x] `test_estimated_cost_calculation`
+  - [x] `test_ptb_constructed_correctly`（4 個 command 結構驗證）
+  - [x] `test_wallet_rejection_handled`
 
-### [ ] T3.4 — 發起者：儀表板
-- [ ] Recharts 統計圖
-- [ ] 鏈上即時查詢 vault 餘額
-- [ ] 結束活動按鈕
+### [x] T3.4 — 發起者：儀表板
+- [x] Recharts 統計圖
+- [x] 鏈上即時查詢 vault 餘額
+- [x] 結束活動按鈕
 - TDD
-  - [ ] `test_dashboard_renders_stats`
-  - [ ] `test_close_button_disabled_until_eligible`
+  - [x] `test_dashboard_renders_stats`
+  - [x] `test_close_button_disabled_until_eligible`
 
-### [ ] T3.5 — 受訪者：zkLogin 登入頁
-- [ ] Google OAuth 按鈕
-- [ ] SBT 非同步流程：pending state + poll `GET /me/sbt-status`
+### [x] T3.5 — 受訪者：zkLogin 登入頁
+- [x] Google OAuth 按鈕
+- [x] SBT 非同步流程：pending state + poll `GET /me/sbt-status`
 - TDD
-  - [ ] `test_login_redirects_to_google`
-  - [ ] `test_callback_creates_session`
-  - [ ] `test_ui_shows_pending_state_until_sbt_active`
-  - [ ] `test_ui_unlocks_after_sbt_status_active`
+  - [x] `test_login_redirects_to_google`
+  - [x] `test_callback_creates_session`
+  - [x] `test_ui_shows_pending_state_until_sbt_active`
+  - [x] `test_ui_unlocks_after_sbt_status_active`
 
-### [ ] T3.6 — 受訪者：問卷填答頁
-- [ ] 從 backend 拉 questions JSON 渲染
-- [ ] 提交前預覽
-- [ ] 成功後顯示 TX hash
+### [x] T3.6 — 受訪者：問卷填答頁
+- [x] 從 backend 拉 questions JSON 渲染
+- [x] 提交前預覽
+- [x] 成功後顯示 TX hash
 - TDD
-  - [ ] `test_required_questions_block_submit`
-  - [ ] `test_review_screen_shows_all_answers`
-  - [ ] `test_success_state_shows_tx_hash`
+  - [x] `test_required_questions_block_submit`
+  - [x] `test_review_screen_shows_all_answers`
+  - [x] `test_success_state_shows_tx_hash`
 
 ### [ ] T3.7 — Swap UI（RWD ↔ SUI）
 - [ ] 兩個 input + 自動算 amount_out
