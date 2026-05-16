@@ -11,13 +11,13 @@
 | 里程碑 | 完成 / 總數 | 備註 |
 |---|---|---|
 | M0 基礎設施 | 3 / 3 | 完成 |
-| M1 Move Contracts | 1 / 7 | |
+| M1 Move Contracts | 5 / 7 | |
 | M2 Backend | 0 / 9 | |
 | M3 Frontend | 0 / 9 | |
 | M4 整合 & Demo | 0 / 2 | |
-| **合計** | **4 / 30** | |
+| **合計** | **8 / 30** | |
 
-下一步：**T1.2 — `participant_sbt` module**
+下一步：**T1.6 — Module integration test**
 
 ---
 
@@ -61,62 +61,62 @@
   - [x] `test_transfer_admin_by_admin_succeeds`
   - [x] `test_transfer_admin_by_non_admin_aborts`
 
-### [ ] T1.2 — `participant_sbt` module（護照機制）
-- [ ] struct `ParticipantSBT`（含 status: ACTIVE / REVOKED / SUPERSEDED）
-- [ ] 僅 `key`，不含 `store`（阻擋 `public_transfer`）
-- [ ] 全域共享 `SbtRegistry`（active_serial_by_sub）
-- [ ] `issue` / `reissue` / `revoke`（皆 admin only）
-- [ ] view function `is_valid(sbt, clock)`
+### [x] T1.2 — `participant_sbt` module（護照機制）
+- [x] struct `ParticipantSBT`（含 status: ACTIVE / REVOKED / SUPERSEDED）
+- [x] 僅 `key`，不含 `store`（阻擋 `public_transfer`）
+- [x] 全域共享 `SbtRegistry`（active_serial_by_sub）
+- [x] `issue` / `reissue` / `revoke`（皆 admin only）
+- [x] view function `is_valid(sbt, clock)`
 - TDD
-  - [ ] `test_issue_first_time_succeeds`
-  - [ ] `test_issue_aborts_when_sub_already_has_active`
-  - [ ] `test_sbt_cannot_be_transferred`（compile-fail test）
-  - [ ] `test_non_admin_cannot_issue_or_revoke_or_reissue`
-  - [ ] `test_revoke_marks_status_and_clears_registry`
-  - [ ] `test_after_revoke_can_issue_new_to_same_sub`
-  - [ ] `test_reissue_marks_old_superseded_and_registry_points_to_new`
-  - [ ] `test_is_valid_returns_false_after_expiration`
-  - [ ] `test_is_valid_returns_false_when_revoked_or_superseded`
+  - [x] `test_issue_first_time_succeeds`
+  - [x] `test_issue_aborts_when_sub_already_has_active`
+  - [x] `test_sbt_cannot_be_transferred`（compile-fail test）
+  - [x] `test_non_admin_cannot_issue_or_revoke_or_reissue`
+  - [x] `test_revoke_marks_status_and_clears_registry`
+  - [x] `test_after_revoke_can_issue_new_to_same_sub`
+  - [x] `test_reissue_marks_old_superseded_and_registry_points_to_new`
+  - [x] `test_is_valid_returns_false_after_expiration`
+  - [x] `test_is_valid_returns_false_when_revoked_or_superseded`
 
-### [ ] T1.3 — `survey_vault` module（核心）
-- [ ] struct `SurveyVault<phantom T>`（balance, per_response, max_responses, deadline, claimed, admin, status）
-- [ ] `create` 回傳 vault（不在內部 share）
-- [ ] `share_vault` PTB 末端呼叫
-- [ ] `fund` 任何人可加碼
-- [ ] `claim` admin only：檢查 vault 狀態 + SBT 有效性 + sub_hash 未領過
-- [ ] `close` creator only：退還剩餘 balance
+### [x] T1.3 — `survey_vault` module（核心）
+- [x] struct `SurveyVault<phantom T>`（balance, per_response, max_responses, deadline, claimed, admin, status）
+- [x] `create` 回傳 vault（不在內部 share）
+- [x] `share_vault` PTB 末端呼叫
+- [x] `fund` 任何人可加碼
+- [x] `claim` admin only：檢查 vault 狀態 + SBT 有效性 + sub_hash 未領過
+- [x] `close` creator only：退還剩餘 balance
 - TDD
-  - [ ] `test_create_vault_with_correct_params`
-  - [ ] `test_create_returns_vault_unshared`
-  - [ ] `test_fund_increases_balance`
-  - [ ] `test_claim_happy_path`
-  - [ ] `test_claim_aborts_when_no_quota`
-  - [ ] `test_claim_aborts_when_expired`
-  - [ ] `test_claim_aborts_when_already_claimed`
-  - [ ] `test_claim_aborts_when_sbt_revoked_or_expired`
-  - [ ] `test_claim_aborts_when_sub_already_claimed_via_old_sbt`
-  - [ ] `test_claim_aborts_when_caller_not_admin`
-  - [ ] `test_close_returns_balance_to_creator`
-  - [ ] `test_close_aborts_when_caller_not_creator`
+  - [x] `test_create_vault_with_correct_params`
+  - [x] `test_create_returns_vault_unshared`
+  - [x] `test_fund_increases_balance`
+  - [x] `test_claim_happy_path`
+  - [x] `test_claim_aborts_when_no_quota`
+  - [x] `test_claim_aborts_when_expired`
+  - [x] `test_claim_aborts_when_already_claimed`
+  - [x] `test_claim_aborts_when_sbt_revoked_or_expired`
+  - [x] `test_claim_aborts_when_sub_already_claimed_via_old_sbt`
+  - [x] `test_claim_aborts_when_caller_not_admin`
+  - [x] `test_close_returns_balance_to_creator`
+  - [x] `test_close_aborts_when_caller_not_creator`
 
-### [ ] T1.4 — `amm_pool` module（CPMM）
-- [ ] struct `Pool<phantom A, phantom B>`（reserve_a, reserve_b, lp_supply）
-- [ ] `init_pool` / `add_liquidity` / `remove_liquidity`
-- [ ] `swap_a_to_b` / `swap_b_to_a`（0.3% fee）
+### [x] T1.4 — `amm_pool` module（CPMM）
+- [x] struct `Pool<phantom A, phantom B>`（reserve_a, reserve_b, lp_supply）
+- [x] `init_pool` / `add_liquidity` / `remove_liquidity`
+- [x] `swap_a_to_b` / `swap_b_to_a`（0.3% fee）
 - TDD
-  - [ ] `test_initial_liquidity_mints_correct_lp`
-  - [ ] `test_add_liquidity_proportional`
-  - [ ] `test_swap_preserves_k_within_fee`
-  - [ ] `test_swap_amount_out_matches_formula`
-  - [ ] `test_remove_liquidity_returns_correct_assets`
-  - [ ] `test_swap_aborts_on_zero_reserves`
+  - [x] `test_initial_liquidity_mints_correct_lp`
+  - [x] `test_add_liquidity_proportional`
+  - [x] `test_swap_preserves_k_within_fee`
+  - [x] `test_swap_amount_out_matches_formula`
+  - [x] `test_remove_liquidity_returns_correct_assets`
+  - [x] `test_swap_aborts_on_zero_reserves`
 
-### [ ] T1.5 — `survey_registry` module
-- [ ] struct `Survey`（vault_id, creator, content_hash, status）
-- [ ] 註冊事件供前端訂閱
+### [x] T1.5 — `survey_registry` module
+- [x] struct `Survey`（vault_id, creator, content_hash, status）
+- [x] 註冊事件供前端訂閱
 - TDD
-  - [ ] `test_register_emits_event`
-  - [ ] `test_query_by_creator`
+  - [x] `test_register_emits_event`
+  - [x] `test_query_by_creator`
 
 ### [ ] T1.6 — Module integration test
 - [ ] `test_scenario` 模擬：admin mint SBT → creator 注資 vault → admin claim → recipient swap RWD→SUI
