@@ -215,12 +215,12 @@
   - [x] `test_close_only_by_creator`
   - [x] `test_after_close_responses_rejected`
 
-### [ ] T2.9 — Admin key 安全
-- [ ] env var + dotenv（roadmap：AWS KMS）
-- [ ] 啟動時檢查 admin address 與合約 admin 一致
+### [x] T2.9 — Admin key 安全
+- [x] env var + dotenv（roadmap：AWS KMS）
+- [x] 啟動時檢查 admin address 與合約 admin 一致
 - TDD
-  - [ ] `test_missing_admin_key_aborts_startup`
-  - [ ] `test_admin_address_mismatch_aborts_startup`
+  - [x] `test_missing_admin_key_aborts_startup`
+  - [x] `test_admin_address_mismatch_aborts_startup`
 
 ---
 
