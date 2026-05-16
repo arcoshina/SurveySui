@@ -14,7 +14,8 @@
     "format": "prettier --write .",
     "dev": "pnpm --parallel -r dev",
     "move:build": "cd contracts && sui move build",
-    "move:test": "cd contracts && sui move test"
+    "move:test": "cd contracts && sui move test",
+    "deploy:testnet": "tsx scripts/src/init.ts"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.32.0",

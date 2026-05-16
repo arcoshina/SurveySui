@@ -11,13 +11,13 @@
 | 里程碑 | 完成 / 總數 | 備註 |
 |---|---|---|
 | M0 基礎設施 | 3 / 3 | 完成 |
-| M1 Move Contracts | 5 / 7 | |
+| M1 Move Contracts | 6 / 7 | T1.7 延後（待實際對 testnet 部署驗證）|
 | M2 Backend | 0 / 9 | |
 | M3 Frontend | 0 / 9 | |
 | M4 整合 & Demo | 0 / 2 | |
-| **合計** | **8 / 30** | |
+| **合計** | **9 / 30** | |
 
-下一步：**T1.6 — Module integration test**
+下一步：**T2.1 — Fastify server + 完整 Prisma schema**
 
 ---
 
@@ -118,15 +118,15 @@
   - [x] `test_register_emits_event`
   - [x] `test_query_by_creator`
 
-### [ ] T1.6 — Module integration test
-- [ ] `test_scenario` 模擬：admin mint SBT → creator 注資 vault → admin claim → recipient swap RWD→SUI
+### [x] T1.6 — Module integration test
+- [x] `test_scenario` 模擬：admin mint SBT → creator 注資 vault → admin claim → recipient swap RWD→SUI
 - TDD
-  - [ ] `test_full_lifecycle_e2e_in_move`
+  - [x] `test_full_lifecycle_e2e_in_move`
 
-### [ ] T1.7 — Deploy package + 初始化 AMM 流動性
-- [ ] `scripts/init.ts`：deploy + mint 種子 RWD + 開 RWD/SUI pool + 注入初始流動性
+### [-] T1.7 — Deploy package + 初始化 AMM 流動性（延後：尚未對 testnet 實際執行）
+- [x] `scripts/src/init.ts`：deploy + mint 種子 RWD + 開 RWD/SUI pool + 注入初始流動性（程式碼已寫）
 - TDD
-  - [ ] query pool reserves 兩邊均 > 0
+  - [-] `test_pool_reserves_both_nonzero`（integration，需 `INTEGRATION=1 AMM_POOL_ID=<id>`；尚未對 testnet 驗證）
 
 ---
 
