@@ -1,12 +1,35 @@
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
+import { buildApp } from './app.js'
+import { ProdZkLoginVerifier } from './auth/zklogin-verifier.js'
+import { SbtService } from './sbt/sbt-service.js'
+import { NoOpSbtChainClient } from './sbt/noop-chain-client.js'
+import { SurveyService } from './survey/survey-service.js'
+import { NoOpSurveyChainClient } from './survey/noop-chain-client.js'
 
-const app = Fastify({ logger: true })
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    throw new Error(`Missing required env var: ${name}`)
+  }
+  return value
+}
 
-await app.register(cors, { origin: true })
+const googleClientId = requireEnv('GOOGLE_OAUTH_CLIENT_ID')
+const googleRedirectUri =
+  process.env.GOOGLE_OAUTH_REDIRECT_URI ?? 'http://localhost:5173/auth/callback'
+const adminSecret = requireEnv('ADMIN_SECRET')
 
-app.get('/health', async () => {
-  return { status: 'ok' }
+const verifier = new ProdZkLoginVerifier({ googleClientId })
+const sbtService = new SbtService(new NoOpSbtChainClient())
+const surveyService = new SurveyService(new NoOpSurveyChainClient())
+
+const app = await buildApp({
+  verifier,
+  googleClientId,
+  googleRedirectUri,
+  sbtService,
+  surveyService,
+  adminSecret,
+  logger: true,
 })
 
 const port = Number(process.env.PORT) || 4000

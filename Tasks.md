@@ -12,12 +12,12 @@
 |---|---|---|
 | M0 基礎設施 | 3 / 3 | 完成 |
 | M1 Move Contracts | 6 / 7 | T1.7 延後（待實際對 testnet 部署驗證）|
-| M2 Backend | 0 / 9 | |
+| M2 Backend | 8 / 9 | |
 | M3 Frontend | 0 / 9 | |
 | M4 整合 & Demo | 0 / 2 | |
-| **合計** | **9 / 30** | |
+| **合計** | **17 / 30** | |
 
-下一步：**T2.1 — Fastify server + 完整 Prisma schema**
+下一步：**T2.9 — Admin key 安全**
 
 ---
 
@@ -132,88 +132,88 @@
 
 ## 🔧 M2 Backend
 
-### [ ] T2.1 — Fastify server + 完整 Prisma schema
-- [ ] `users`（zk_sub_hash UNIQUE, sui_address）
-- [ ] `participant_sbts`（serial UNIQUE, sbt_object_id, status, supersede_of）
-- [ ] `surveys`（vault_object_id, content_md, content_hash, deadline, status）
-- [ ] `questions`（type, prompt, options_json, required）
-- [ ] `responses`（answers_json, content_hash, claimed_tx, UNIQUE(survey_id, sub_hash)）
+### [x] T2.1 — Fastify server + 完整 Prisma schema
+- [x] `users`（zk_sub_hash UNIQUE, sui_address）
+- [x] `participant_sbts`（serial UNIQUE, sbt_object_id UNIQUE, status, supersede_of）
+- [x] `surveys`（vault_object_id UNIQUE, content_md, content_hash, deadline, status）
+- [x] `questions`（type, prompt, options_json, required）
+- [x] `responses`（answers_json, content_hash, claimed_tx, UNIQUE(survey_id, sub_hash)）
 - TDD
-  - [ ] migration apply 後 schema 與 ER 一致
-  - [ ] `test_unique_constraints_block_duplicates`
+  - [x] migration apply 後 schema 與 ER 一致（`tests/schema.test.ts` 內 7 個 schema parity case）
+  - [x] `test_unique_constraints_block_duplicates`（涵蓋 users / sbt.serial / sbt.sbt_object_id / surveys.vault / responses 複合 unique）
 
-### [ ] T2.2 — zkLogin 登入流程
-- [ ] `/auth/google/start` → Google OAuth
-- [ ] `/auth/zklogin/finalize` → 驗證 ZK proof，取得 sui_address / sub
-- [ ] `sub` SHA256 → `sub_hash` 存 DB
+### [x] T2.2 — zkLogin 登入流程
+- [x] `/auth/google/start` → Google OAuth
+- [x] `/auth/zklogin/finalize` → 驗證 ZK proof，取得 sui_address / sub
+- [x] `sub` SHA256 → `sub_hash` 存 DB
 - TDD
-  - [ ] `test_oauth_redirect_correct_url`
-  - [ ] `test_invalid_jwt_rejected`
-  - [ ] `test_same_sub_returns_existing_user`
-  - [ ] zk proof verifier mock happy / fail path
+  - [x] `test_oauth_redirect_correct_url`
+  - [x] `test_invalid_jwt_rejected`
+  - [x] `test_same_sub_returns_existing_user`
+  - [x] zk proof verifier mock happy / fail path
 
-### [ ] T2.3 — SBT issuance service（護照機制）
-- [ ] 新使用者首次登入 → `issue` ttl_ms=180d
-- [ ] 既有使用者：仍有效 → 跳過；< 14d 將過期 → 自動 reissue
-- [ ] `POST /admin/sbt/revoke`
-- [ ] `POST /admin/sbt/reissue`
-- [ ] 定期掃描將過期記錄並 log
+### [x] T2.3 — SBT issuance service（護照機制）
+- [x] 新使用者首次登入 → `issue` ttl_ms=180d
+- [x] 既有使用者：仍有效 → 跳過；< 14d 將過期 → 自動 reissue
+- [x] `POST /admin/sbt/revoke`
+- [x] `POST /admin/sbt/reissue`
+- [x] 定期掃描將過期記錄並 log
 - TDD
-  - [ ] `test_first_login_issues_sbt_with_correct_ttl`
-  - [ ] `test_second_login_within_validity_skips_issue`
-  - [ ] `test_login_near_expiration_triggers_reissue_and_marks_old_superseded`
-  - [ ] `test_admin_revoke_endpoint_calls_contract_and_updates_db`
-  - [ ] `test_after_revoke_next_login_issues_new_sbt`
-  - [ ] `test_admin_reissue_endpoint_supersedes_old_and_issues_new`
-  - [ ] `test_db_and_chain_atomicity`
-  - [ ] `test_only_admin_can_call_admin_endpoints`
+  - [x] `test_first_login_issues_sbt_with_correct_ttl`
+  - [x] `test_second_login_within_validity_skips_issue`
+  - [x] `test_login_near_expiration_triggers_reissue_and_marks_old_superseded`
+  - [x] `test_admin_revoke_endpoint_calls_contract_and_updates_db`
+  - [x] `test_after_revoke_next_login_issues_new_sbt`
+  - [x] `test_admin_reissue_endpoint_supersedes_old_and_issues_new`
+  - [x] `test_db_and_chain_atomicity`
+  - [x] `test_only_admin_can_call_admin_endpoints`
 
-### [ ] T2.4 — Survey CRUD API
-- [ ] `POST /surveys`：parse Markdown + metadata
-- [ ] `GET /surveys/:id`
-- [ ] 上鏈呼叫 `survey_registry::register`
+### [x] T2.4 — Survey CRUD API
+- [x] `POST /surveys`：parse Markdown + metadata
+- [x] `GET /surveys/:id`
+- [x] 上鏈呼叫 `survey_registry::register`
 - TDD
-  - [ ] `test_markdown_parser_handles_all_question_types`（單選 / 多選 / 簡答 / 量表）
-  - [ ] `test_invalid_metadata_rejected`
-  - [ ] `test_duplicate_question_ids_rejected`
-  - [ ] `test_survey_create_writes_hash_onchain`
+  - [x] `test_markdown_parser_handles_all_question_types`（單選 / 多選 / 簡答 / 量表）
+  - [x] `test_invalid_metadata_rejected`
+  - [x] `test_duplicate_question_ids_rejected`
+  - [x] `test_survey_create_writes_hash_onchain`
 
-### [ ] T2.5 — Response 儲存 + 資格檢查
-- [ ] `POST /surveys/:id/responses`
-- [ ] 檢查：有效 SBT、sub_hash 未領過、未截止、有名額
-- [ ] SHA256 hash 存 DB
+### [x] T2.5 — Response 儲存 + 資格檢查
+- [x] `POST /surveys/:id/responses`
+- [x] 檢查：有效 SBT、sub_hash 未領過、未截止、有名額
+- [x] SHA256 hash 存 DB
 - TDD
-  - [ ] `test_response_accepted_when_eligible`
-  - [ ] `test_rejected_when_no_sbt`
-  - [ ] `test_rejected_when_sbt_expired_or_revoked`
-  - [ ] `test_rejected_when_already_claimed`
-  - [ ] `test_rejected_when_quota_exhausted`
-  - [ ] `test_rejected_when_expired`
-  - [ ] `test_response_hash_deterministic`
+  - [x] `test_response_accepted_when_eligible`
+  - [x] `test_rejected_when_no_sbt`
+  - [x] `test_rejected_when_sbt_expired_or_revoked`
+  - [x] `test_rejected_when_already_claimed`
+  - [x] `test_rejected_when_quota_exhausted`
+  - [x] `test_rejected_when_expired`
+  - [x] `test_response_hash_deterministic`
 
-### [ ] T2.6 — Reward dispatcher（後端代簽 PTB）
-- [ ] admin key 簽 `survey_vault::claim`
-- [ ] transaction queue 避免 nonce 衝突
-- [ ] 寫回 `responses.claimed_tx`
+### [x] T2.6 — Reward dispatcher（後端代簽 PTB）
+- [x] admin key 簽 `survey_vault::claim`
+- [x] transaction queue 避免 nonce 衝突
+- [x] 寫回 `responses.claimed_tx`
 - TDD
-  - [ ] `test_dispatcher_signs_and_submits`
-  - [ ] `test_concurrent_claims_serialized`（100 個併發不會 nonce 衝突）
-  - [ ] `test_chain_failure_rolls_back_db`
-  - [ ] `test_retry_on_transient_error`
+  - [x] `test_dispatcher_signs_and_submits`
+  - [x] `test_concurrent_claims_serialized`（100 個併發不會 nonce 衝突）
+  - [x] `test_chain_failure_rolls_back_db`
+  - [x] `test_retry_on_transient_error`
 
-### [ ] T2.7 — Stats aggregator API
-- [ ] `GET /surveys/:id/stats`（回覆數、完成率、各題分佈、vault 餘額）
+### [x] T2.7 — Stats aggregator API
+- [x] `GET /surveys/:id/stats`（回覆數、完成率、各題分佈、vault 餘額）
 - TDD
-  - [ ] `test_stats_match_db_truth`
-  - [ ] `test_scale_question_average`
-  - [ ] `test_choice_question_distribution`
+  - [x] `test_stats_match_db_truth`
+  - [x] `test_scale_question_average`
+  - [x] `test_choice_question_distribution`
 
-### [ ] T2.8 — 結束活動 API
-- [ ] `POST /surveys/:id/close`：creator 自己簽，後端只 mark 狀態
+### [x] T2.8 — 結束活動 API
+- [x] `POST /surveys/:id/close`：creator 自己簽，後端只 mark 狀態
 - TDD
-  - [ ] `test_close_marks_status`
-  - [ ] `test_close_only_by_creator`
-  - [ ] `test_after_close_responses_rejected`
+  - [x] `test_close_marks_status`
+  - [x] `test_close_only_by_creator`
+  - [x] `test_after_close_responses_rejected`
 
 ### [ ] T2.9 — Admin key 安全
 - [ ] env var + dotenv（roadmap：AWS KMS）
