@@ -153,12 +153,16 @@ public fun lp_supply<A, B>(pool: &Pool<A, B>): u64  { balance::supply_value(&poo
 
 /// CPMM with 0.3% fee:
 /// amount_out = reserve_out × amount_in × 997 / (reserve_in × 1000 + amount_in × 997)
+///
+/// u256 intermediates: with u64 inputs, `ro * ai * 997` reaches ~2^138, which
+/// overflows u128 for pool sizes around 10^18 (1B coins × 9 decimals).
 fun compute_amount_out(amount_in: u64, reserve_in: u64, reserve_out: u64): u64 {
-    let ai  = amount_in  as u128;
-    let ri  = reserve_in  as u128;
-    let ro  = reserve_out as u128;
-    let num = ro * ai * 997;
-    let den = ri * 1000 + ai * 997;
+    let ai = amount_in  as u256;
+    let ri = reserve_in  as u256;
+    let ro = reserve_out as u256;
+    let ai_with_fee = ai * 997;
+    let num = ro * ai_with_fee;
+    let den = ri * 1000 + ai_with_fee;
     (num / den) as u64
 }
 

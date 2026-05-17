@@ -143,6 +143,50 @@ fun test_remove_liquidity_returns_correct_assets() {
     sc.end();
 }
 
+// H1: 1B-scale (1e18 with 9 decimals) reserves + 1e18 swap.
+// Under u128 intermediates `ro * ai * 997` ≈ 2^130 overflows and aborts;
+// u256 intermediates compute the correct result.
+// Expected amount_out = 997 × 10^18 / 1997 ≈ 4.99 × 10^17.
+#[test]
+fun test_compute_amount_out_no_overflow_at_1b_scale() {
+    let one_b = 1_000_000_000_000_000_000u64; // 1B × 10^9
+    let out = amm_pool::compute_amount_out_for_test(one_b, one_b, one_b);
+    assert!(out > 499_000_000_000_000_000, 0);
+    assert!(out < 500_000_000_000_000_000, 1);
+}
+
+// End-to-end: a real swap_a_to_b against a 1B/1B pool must succeed and
+// preserve the k invariant (k_after >= k_before).
+#[test]
+fun test_swap_at_1b_scale_preserves_k() {
+    let one_b = 1_000_000_000_000_000_000u64;
+    let mut sc = ts::begin(ALICE);
+    {
+        let coin_a = coin::mint_for_testing<COIN_A>(one_b, sc.ctx());
+        let coin_b = coin::mint_for_testing<COIN_B>(one_b, sc.ctx());
+        let lp = amm_pool::init_pool(coin_a, coin_b, sc.ctx());
+        transfer::public_transfer(lp, ALICE);
+    };
+    sc.next_tx(ALICE);
+    {
+        let mut pool = ts::take_shared<Pool<COIN_A, COIN_B>>(&sc);
+        let k_before = (amm_pool::reserve_a(&pool) as u256) *
+                       (amm_pool::reserve_b(&pool) as u256);
+
+        let coin_a    = coin::mint_for_testing<COIN_A>(one_b, sc.ctx());
+        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, sc.ctx());
+        assert!(coin::value(&coin_b_out) > 0, 0);
+
+        let k_after = (amm_pool::reserve_a(&pool) as u256) *
+                      (amm_pool::reserve_b(&pool) as u256);
+        assert!(k_after >= k_before, 1);
+
+        coin::burn_for_testing(coin_b_out);
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
 // Drain all liquidity, then attempt a swap → must abort with EZeroReserve.
 #[test, expected_failure(abort_code = surveysui::amm_pool::EZeroReserve)]
 fun test_swap_aborts_on_zero_reserves() {
