@@ -66,6 +66,9 @@ export default function FundPage() {
     setTxStatus('loading')
     setErrorMsg(null)
 
+    // 整筆獎勵 RWD 即為 swap 必須至少收到的數量；否則 vault::create 會缺額
+    const totalRwd = BigInt(params.perResponse) * BigInt(params.maxResponses) * RWD_DECIMALS
+
     let tx
     try {
       tx = buildFundSurveyPtb({
@@ -76,6 +79,7 @@ export default function FundPage() {
         deadlineMs: BigInt(params.deadlineMs),
         adminAddress: ADMIN_ADDRESS,
         suiToSpend,
+        minRwdOut: totalRwd,
       })
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'PTB 建構失敗')

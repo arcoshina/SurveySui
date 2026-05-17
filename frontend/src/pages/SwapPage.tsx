@@ -97,12 +97,16 @@ export default function SwapPage() {
       return
     }
 
+    // 5% 滑點容忍：呼應 UI 警告閾值（line 197）
+    const minAmountOut = (amountOut * 95n) / 100n
+
     let tx
     try {
       tx = buildSwapPtb({
         packageId: PACKAGE_ID,
         poolId: POOL_ID,
         amountIn: amountInBase,
+        minAmountOut,
         direction,
         senderAddress: account.address,
         rwdCoinId: direction === 'rwd_to_sui' ? rwdCoinId : undefined,

@@ -32,6 +32,7 @@ export interface BuildSwapPtbParams {
   packageId: string
   poolId: string
   amountIn: bigint
+  minAmountOut: bigint
   direction: 'sui_to_rwd' | 'rwd_to_sui'
   senderAddress: string
   rwdCoinId?: string
@@ -39,11 +40,11 @@ export interface BuildSwapPtbParams {
 
 /**
  * 建構 swap PTB：
- * - sui_to_rwd：splitCoins(gas) → swap_b_to_a → transferObjects(RWD, sender)
- * - rwd_to_sui：splitCoins(rwdCoin) → swap_a_to_b → transferObjects(SUI, sender)
+ * - sui_to_rwd：splitCoins(gas) → swap_b_to_a(min_out) → transferObjects(RWD, sender)
+ * - rwd_to_sui：splitCoins(rwdCoin) → swap_a_to_b(min_out) → transferObjects(SUI, sender)
  */
 export function buildSwapPtb(params: BuildSwapPtbParams): Transaction {
-  const { packageId, poolId, amountIn, direction, senderAddress, rwdCoinId } = params
+  const { packageId, poolId, amountIn, minAmountOut, direction, senderAddress, rwdCoinId } = params
   const rwdType = `${packageId}::reward_coin::REWARD_COIN`
   const suiType = '0x2::sui::SUI'
   const tx = new Transaction()
@@ -52,7 +53,7 @@ export function buildSwapPtb(params: BuildSwapPtbParams): Transaction {
     const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountIn)])
     const [rwdOut] = tx.moveCall({
       target: `${packageId}::amm_pool::swap_b_to_a`,
-      arguments: [tx.object(poolId), suiCoin],
+      arguments: [tx.object(poolId), suiCoin, tx.pure.u64(minAmountOut)],
       typeArguments: [rwdType, suiType],
     })
     tx.transferObjects([rwdOut], tx.pure.address(senderAddress))
@@ -61,7 +62,7 @@ export function buildSwapPtb(params: BuildSwapPtbParams): Transaction {
     const [rwdSplit] = tx.splitCoins(tx.object(rwdCoinId), [tx.pure.u64(amountIn)])
     const [suiOut] = tx.moveCall({
       target: `${packageId}::amm_pool::swap_a_to_b`,
-      arguments: [tx.object(poolId), rwdSplit],
+      arguments: [tx.object(poolId), rwdSplit, tx.pure.u64(minAmountOut)],
       typeArguments: [rwdType, suiType],
     })
     tx.transferObjects([suiOut], tx.pure.address(senderAddress))

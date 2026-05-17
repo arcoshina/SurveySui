@@ -44,14 +44,15 @@ export interface BuildPtbParams {
   deadlineMs: bigint
   adminAddress: string
   suiToSpend: bigint
+  minRwdOut: bigint
 }
 
 /**
  * 建構注資 PTB（Programmable Transaction Block）：
- *   1. splitCoins(gas, suiToSpend)               → suiCoin
- *   2. amm_pool::swap_b_to_a(pool, suiCoin)      → rwdCoin
- *   3. survey_vault::create(rwdCoin, params...)   → vault（未 share）
- *   4. survey_vault::share_vault(vault)           → shared object
+ *   1. splitCoins(gas, suiToSpend)                       → suiCoin
+ *   2. amm_pool::swap_b_to_a(pool, suiCoin, minRwdOut)   → rwdCoin
+ *   3. survey_vault::create(rwdCoin, params...)           → vault（未 share）
+ *   4. survey_vault::share_vault(vault)                   → shared object
  *
  * 任一步驟失敗時整筆 transaction 自動 rollback（Sui PTB atomic 語意）。
  */
@@ -64,6 +65,7 @@ export function buildFundSurveyPtb(params: BuildPtbParams): Transaction {
     deadlineMs,
     adminAddress,
     suiToSpend,
+    minRwdOut,
   } = params
 
   const tx = new Transaction()
@@ -72,7 +74,7 @@ export function buildFundSurveyPtb(params: BuildPtbParams): Transaction {
 
   const [rwdCoin] = tx.moveCall({
     target: `${packageId}::amm_pool::swap_b_to_a`,
-    arguments: [tx.object(poolId), suiCoin],
+    arguments: [tx.object(poolId), suiCoin, tx.pure.u64(minRwdOut)],
     typeArguments: [
       `${packageId}::reward_coin::REWARD_COIN`,
       '0x2::sui::SUI',

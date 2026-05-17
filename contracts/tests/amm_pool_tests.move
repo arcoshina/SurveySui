@@ -88,7 +88,7 @@ fun test_swap_preserves_k_within_fee() {
                        (amm_pool::reserve_b(&pool) as u128);
 
         let coin_a    = coin::mint_for_testing<COIN_A>(1_000, sc.ctx());
-        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, sc.ctx());
+        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, 0, sc.ctx());
 
         let k_after = (amm_pool::reserve_a(&pool) as u128) *
                       (amm_pool::reserve_b(&pool) as u128);
@@ -111,7 +111,7 @@ fun test_swap_amount_out_matches_formula() {
         assert!(expected == 906, 0);
 
         let coin_a     = coin::mint_for_testing<COIN_A>(1_000, sc.ctx());
-        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, sc.ctx());
+        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, 0, sc.ctx());
         assert!(coin::value(&coin_b_out) == expected, 1);
 
         coin::burn_for_testing(coin_b_out);
@@ -174,13 +174,45 @@ fun test_swap_at_1b_scale_preserves_k() {
                        (amm_pool::reserve_b(&pool) as u256);
 
         let coin_a    = coin::mint_for_testing<COIN_A>(one_b, sc.ctx());
-        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, sc.ctx());
+        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, 0, sc.ctx());
         assert!(coin::value(&coin_b_out) > 0, 0);
 
         let k_after = (amm_pool::reserve_a(&pool) as u256) *
                       (amm_pool::reserve_b(&pool) as u256);
         assert!(k_after >= k_before, 1);
 
+        coin::burn_for_testing(coin_b_out);
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+// H2: passing min_out = expected + 1 must abort with ESlippage.
+#[test, expected_failure(abort_code = surveysui::amm_pool::ESlippage)]
+fun test_swap_aborts_when_amount_out_below_min() {
+    let mut sc = setup_pool();
+    {
+        let mut pool = ts::take_shared<Pool<COIN_A, COIN_B>>(&sc);
+        let expected = amm_pool::compute_amount_out_for_test(1_000, 10_000, 10_000);
+        let coin_a   = coin::mint_for_testing<COIN_A>(1_000, sc.ctx());
+        // expected = 906 → demand 907, must abort
+        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, expected + 1, sc.ctx());
+        coin::burn_for_testing(coin_b_out);
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+// H2: min_out == expected succeeds.
+#[test]
+fun test_swap_succeeds_when_amount_out_meets_min() {
+    let mut sc = setup_pool();
+    {
+        let mut pool = ts::take_shared<Pool<COIN_A, COIN_B>>(&sc);
+        let expected = amm_pool::compute_amount_out_for_test(1_000, 10_000, 10_000);
+        let coin_a   = coin::mint_for_testing<COIN_A>(1_000, sc.ctx());
+        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a, expected, sc.ctx());
+        assert!(coin::value(&coin_b_out) == expected, 0);
         coin::burn_for_testing(coin_b_out);
         ts::return_shared(pool);
     };
@@ -210,7 +242,7 @@ fun test_swap_aborts_on_zero_reserves() {
 
         // Swap against empty pool → abort EZeroReserve
         let coin_a2    = coin::mint_for_testing<COIN_A>(1, sc.ctx());
-        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a2, sc.ctx());
+        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a2, 0, sc.ctx());
         coin::burn_for_testing(coin_b_out);
         ts::return_shared(pool);
     };

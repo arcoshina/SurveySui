@@ -8,6 +8,7 @@ use sui::coin::{Self, Coin};
 const EZeroAmount: u64        = 0;
 const EZeroReserve: u64       = 1;
 const EInsufficientLiquidity: u64 = 2;
+const ESlippage: u64          = 3;
 
 // ── structs ───────────────────────────────────────────────────────────────────
 
@@ -104,9 +105,11 @@ public fun remove_liquidity<A, B>(
 }
 
 /// Swap coin_a → coin_b with 0.3% fee (CPMM x·y = k).
+/// Aborts with `ESlippage` if the produced amount is below `min_out`. Pass 0 to opt out.
 public fun swap_a_to_b<A, B>(
     pool: &mut Pool<A, B>,
     coin_a: Coin<A>,
+    min_out: u64,
     ctx: &mut TxContext,
 ): Coin<B> {
     let amount_in = coin::value(&coin_a);
@@ -118,15 +121,18 @@ public fun swap_a_to_b<A, B>(
 
     let amount_out = compute_amount_out(amount_in, reserve_a, reserve_b);
     assert!(amount_out > 0, EInsufficientLiquidity);
+    assert!(amount_out >= min_out, ESlippage);
 
     balance::join(&mut pool.reserve_a, coin::into_balance(coin_a));
     coin::from_balance(balance::split(&mut pool.reserve_b, amount_out), ctx)
 }
 
 /// Swap coin_b → coin_a with 0.3% fee (CPMM x·y = k).
+/// Aborts with `ESlippage` if the produced amount is below `min_out`. Pass 0 to opt out.
 public fun swap_b_to_a<A, B>(
     pool: &mut Pool<A, B>,
     coin_b: Coin<B>,
+    min_out: u64,
     ctx: &mut TxContext,
 ): Coin<A> {
     let amount_in = coin::value(&coin_b);
@@ -138,6 +144,7 @@ public fun swap_b_to_a<A, B>(
 
     let amount_out = compute_amount_out(amount_in, reserve_b, reserve_a);
     assert!(amount_out > 0, EInsufficientLiquidity);
+    assert!(amount_out >= min_out, ESlippage);
 
     balance::join(&mut pool.reserve_b, coin::into_balance(coin_b));
     coin::from_balance(balance::split(&mut pool.reserve_a, amount_out), ctx)

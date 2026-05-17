@@ -133,6 +133,7 @@ describe('FundPage — T3.3', () => {
         deadlineMs: 9_999_999_999_999n,
         adminAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
         suiToSpend: 1_010_000_000n,
+        minRwdOut: 1_000_000_000_000n,
       })
 
       const data = tx.getData()
@@ -153,6 +154,7 @@ describe('FundPage — T3.3', () => {
         deadlineMs: 9_999_999_999_999n,
         adminAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
         suiToSpend: 1_010_000_000n,
+        minRwdOut: 1_000_000_000_000n,
       })
 
       const data = tx.getData()

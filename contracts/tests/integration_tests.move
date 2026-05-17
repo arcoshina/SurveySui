@@ -123,7 +123,7 @@ fun test_full_lifecycle_e2e_in_move() {
         let reserve_a_pre = amm_pool::reserve_a(&pool);
         let reserve_b_pre = amm_pool::reserve_b(&pool);
 
-        let sui_out  = amm_pool::swap_a_to_b(&mut pool, rwd_coin, sc.ctx());
+        let sui_out  = amm_pool::swap_a_to_b(&mut pool, rwd_coin, 0, sc.ctx());
         let received = coin::value(&sui_out);
 
         // Verify output matches CPMM formula (0.3% fee)
