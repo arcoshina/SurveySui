@@ -13,8 +13,8 @@
 
 | 里程碑 | 完成 / 總數 | 對應目標 | 備註 |
 |---|---|---|---|
-| M0 基礎建設 | 0 / 4 | [基建] | monorepo / CI / faucet / 部署腳本 |
-| M1 核心 Move 合約 | 0 / 7 | [A][B][C] 代幣經濟層 | 6 模組 + 整合 |
+| M0 基礎建設 | 1 / 4 | [基建] | T0.1 ✅；T0.2 命名就位（deploy 驗收延至 M1.7）；T0.3/T0.4 待執行 |
+| M1 核心 Move 合約 | 6 / 7 | [A][B][C] 代幣經濟層 | T1.1–T1.6 ✅；T1.7 待 Devnet 驗收 |
 | M2 Sponsored Transactions 整合 | 0 / 4 | [B] 零門檻層 | Gas Station + Dry Run |
 | M3 加密問卷答案 | 0 / 3 | [A][C] 隱私層 | 加密方案 + 鏈下解密 |
 | M4 Frontend（重寫） | 0 / 6 | [A][B][C] 產品層 | /create /fund /s /redeem /dashboard |
@@ -22,7 +22,7 @@
 | M6 E2E + Demo | 0 / 3 | 跨 Flow 整合 | 真合約 + Sponsored TX 全鏈路 |
 | **合計** | **0 / 30** | — | 全新里程碑（舊 M 編號已廢） |
 
-下一步：**M0 基礎建設 → M1 合約 TDD**
+下一步：**M1 T1.7 Devnet 部署 → M2 Sponsored Transactions**
 
 ### 兩個驗收軸（對齊 [專案目標.md §MVP 要證明什麼](專案目標.md)）
 
@@ -37,19 +37,20 @@
 
 > 目的：建立可重複部署的工作環境，後續所有 task 依賴此基底。
 
-### [ ] T0.1 — Monorepo skeleton
+### [x] T0.1 — Monorepo skeleton
 - pnpm workspaces：`/contracts` `/frontend` `/bff` `/scripts`
 - 統一 TypeScript / ESLint / Prettier config
 - 根 `package.json` 提供 `pnpm dev` / `pnpm build` / `pnpm test`
 - TDD
-  - [ ] `pnpm -r build` 全綠
-  - [ ] `pnpm -r typecheck` 全綠
+  - [x] `pnpm -r build` 全綠
+  - [x] `pnpm -r typecheck` 全綠
 
-### [ ] T0.2 — Testnet faucet + env-sync
-- `scripts/faucet.ts`：要 testnet SUI
+### [~] T0.2 — Devnet faucet + env-sync
+- `scripts/faucet.ts`：要 Devnet SUI
 - `scripts/deploy.ts`：發布 package 後寫回 object id 至 `.env`
 - TDD
-  - [ ] 部署後 `.env` 內 `AMM_POOL_ID`、`SSR_TREASURY_ID`、`SURVEY_REGISTRY_ID` 非空
+  - [~] 部署後 `.env` 內 `AMM_POOL_ID`、`SSR_TREASURY_ID`、`SURVEY_REGISTRY_ID` 非空
+    - **命名已對齊**（.env.example / init.ts / env-sync.ts 全部更新）；真實 deploy 驗收延至 M1.7 真合約完成
 
 ### [ ] T0.3 — CI（GitHub Actions）
 - `move-test` / `bff-test` / `frontend-test` 三 job
@@ -71,80 +72,55 @@
 > 目的：[MVP_TDD.md §Move 模組規格](MVP_TDD.md) 六個模組全部上鏈、整合測試綠。
 > 對應 [專案目標.md §1 角色與錢的流向](專案目標.md)。
 
-### [ ] T1.1 — `survey_sui_reward`（獎勵代幣）｜ [基建]
-- `Coin<SurveySuiReward>` 定義；9 decimals
-- `TreasuryCap` 持有權僅 `amm_pool` 模組可操作 `mint_for_pool`
+### [x] T1.1 — `survey_sui_reward`（獎勵代幣）｜ [基建]
+- `Coin<SURVEY_SUI_REWARD>` 定義；9 decimals；OTW `SURVEY_SUI_REWARD`
+- `TreasuryCap` 封裝在共享 `SsrTreasury`；`mint` 為 `public(package)` — 外部 package 無法呼叫
 - 開放任意持有者 `burn`
-- TDD
-  - [ ] `test_only_pool_can_mint`（非 pool caller 必 fail）
-  - [ ] `test_burn_reduces_supply`
+- TDD ✅
+  - [x] `test_only_pool_can_mint`
+  - [x] `test_burn_reduces_supply`
 
-### [ ] T1.2 — `survey_pass`（通行證 NFT）｜ [B]
-- 物件**無 `store` ability**（阻擋 transfer，達成不可轉移）
-- admin `issue(sub_hash)` / `revoke(pass_id)`
-- `is_valid(pass): bool` 純驗證，不修改狀態（呼叫多次無副作用）
+### [x] T1.2 — `survey_pass`（通行證 NFT）｜ [B]
+- 物件**無 `store` ability**（soulbound，不可轉移）；以 `PassRegistry` 管理 serial
+- admin `issue` / `revoke` / `reissue`；`is_valid(pass, clock): bool` 純驗證
 - 對應 [專案目標.md §3 step 2-3](專案目標.md) 與 §MVP 要證明什麼 #2
-- TDD
-  - [ ] `test_pass_not_transferable`（compile-fail test）
-  - [ ] `test_is_valid_does_not_consume`（同一 pass 驗證 100 次仍 valid）
-  - [ ] `test_revoked_pass_invalid`
+- TDD ✅（9 tests）
 
-### [ ] T1.3 — `staked_survey_reward`（質押憑證物件）｜ [B]
-- 物件欄位：`amount: u64`、`vault_id: ID`、`issued_at: u64`
-- 僅 `survey_vault::claim` 與 `amm_pool::redeem` 可操作
-- TDD
-  - [ ] `test_only_vault_can_mint`
-  - [ ] `test_only_pool_can_burn_for_redeem`
+### [x] T1.3 — `stacked_survey_reward`（sSSR 可替換代幣）｜ [B]
+- **sSSR = stacked SurveySuiReward**；是 `Coin<STACKED_SURVEY_REWARD>` 型別（非含 vault_id 的 Object）
+- `TreasuryCap` 封裝在共享 `SssrTreasury`；`mint`/`burn` 皆為 `public(package)`
+- TDD ✅
+  - [x] `test_only_pool_can_mint_sssr`
+  - [x] `test_burn_reduces_sssr_supply`
 
-### [ ] T1.4 — `survey_vault`（問卷預算池）｜ [A][B][C]
-- `create(reward_per_response, max_responses, deadline, conditions)` → 回 vault object（shared）
-- `claim(vault, pass, sub_hash, encrypted_answers)` 驗證：
-  - SurveyPass 有效（呼叫 `survey_pass::is_valid`，**不消耗**）
-  - 名額未滿
-  - `sub_hash` 未在 vault.claimed_set
-  - → mint `stakedSurveySuiReward` 給 caller
-- `close(vault)` creator 退還未派發 SSR
-- 對應 [專案目標.md §3 step 3-4](專案目標.md)、§4 step 3
-- TDD
-  - [ ] `test_create_returns_vault`
-  - [ ] `test_claim_with_valid_pass`
-  - [ ] `test_claim_invalid_pass_fails`
-  - [ ] `test_claim_duplicate_sub_fails`
-  - [ ] `test_claim_quota_exceeded_fails`
-  - [ ] `test_close_refunds_remaining`
+### [x] T1.4 — `survey_vault`（問卷預算池）｜ [A][B][C]
+- 持有 `Balance<STACKED_SURVEY_REWARD>`（固定幣種，無泛型）
+- `create / fund` 時扣 0.3% 手續費送 `admin_treasury`（**費用在 sSSR 進 vault 時收取**）
+- `claim(vault, pass, sub_hash, encrypted_answers, clock, ctx)` 受訪者直接呼叫，驗 SurveyPass
+- `close(vault)` creator 退還剩餘 sSSR
+- TDD ✅（7 tests）
 
-### [ ] T1.5 — `amm_pool`（單向 mint 池）｜ [A][B]
-- `init_pool(initial_sui, initial_ssr)` admin only
-- `invest_and_mint(sui_in) → (ssr_to_vault, fee_to_treasury)`：bonding-curve 公式
-- `redeem(staked_receipt) → ssr_out`：銷毀憑證、扣手續費
-- `admin_withdraw_sui(amount)` admin only
-- 手續費入 admin Treasury（可賣或燒）
-- 對應 [專案目標.md §1](專案目標.md) 合約資產 §3 step 5
-- TDD
-  - [ ] `test_bonding_curve_price_increases`（連續 invest，每次單位 SUI 換到的 SSR 遞減）
-  - [ ] `test_pool_sui_only_admin_withdraw`
-  - [ ] `test_redeem_burns_receipt`
-  - [ ] `test_fee_routes_to_treasury`
+### [x] T1.5 — `amm_pool`（bonding-curve 池）｜ [A][B]
+- `init_pool(admin, ctx)` — 空池啟動，不需初始流動性
+- `invest_and_mint(pool, ssr_t, sssr_t, sui_in, ctx) → Coin<STACKED_SURVEY_REWARD>`
+  - **此步驟不扣費**；費用在 vault 端收取
+  - 公式：`sssr = sui_mist × DECAY / (DECAY + total_invested)`（DECAY = 1 000 SUI）
+  - SUI 留在 pool；鑄 SSR 1:1 作 sSSR 背書；全部 sSSR 回傳 creator
+- `redeem(pool, sssr_t, sssr_in, ctx) → Coin<SURVEY_SUI_REWARD>`：燒 sSSR，扣 0.3% 費給 admin
+- `admin_withdraw_sui(pool, amount, ctx)` admin only
+- TDD ✅（5 tests）
 
-### [ ] T1.6 — `survey_registry`（註冊 + 加密內容）｜ [A][C]
-- `register(vault_id, content_hash, encrypted_blob)` 發 `SurveyRegistered` 事件
-- `mark_closed(survey_id)` 發 `SurveyClosed` 事件
-- 對應 [專案目標.md §2 step 4](專案目標.md)
-- TDD
-  - [ ] `test_register_emits_event`
-  - [ ] `test_mark_closed_only_by_creator`
+### [x] T1.6 — `survey_registry`（註冊 + 加密內容）｜ [A][C]
+- `register(vault_id, content_hash, clock, ctx)` 發 `SurveyRegistered` 事件
+- `archive(registry, survey_id, ctx)` 只有 creator 可呼叫
+- TDD ✅（2 tests）
 
-### [ ] T1.7 — 多模組整合 + 部署 ｜ [A][B][C]
-- `test_scenario`：完整 Flow A→B→C
-  - admin init_pool → creator invest_and_mint → create vault → register survey
-  - admin issue SurveyPass → respondent claim staked receipt
-  - respondent redeem receipt → 拿到 SurveySuiReward
-  - creator close vault → 退款
-  - admin withdraw_sui 部分手續費
-- `scripts/deploy.ts` 部署 + seed 流動性
+### [~] T1.7 — 多模組整合 + 部署 ｜ [A][B][C]
+- `test_scenario`：完整 Flow A→B→C ✅（`test_full_lifecycle_a_to_c` 已通過，29/29 綠）
+- `scripts/init.ts` 對齊新部署順序（已更新）
 - TDD
-  - [ ] `test_full_lifecycle_a_to_c`
-  - [ ] Testnet 真實部署成功 + `.env` 寫回
+  - [x] `test_full_lifecycle_a_to_c`
+  - [ ] Devnet 真實部署成功 + `.env` 寫回（待執行）
 
 ---
 
@@ -153,10 +129,10 @@
 > 目的：[專案目標.md §MVP 要證明什麼 #1](專案目標.md)；受訪者錢包 0 SUI 也能填問卷。
 
 ### [ ] T2.1 — Gas Station 選型 + 沙箱串接 ｜ [B]
-- 比較 [Mysten Enoki](https://docs.enoki.mystenlabs.com/) vs [Shinami](https://docs.shinami.com/)：價格、SDK、Dry Run API、testnet 支援
+- 比較 [Mysten Enoki](https://docs.enoki.mystenlabs.com/) vs [Shinami](https://docs.shinami.com/)：價格、SDK、Dry Run API、Devnet 支援
 - 選定後寫 [docs/gas-station.md](docs/gas-station.md)（決策記錄）
 - TDD
-  - [ ] 用 Gas Station SDK 在 testnet 發一筆無 op PTB，受訪者錢包 SUI 0 → 成功
+  - [ ] 用 Gas Station SDK 在 Devnet 發一筆無 op PTB，受訪者錢包 SUI 0 → 成功
 
 ### [ ] T2.2 — PTB 建構工具（前端 lib）｜ [B]
 - `frontend/src/lib/sponsoredTx.ts`：包裝 build PTB → Dry Run → 送 Gas Station → 廣播
@@ -216,7 +192,7 @@
 
 ### [ ] T4.1 — Router + dApp Kit 基底 ｜ [基建]
 - 6 路由：`/`（landing）/ `/create` / `/fund/:id` / `/s/:id` / `/redeem` / `/dashboard/:vaultId`
-- `<SuiClientProvider>` + `<WalletProvider>` Testnet
+- `<SuiClientProvider>` + `<WalletProvider>` Devnet
 - TDD
   - [ ] 各路由 navigate 後渲染對應頁面 component
 
@@ -299,7 +275,7 @@
 > 目的：[MVP_TDD.md Definition of Done](MVP_TDD.md) — 真合約 + 真 Gas Station 跑完 Flow A→B→C。
 
 ### [ ] T6.1 — Playwright happy-path（真合約）｜ [A][B][C]
-- 接 testnet 真合約 + 真 Gas Station sandbox
+- 接 Devnet 真合約 + 真 Gas Station sandbox
 - 流程：建立 → 注資 → 切換錢包（受訪者 0 SUI）→ 填答 → 看憑證 → /redeem 換 SSR → /dashboard 看 1 筆
 - TDD
   - [ ] `test_full_flow_a_to_c_real_chain`
@@ -324,7 +300,7 @@
 
 對應 [專案目標.md §MVP 規格](專案目標.md) 標為「進階」與 [MVP_TDD.md Limitations](MVP_TDD.md)：
 
-- [-] Testnet ↔ Mainnet 跨網路橋
+- [-] Devnet ↔ Mainnet 跨網路橋
 - [-] 多階段獎勵（前 100 名 10 SSR，101–1000 名 1 SSR...）
 - [-] AI 輔助 Markdown 編輯 / RAG 建議（[專案目標.md §2 step 2b/c/d](專案目標.md)）
 - [-] 進階參與條件（國籍、年齡、UID、邀請碼、白名單、平台積分）
@@ -344,7 +320,7 @@
 
 - [ ] `pnpm -r build && pnpm -r test` 全綠
 - [ ] `pnpm move test` 合約測試綠（含 Flow A→B→C 整合）
-- [ ] `pnpm deploy:testnet` 合約 deploy + AMM 種子流動性
+- [ ] `pnpm deploy:Devnet` 合約 deploy + AMM 種子流動性
 - [ ] `pnpm dev` 起 BFF + frontend
 - [ ] 發起者建立問卷 + 一筆 PTB 注資 + 看到鏈上交易
 - [ ] 受訪者**錢包 0 SUI** → 連錢包 → 填答 → 看到 stakedSurveySuiReward 憑證 + TX digest → /redeem 換 SurveySuiReward

@@ -10,20 +10,13 @@ import { requireEnv } from './env.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const CONTRACTS_PATH = resolve(__dirname, '../../contracts')
 
-const SEED_RWD_AMOUNT = 1_000_000n * 1_000_000_000n // 1,000,000 RWD (9 decimals)
-const SEED_SUI_AMOUNT = 1_000_000_000n              // 1 SUI (9 decimals)
-
 // ── types ─────────────────────────────────────────────────────────────────────
 
 export interface DeployResult {
   packageId: string
-  treasuryId: string
-  sbtRegistryId: string
-}
-
-export interface PoolReserves {
-  reserveA: bigint
-  reserveB: bigint
+  ssrTreasuryId: string
+  sssrTreasuryId: string
+  surveyRegistryId: string
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -33,7 +26,6 @@ function buildPackage(): { modules: string[]; dependencies: string[] } {
     `sui move build --dump-bytecode-as-base64 --path "${CONTRACTS_PATH}"`,
     { encoding: 'utf8' },
   )
-  // The CLI may print progress lines before the JSON; extract the first JSON object.
   const match = stdout.match(/\{[\s\S]*\}/)
   if (!match) throw new Error(`No JSON in build output:\n${stdout}`)
   const parsed = JSON.parse(match[0]) as {
@@ -71,7 +63,8 @@ function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
 
 /**
  * Compile and publish the Move package.
- * Returns the package ID and shared-object IDs created by `init` functions.
+ * The `init` functions of survey_sui_reward, stacked_survey_reward, and survey_registry
+ * create shared objects automatically on publish; we extract their IDs from the effects.
  */
 export async function deployPackage(
   client: SuiClient,
@@ -94,95 +87,55 @@ export async function deployPackage(
   await client.waitForTransaction({ digest: result.digest })
 
   let packageId = ''
-  let treasuryId = ''
-  let sbtRegistryId = ''
+  let ssrTreasuryId = ''
+  let sssrTreasuryId = ''
+  let surveyRegistryId = ''
 
   for (const change of result.objectChanges ?? []) {
     if (change.type === 'published') {
       packageId = change.packageId
     }
     if (change.type === 'created') {
-      if (change.objectType.includes('::reward_coin::Treasury')) treasuryId = change.objectId
-      if (change.objectType.includes('::participant_sbt::SbtRegistry')) sbtRegistryId = change.objectId
+      if (change.objectType.includes('::survey_sui_reward::SsrTreasury'))
+        ssrTreasuryId = change.objectId
+      if (change.objectType.includes('::stacked_survey_reward::SssrTreasury'))
+        sssrTreasuryId = change.objectId
+      if (change.objectType.includes('::survey_registry::SurveyRegistry'))
+        surveyRegistryId = change.objectId
     }
   }
 
-  if (!packageId || !treasuryId || !sbtRegistryId) {
+  if (!packageId || !ssrTreasuryId || !sssrTreasuryId || !surveyRegistryId) {
     throw new Error(
-      `Deploy incomplete. packageId="${packageId}" treasuryId="${treasuryId}" sbtRegistryId="${sbtRegistryId}"`,
+      `Deploy incomplete. packageId="${packageId}" ssrTreasuryId="${ssrTreasuryId}" ` +
+        `sssrTreasuryId="${sssrTreasuryId}" surveyRegistryId="${surveyRegistryId}"`,
     )
   }
 
-  console.log(`  packageId:    ${packageId}`)
-  console.log(`  treasuryId:   ${treasuryId}`)
-  console.log(`  sbtRegistryId:${sbtRegistryId}`)
-  return { packageId, treasuryId, sbtRegistryId }
+  console.log(`  packageId:         ${packageId}`)
+  console.log(`  ssrTreasuryId:     ${ssrTreasuryId}`)
+  console.log(`  sssrTreasuryId:    ${sssrTreasuryId}`)
+  console.log(`  surveyRegistryId:  ${surveyRegistryId}`)
+  return { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId }
 }
 
 /**
- * Mint `amount` RWD seed tokens to `adminAddress`.
- * Returns the created Coin<REWARD_COIN> object ID.
- */
-export async function mintSeedRwd(
-  client: SuiClient,
-  keypair: Ed25519Keypair,
-  packageId: string,
-  treasuryId: string,
-  adminAddress: string,
-  amount: bigint = SEED_RWD_AMOUNT,
-): Promise<string> {
-  console.log(`Minting ${amount} MIST RWD to admin…`)
-  const tx = new Transaction()
-  tx.moveCall({
-    target: `${packageId}::reward_coin::mint`,
-    arguments: [
-      tx.object(treasuryId),
-      tx.pure.u64(amount),
-      tx.pure.address(adminAddress),
-    ],
-  })
-
-  const result = await client.signAndExecuteTransaction({
-    transaction: tx,
-    signer: keypair,
-    options: { showObjectChanges: true, showEffects: true },
-  })
-  await client.waitForTransaction({ digest: result.digest })
-
-  for (const change of result.objectChanges ?? []) {
-    if (change.type === 'created' && change.objectType.includes('REWARD_COIN')) {
-      console.log(`  rwdCoinId: ${change.objectId}`)
-      return change.objectId
-    }
-  }
-  throw new Error('Minted RWD Coin<REWARD_COIN> not found in transaction result')
-}
-
-/**
- * Call `amm_pool::init_pool<REWARD_COIN, SUI>` with the given RWD coin + split SUI from gas.
- * The pool is shared inside the Move function; the LP coin is transferred to `adminAddress`.
+ * Call `amm_pool::init_pool(admin)` to create and share the bonding-curve pool.
+ * The pool starts empty — no initial liquidity required.
  * Returns the created Pool object ID.
  */
 export async function initAmmPool(
   client: SuiClient,
   keypair: Ed25519Keypair,
   packageId: string,
-  rwdCoinId: string,
   adminAddress: string,
-  suiAmount: bigint = SEED_SUI_AMOUNT,
 ): Promise<string> {
-  console.log(`Initialising AMM pool (RWD + ${suiAmount} MIST SUI)…`)
+  console.log('Initialising AMM bonding-curve pool…')
   const tx = new Transaction()
-  const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(suiAmount)])
-  const [lpCoin] = tx.moveCall({
+  tx.moveCall({
     target: `${packageId}::amm_pool::init_pool`,
-    typeArguments: [
-      `${packageId}::reward_coin::REWARD_COIN`,
-      '0x2::sui::SUI',
-    ],
-    arguments: [tx.object(rwdCoinId), suiCoin],
+    arguments: [tx.pure.address(adminAddress)],
   })
-  tx.transferObjects([lpCoin], adminAddress)
 
   const result = await client.signAndExecuteTransaction({
     transaction: tx,
@@ -201,21 +154,25 @@ export async function initAmmPool(
 }
 
 /**
- * Read on-chain pool reserves. Used by `init.test.ts` to verify the pool is live.
+ * Read on-chain pool state. Used by `init.test.ts` to verify the pool is live.
  */
-export async function queryPoolReserves(
+export async function queryPoolState(
   client: SuiClient,
   poolId: string,
-): Promise<PoolReserves> {
+): Promise<{ suiReserve: bigint; ssrReserve: bigint; totalSuiInvested: bigint }> {
   const obj = await client.getObject({ id: poolId, options: { showContent: true } })
   if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') {
     throw new Error(`Pool object ${poolId} not found or not a Move object`)
   }
-  // Balance<T> is stored as { fields: { value: "12345" } } in the RPC JSON
-  const f = obj.data.content.fields as Record<string, { fields: { value: string } }>
-  const reserveA = BigInt(f.reserve_a.fields.value)
-  const reserveB = BigInt(f.reserve_b.fields.value)
-  return { reserveA, reserveB }
+  const f = obj.data.content.fields as Record<string, unknown>
+  const suiReserve = BigInt(
+    (f.sui_reserve as { fields: { value: string } }).fields.value,
+  )
+  const ssrReserve = BigInt(
+    (f.ssr_reserve as { fields: { value: string } }).fields.value,
+  )
+  const totalSuiInvested = BigInt(f.total_sui_invested as string)
+  return { suiReserve, ssrReserve, totalSuiInvested }
 }
 
 /**
@@ -240,33 +197,32 @@ async function main() {
   const keypair = Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
   const client = new SuiClient({ url: getFullnodeUrl(network) })
 
-  // 1. Deploy
-  const { packageId, treasuryId, sbtRegistryId } = await deployPackage(
+  // 1. Deploy (creates SsrTreasury, SssrTreasury, SurveyRegistry automatically)
+  const { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId } = await deployPackage(
     client,
     keypair,
     adminAddress,
   )
 
-  // 2. Mint seed RWD
-  const rwdCoinId = await mintSeedRwd(client, keypair, packageId, treasuryId, adminAddress)
+  // 2. Init AMM pool (empty bonding-curve pool; no initial liquidity required)
+  const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
 
-  // 3. Initialise AMM pool
-  const poolId = await initAmmPool(client, keypair, packageId, rwdCoinId, adminAddress)
-
-  // 4. Persist IDs
+  // 3. Persist IDs
   writeEnvShared({
     SUI_PACKAGE_ID: packageId,
-    RWD_TREASURY_CAP_ID: treasuryId,
+    SSR_TREASURY_ID: ssrTreasuryId,
+    SSSR_TREASURY_ID: sssrTreasuryId,
     AMM_POOL_ID: poolId,
-    SBT_REGISTRY_ID: sbtRegistryId,
+    SURVEY_REGISTRY_ID: surveyRegistryId,
   })
 
-  // 5. Verify
-  const reserves = await queryPoolReserves(client, poolId)
-  console.log(`\nPool reserves verified:`)
-  console.log(`  reserve_a (RWD): ${reserves.reserveA}`)
-  console.log(`  reserve_b (SUI): ${reserves.reserveB}`)
-  console.log('\nDeployment complete! ✓')
+  // 4. Verify pool is live
+  const state = await queryPoolState(client, poolId)
+  console.log(`\nPool verified (empty at start):`)
+  console.log(`  sui_reserve:        ${state.suiReserve}`)
+  console.log(`  ssr_reserve:        ${state.ssrReserve}`)
+  console.log(`  total_sui_invested: ${state.totalSuiInvested}`)
+  console.log('\nDeployment complete!')
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

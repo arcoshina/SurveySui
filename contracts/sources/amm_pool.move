@@ -1,206 +1,149 @@
 module surveysui::amm_pool;
 
-use sui::balance::{Self, Balance, Supply};
+use sui::balance::{Self, Balance};
 use sui::coin::{Self, Coin};
+use sui::sui::SUI;
+use surveysui::stacked_survey_reward::{Self, SssrTreasury, STACKED_SURVEY_REWARD};
+use surveysui::survey_sui_reward::{Self, SsrTreasury, SURVEY_SUI_REWARD};
 
 // ── error codes ───────────────────────────────────────────────────────────────
 
-const EZeroAmount: u64        = 0;
-const EZeroReserve: u64       = 1;
-const EInsufficientLiquidity: u64 = 2;
-const ESlippage: u64          = 3;
+const ENotAdmin: u64          = 0;
+const EZeroAmount: u64        = 1;
+const EInsufficientOutput: u64 = 2;
+const EInsufficientLiquidity: u64 = 3;
 
-/// Minimum LP shares locked permanently inside the pool on first mint,
-/// to prevent first-depositor share-price inflation (Uniswap V2 pattern).
-const MINIMUM_LIQUIDITY: u64  = 1000;
+// ── bonding curve constants ───────────────────────────────────────────────────
+
+/// Redemption fee: 0.3% in basis points.
+const REDEEM_FEE_BPS: u64 = 30;
+
+/// Bonding curve: sssr_base = sui_mist * DECAY / (DECAY + total_sui_mist)
+/// Initial ratio: 1 MIST → 1 sSSR base (1 SUI → 1 sSSR with matching 9 decimals).
+/// Price halves after DECAY MIST (1_000_000_000_000 = 1000 SUI) has been invested.
+const BONDING_DECAY: u128 = 1_000_000_000_000;
 
 // ── structs ───────────────────────────────────────────────────────────────────
 
-/// Phantom LP token type. `drop` lets `balance::create_supply` accept it as witness.
-public struct LP<phantom A, phantom B> has drop {}
-
-/// Shared CPMM pool. `lp_supply` tracks total outstanding LP shares
-/// (including `locked_lp`, which is minted on first deposit and never released).
-public struct Pool<phantom A, phantom B> has key {
+/// Shared bonding-curve pool.
+/// Holds SUI (from creators) and SSR (backing for sSSR in circulation).
+public struct Pool has key {
     id: UID,
-    reserve_a: Balance<A>,
-    reserve_b: Balance<B>,
-    lp_supply: Supply<LP<A, B>>,
-    locked_lp: Balance<LP<A, B>>,
+    sui_reserve: Balance<SUI>,
+    ssr_reserve: Balance<SURVEY_SUI_REWARD>,
+    total_sui_invested: u128,
+    admin: address,
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
 
-/// Create a new pool with initial liquidity and share it.
-/// LP minted = floor(sqrt(amount_a × amount_b)).
-/// Returns LP coins to the caller.
-public fun init_pool<A, B>(
-    coin_a: Coin<A>,
-    coin_b: Coin<B>,
-    ctx: &mut TxContext,
-): Coin<LP<A, B>> {
-    let amount_a = coin::value(&coin_a);
-    let amount_b = coin::value(&coin_b);
-    assert!(amount_a > 0 && amount_b > 0, EZeroAmount);
-
-    let lp_total = sqrt_u128((amount_a as u128) * (amount_b as u128));
-    // Caller must be able to mint at least 1 LP after MINIMUM_LIQUIDITY is locked.
-    assert!(lp_total > MINIMUM_LIQUIDITY, EInsufficientLiquidity);
-    let lp_amount = lp_total - MINIMUM_LIQUIDITY;
-
-    let mut pool = Pool<A, B> {
+/// Admin creates and shares the pool. No initial liquidity required.
+public fun init_pool(admin: address, ctx: &mut TxContext) {
+    transfer::share_object(Pool {
         id: object::new(ctx),
-        reserve_a: coin::into_balance(coin_a),
-        reserve_b: coin::into_balance(coin_b),
-        lp_supply: balance::create_supply(LP<A, B> {}),
-        locked_lp: balance::zero<LP<A, B>>(),
+        sui_reserve: balance::zero(),
+        ssr_reserve: balance::zero(),
+        total_sui_invested: 0,
+        admin,
+    });
+}
+
+/// Creator calls this to convert SUI → sSSR (bonding curve, no fee here).
+/// sSSR is returned in full; fee is taken later when depositing into vault.
+public fun invest_and_mint(
+    pool: &mut Pool,
+    ssr_treasury: &mut SsrTreasury,
+    sssr_treasury: &mut SssrTreasury,
+    sui_in: Coin<SUI>,
+    ctx: &mut TxContext,
+): Coin<STACKED_SURVEY_REWARD> {
+    let sui_amount = coin::value(&sui_in);
+    assert!(sui_amount > 0, EZeroAmount);
+
+    let sssr_amount = compute_sssr_amount(sui_amount, pool.total_sui_invested);
+    assert!(sssr_amount > 0, EInsufficientOutput);
+
+    pool.total_sui_invested = pool.total_sui_invested + (sui_amount as u128);
+    balance::join(&mut pool.sui_reserve, coin::into_balance(sui_in));
+
+    // Mint SSR (stays in pool as backing for sSSR)
+    let ssr_coin = survey_sui_reward::mint(ssr_treasury, sssr_amount, ctx);
+    balance::join(&mut pool.ssr_reserve, coin::into_balance(ssr_coin));
+
+    // Mint sSSR for creator (1:1 with SSR backing)
+    stacked_survey_reward::mint(sssr_treasury, sssr_amount, ctx)
+}
+
+/// Respondent redeems sSSR → SSR. Deducts REDEEM_FEE_BPS; fee goes to admin.
+public fun redeem(
+    pool: &mut Pool,
+    sssr_treasury: &mut SssrTreasury,
+    sssr_in: Coin<STACKED_SURVEY_REWARD>,
+    ctx: &mut TxContext,
+): Coin<SURVEY_SUI_REWARD> {
+    let amount = coin::value(&sssr_in);
+    assert!(amount > 0, EZeroAmount);
+    assert!(balance::value(&pool.ssr_reserve) >= amount, EInsufficientLiquidity);
+
+    let fee = amount * REDEEM_FEE_BPS / 10_000;
+    let ssr_out_amount = amount - fee;
+
+    stacked_survey_reward::burn(sssr_treasury, sssr_in);
+
+    if (fee > 0) {
+        let fee_coin = coin::from_balance(
+            balance::split(&mut pool.ssr_reserve, fee),
+            ctx,
+        );
+        transfer::public_transfer(fee_coin, pool.admin);
     };
-    // Lock MINIMUM_LIQUIDITY inside the pool forever — caller receives the rest.
-    let locked = balance::increase_supply(&mut pool.lp_supply, MINIMUM_LIQUIDITY);
-    balance::join(&mut pool.locked_lp, locked);
-    let lp_bal = balance::increase_supply(&mut pool.lp_supply, lp_amount);
 
-    transfer::share_object(pool);
-    coin::from_balance(lp_bal, ctx)
+    coin::from_balance(balance::split(&mut pool.ssr_reserve, ssr_out_amount), ctx)
 }
 
-/// Add liquidity proportional to current reserves.
-/// Consumes all of `coin_a`; takes exactly the required amount of `coin_b`
-/// and returns any surplus as change.
-/// lp_minted = amount_a × total_lp / reserve_a
-public fun add_liquidity<A, B>(
-    pool: &mut Pool<A, B>,
-    coin_a: Coin<A>,
-    mut coin_b: Coin<B>,
+/// Admin-only: withdraw SUI from pool.
+public fun admin_withdraw_sui(
+    pool: &mut Pool,
+    amount: u64,
     ctx: &mut TxContext,
-): (Coin<LP<A, B>>, Coin<B>) {
-    let amount_a  = coin::value(&coin_a);
-    assert!(amount_a > 0, EZeroAmount);
-
-    let reserve_a = balance::value(&pool.reserve_a);
-    let reserve_b = balance::value(&pool.reserve_b);
-    let total_lp  = balance::supply_value(&pool.lp_supply);
-
-    let required_b = (((amount_a as u128) * (reserve_b as u128)) / (reserve_a as u128)) as u64;
-    let lp_amount  = (((amount_a as u128) * (total_lp  as u128)) / (reserve_a as u128)) as u64;
-    assert!(lp_amount > 0, EInsufficientLiquidity);
-
-    let coin_b_exact = coin::split(&mut coin_b, required_b, ctx);
-    balance::join(&mut pool.reserve_a, coin::into_balance(coin_a));
-    balance::join(&mut pool.reserve_b, coin::into_balance(coin_b_exact));
-
-    let lp_bal = balance::increase_supply(&mut pool.lp_supply, lp_amount);
-    (coin::from_balance(lp_bal, ctx), coin_b)
+): Coin<SUI> {
+    assert!(ctx.sender() == pool.admin, ENotAdmin);
+    assert!(balance::value(&pool.sui_reserve) >= amount, EInsufficientLiquidity);
+    coin::from_balance(balance::split(&mut pool.sui_reserve, amount), ctx)
 }
 
-/// Remove liquidity. Burns LP coins and returns proportional reserves.
-/// amount_x = lp_amount × reserve_x / total_lp
-public fun remove_liquidity<A, B>(
-    pool: &mut Pool<A, B>,
-    lp: Coin<LP<A, B>>,
-    ctx: &mut TxContext,
-): (Coin<A>, Coin<B>) {
-    let lp_amount = coin::value(&lp);
-    assert!(lp_amount > 0, EZeroAmount);
-
-    let total_lp  = balance::supply_value(&pool.lp_supply);
-    let reserve_a = balance::value(&pool.reserve_a);
-    let reserve_b = balance::value(&pool.reserve_b);
-
-    let amount_a = (((lp_amount as u128) * (reserve_a as u128)) / (total_lp as u128)) as u64;
-    let amount_b = (((lp_amount as u128) * (reserve_b as u128)) / (total_lp as u128)) as u64;
-    assert!(amount_a > 0 && amount_b > 0, EInsufficientLiquidity);
-
-    balance::decrease_supply(&mut pool.lp_supply, coin::into_balance(lp));
-    let coin_a = coin::from_balance(balance::split(&mut pool.reserve_a, amount_a), ctx);
-    let coin_b = coin::from_balance(balance::split(&mut pool.reserve_b, amount_b), ctx);
-    (coin_a, coin_b)
-}
-
-/// Swap coin_a → coin_b with 0.3% fee (CPMM x·y = k).
-/// Aborts with `ESlippage` if the produced amount is below `min_out`. Pass 0 to opt out.
-public fun swap_a_to_b<A, B>(
-    pool: &mut Pool<A, B>,
-    coin_a: Coin<A>,
-    min_out: u64,
-    ctx: &mut TxContext,
-): Coin<B> {
-    let amount_in = coin::value(&coin_a);
-    assert!(amount_in > 0, EZeroAmount);
-
-    let reserve_a = balance::value(&pool.reserve_a);
-    let reserve_b = balance::value(&pool.reserve_b);
-    assert!(reserve_a > 0 && reserve_b > 0, EZeroReserve);
-
-    let amount_out = compute_amount_out(amount_in, reserve_a, reserve_b);
-    assert!(amount_out > 0, EInsufficientLiquidity);
-    assert!(amount_out >= min_out, ESlippage);
-
-    balance::join(&mut pool.reserve_a, coin::into_balance(coin_a));
-    coin::from_balance(balance::split(&mut pool.reserve_b, amount_out), ctx)
-}
-
-/// Swap coin_b → coin_a with 0.3% fee (CPMM x·y = k).
-/// Aborts with `ESlippage` if the produced amount is below `min_out`. Pass 0 to opt out.
-public fun swap_b_to_a<A, B>(
-    pool: &mut Pool<A, B>,
-    coin_b: Coin<B>,
-    min_out: u64,
-    ctx: &mut TxContext,
-): Coin<A> {
-    let amount_in = coin::value(&coin_b);
-    assert!(amount_in > 0, EZeroAmount);
-
-    let reserve_a = balance::value(&pool.reserve_a);
-    let reserve_b = balance::value(&pool.reserve_b);
-    assert!(reserve_a > 0 && reserve_b > 0, EZeroReserve);
-
-    let amount_out = compute_amount_out(amount_in, reserve_b, reserve_a);
-    assert!(amount_out > 0, EInsufficientLiquidity);
-    assert!(amount_out >= min_out, ESlippage);
-
-    balance::join(&mut pool.reserve_b, coin::into_balance(coin_b));
-    coin::from_balance(balance::split(&mut pool.reserve_a, amount_out), ctx)
+/// Any SSR holder may burn via pool (pool holds no SSR burn cap; just passes through).
+/// Note: SSR holders can also call survey_sui_reward::burn directly.
+public fun burn_ssr(
+    ssr_treasury: &mut SsrTreasury,
+    coin: Coin<SURVEY_SUI_REWARD>,
+) {
+    survey_sui_reward::burn(ssr_treasury, coin);
 }
 
 // ── view functions ────────────────────────────────────────────────────────────
 
-public fun reserve_a<A, B>(pool: &Pool<A, B>): u64 { balance::value(&pool.reserve_a) }
-public fun reserve_b<A, B>(pool: &Pool<A, B>): u64 { balance::value(&pool.reserve_b) }
-public fun lp_supply<A, B>(pool: &Pool<A, B>): u64  { balance::supply_value(&pool.lp_supply) }
+public fun sui_reserve(pool: &Pool): u64           { balance::value(&pool.sui_reserve) }
+public fun ssr_reserve(pool: &Pool): u64           { balance::value(&pool.ssr_reserve) }
+public fun total_sui_invested(pool: &Pool): u128   { pool.total_sui_invested }
+public fun admin(pool: &Pool): address             { pool.admin }
 
 // ── internal helpers ──────────────────────────────────────────────────────────
 
-/// CPMM with 0.3% fee:
-/// amount_out = reserve_out × amount_in × 997 / (reserve_in × 1000 + amount_in × 997)
-///
-/// u256 intermediates: with u64 inputs, `ro * ai * 997` reaches ~2^138, which
-/// overflows u128 for pool sizes around 10^18 (1B coins × 9 decimals).
-fun compute_amount_out(amount_in: u64, reserve_in: u64, reserve_out: u64): u64 {
-    let ai = amount_in  as u256;
-    let ri = reserve_in  as u256;
-    let ro = reserve_out as u256;
-    let ai_with_fee = ai * 997;
-    let num = ro * ai_with_fee;
-    let den = ri * 1000 + ai_with_fee;
+/// Bonding curve: sssr_base = sui_mist * DECAY / (DECAY + total_sui_mist)
+/// Uses u256 intermediates to prevent overflow with large reserves.
+fun compute_sssr_amount(sui_mist: u64, total_invested_mist: u128): u64 {
+    let si   = sui_mist as u256;
+    let decay = BONDING_DECAY as u256;
+    let total = total_invested_mist as u256;
+    let num = si * decay;
+    let den = decay + total;
     (num / den) as u64
-}
-
-/// Integer floor-sqrt via Newton's method (u128 → u64).
-fun sqrt_u128(x: u128): u64 {
-    if (x == 0) return 0;
-    let mut z = x;
-    let mut y = (x + 1) / 2;
-    while (y < z) {
-        z = y;
-        y = (x / y + y) / 2;
-    };
-    z as u64
 }
 
 // ── test-only helpers ─────────────────────────────────────────────────────────
 
 #[test_only]
-public fun compute_amount_out_for_test(amount_in: u64, reserve_in: u64, reserve_out: u64): u64 {
-    compute_amount_out(amount_in, reserve_in, reserve_out)
+public fun compute_sssr_amount_for_test(sui_mist: u64, total_invested_mist: u128): u64 {
+    compute_sssr_amount(sui_mist, total_invested_mist)
 }

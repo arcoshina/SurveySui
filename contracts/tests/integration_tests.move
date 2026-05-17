@@ -4,153 +4,152 @@ module surveysui::integration_tests;
 use sui::clock;
 use sui::coin::{Self, Coin};
 use sui::test_scenario as ts;
-use sui::transfer;
 use surveysui::amm_pool::{Self, Pool};
-use surveysui::participant_sbt::{Self, SbtRegistry, ParticipantSBT};
-use surveysui::reward_coin::{Self, Treasury, REWARD_COIN};
+use surveysui::stacked_survey_reward::{Self, SssrTreasury, STACKED_SURVEY_REWARD};
+use surveysui::survey_pass::{Self, PassRegistry, SurveyPass};
 use surveysui::survey_registry::{Self, SurveyRegistry};
+use surveysui::survey_sui_reward::{Self, SsrTreasury, SURVEY_SUI_REWARD};
 use surveysui::survey_vault::{Self, SurveyVault};
 
-const ADMIN: address   = @0xA11CE;
-const CREATOR: address = @0xC0FFEE;
-const ALICE: address   = @0xA71CE;
+const ADMIN: address      = @0xA11CE;
+const CREATOR: address    = @0xC0FFEE;
+const RESPONDENT: address = @0xA71CE;
 
 const TTL_180D: u64      = 180 * 24 * 60 * 60 * 1000;
 const T0: u64            = 1_000_000_000; // ms
-const PER_RESPONSE: u64  = 100;
-const MAX_RESPONSES: u64 = 10;
-const POOL_SEED: u64     = 100_000;
+const SUI_INVEST: u64    = 100_000;       // MIST
+// At total=0: sSSR_received = 100_000 (1:1 with MIST)
+const PER_RESPONSE: u64  = 1_000;
+const MAX_RESPONSES: u64 = 50;
+// vault_fee = 100_000 × 30 / 10_000 = 300
+// vault_balance_after = 99_700 ≥ 50 × 1_000 = 50_000 ✓
 
-/// Test-only phantom coin that represents the SUI side of the RWD/SUI AMM pair.
-public struct TEST_SUI has drop {}
-
-// ── test ──────────────────────────────────────────────────────────────────────
-
-/// Full lifecycle e2e:
-///   1. Deploy reward_coin, participant_sbt, survey_registry
-///   2. Admin mints RWD to creator (vault funding + pool seed)
-///   3. Admin issues SBT for Alice
-///   4. Creator creates + shares vault, registers survey, seeds RWD/TEST_SUI pool
-///   5. Admin claims vault reward on Alice's behalf
-///   6. Alice swaps received RWD → TEST_SUI via AMM pool
-///   7. Assert survey registry and vault final state
+/// Full A→C lifecycle:
+///   A. ADMIN deploys modules, issues SurveyPass, creates AMM pool
+///   B. CREATOR invests SUI → sSSR, deposits sSSR into vault (fee deducted), registers survey
+///   C. RESPONDENT claims sSSR from vault, redeems sSSR → SSR via AMM
+///   Epilogue: CREATOR closes vault, ADMIN withdraws SUI
 #[test]
-fun test_full_lifecycle_e2e_in_move() {
-    // ── 1. Deploy all modules ─────────────────────────────────────────────────
+fun test_full_lifecycle_a_to_c() {
+    // ── A. Deploy ─────────────────────────────────────────────────────────────
     let mut sc = ts::begin(ADMIN);
     {
-        reward_coin::test_init(sc.ctx());
-        participant_sbt::test_init(sc.ctx());
+        survey_sui_reward::test_init(sc.ctx());
+        stacked_survey_reward::test_init(sc.ctx());
+        survey_pass::test_init(sc.ctx());
         survey_registry::test_init(sc.ctx());
     };
 
     let mut clk = clock::create_for_testing(sc.ctx());
     clock::set_for_testing(&mut clk, T0);
 
-    // ── 2. Mint RWD to CREATOR: vault fund (1 000) + pool seed (100 000) ──────
+    sc.next_tx(ADMIN);
+    amm_pool::init_pool(ADMIN, sc.ctx());
+
+    // ADMIN issues SurveyPass for RESPONDENT
     sc.next_tx(ADMIN);
     {
-        let mut treasury = ts::take_shared<Treasury>(&sc);
-        reward_coin::mint(
-            &mut treasury,
-            PER_RESPONSE * MAX_RESPONSES + POOL_SEED,
-            CREATOR,
-            sc.ctx(),
-        );
-        ts::return_shared(treasury);
+        let mut registry = ts::take_shared<PassRegistry>(&sc);
+        survey_pass::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
+        ts::return_shared(registry);
     };
 
-    // ── 3. Issue SBT for Alice ────────────────────────────────────────────────
-    sc.next_tx(ADMIN);
-    {
-        let mut sbt_reg = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut sbt_reg, b"alice_sub", TTL_180D, &clk, sc.ctx());
-        ts::return_shared(sbt_reg);
-    };
-
-    // ── 4. Creator: vault + survey registration + AMM pool seeding ───────────
+    // ── B. Creator flow ───────────────────────────────────────────────────────
     sc.next_tx(CREATOR);
     {
-        let mut rwd = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
-        // Split vault portion; remaining rwd (100 000) seeds the pool below.
-        let vault_coin = coin::split(&mut rwd, PER_RESPONSE * MAX_RESPONSES, sc.ctx());
+        let mut pool          = ts::take_shared<Pool>(&sc);
+        let mut ssr_treasury  = ts::take_shared<SsrTreasury>(&sc);
+        let mut sssr_treasury = ts::take_shared<SssrTreasury>(&sc);
 
-        let vault    = survey_vault::create(
-            vault_coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        // invest SUI → sSSR (no fee here)
+        let sui_in  = coin::mint_for_testing<sui::sui::SUI>(SUI_INVEST, sc.ctx());
+        let sssr    = amm_pool::invest_and_mint(
+            &mut pool, &mut ssr_treasury, &mut sssr_treasury, sui_in, sc.ctx(),
         );
+        let sssr_received = coin::value(&sssr);
+        assert!(sssr_received == SUI_INVEST); // 1:1 at total=0
+
+        // pool absorbed the SUI and minted 1:1 SSR backing
+        assert!(amm_pool::sui_reserve(&pool) == SUI_INVEST);
+        assert!(amm_pool::ssr_reserve(&pool) == sssr_received);
+
+        // deposit sSSR into vault (fee deducted here, not at invest)
+        let vault_fee    = sssr_received * 30 / 10_000;
+        let vault_balance_expected = sssr_received - vault_fee;
+        let vault = survey_vault::create(
+            sssr, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        );
+        assert!(survey_vault::balance_value(&vault) == vault_balance_expected);
         let vault_id = object::id(&vault);
         survey_vault::share_vault(vault);
 
+        // register survey
         let mut survey_reg = ts::take_shared<SurveyRegistry>(&sc);
-        survey_registry::register(
-            &mut survey_reg,
-            vault_id,
-            b"survey_content_hash",
-            &clk,
-            sc.ctx(),
-        );
+        survey_registry::register(&mut survey_reg, vault_id, b"survey_hash", &clk, sc.ctx());
+        assert!(survey_registry::total_count(&survey_reg) == 1);
         ts::return_shared(survey_reg);
 
-        // Seed RWD / TEST_SUI pool (equal reserves ⟹ LP = POOL_SEED − MINIMUM_LIQUIDITY)
-        let sui_seed = coin::mint_for_testing<TEST_SUI>(POOL_SEED, sc.ctx());
-        let lp = amm_pool::init_pool(rwd, sui_seed, sc.ctx());
-        transfer::public_transfer(lp, CREATOR);
-    };
-
-    // ── 5. Admin claims reward on Alice's behalf ──────────────────────────────
-    sc.next_tx(ADMIN);
-    {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx());
-
-        assert!(survey_vault::claimed_count(&vault) == 1);
-        assert!(survey_vault::balance_value(&vault) == PER_RESPONSE * (MAX_RESPONSES - 1));
-        assert!(survey_vault::has_claimed(&vault, b"alice_sub"));
-
-        ts::return_shared(sbt);
-        ts::return_shared(vault);
-    };
-
-    // ── 6. Alice swaps received RWD → TEST_SUI via AMM ───────────────────────
-    sc.next_tx(ALICE);
-    {
-        let rwd_coin = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
-        assert!(coin::value(&rwd_coin) == PER_RESPONSE);
-
-        let mut pool      = ts::take_shared<Pool<REWARD_COIN, TEST_SUI>>(&sc);
-        let reserve_a_pre = amm_pool::reserve_a(&pool);
-        let reserve_b_pre = amm_pool::reserve_b(&pool);
-
-        let sui_out  = amm_pool::swap_a_to_b(&mut pool, rwd_coin, 0, sc.ctx());
-        let received = coin::value(&sui_out);
-
-        // Verify output matches CPMM formula (0.3% fee)
-        let expected = amm_pool::compute_amount_out_for_test(PER_RESPONSE, POOL_SEED, POOL_SEED);
-        assert!(received == expected);
-
-        // Pool reserves update correctly
-        assert!(amm_pool::reserve_a(&pool) == reserve_a_pre + PER_RESPONSE);
-        assert!(amm_pool::reserve_b(&pool) == reserve_b_pre - received);
-
-        // k must not decrease (CPMM invariant)
-        let k_before = (reserve_a_pre as u128) * (reserve_b_pre as u128);
-        let k_after  = (amm_pool::reserve_a(&pool) as u128) *
-                       (amm_pool::reserve_b(&pool) as u128);
-        assert!(k_after >= k_before);
-
-        transfer::public_transfer(sui_out, ALICE);
+        ts::return_shared(sssr_treasury);
+        ts::return_shared(ssr_treasury);
         ts::return_shared(pool);
     };
 
-    // ── 7. Final state: survey registry ──────────────────────────────────────
+    // ── C. Respondent flow ───────────────────────────────────────────────────
+    sc.next_tx(RESPONDENT);
+    {
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        let pass      = ts::take_shared<SurveyPass>(&sc);
+
+        // claim sSSR reward from vault
+        survey_vault::claim(&mut vault, &pass, b"alice_sub", b"encrypted_response", &clk, sc.ctx());
+        assert!(survey_vault::claimed_count(&vault) == 1);
+        assert!(survey_vault::has_claimed(&vault, b"alice_sub"));
+
+        ts::return_shared(pass);
+        ts::return_shared(vault);
+    };
+
+    // RESPONDENT redeems sSSR → SSR via AMM
+    sc.next_tx(RESPONDENT);
+    {
+        let sssr_reward   = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        assert!(coin::value(&sssr_reward) == PER_RESPONSE);
+
+        let mut pool          = ts::take_shared<Pool>(&sc);
+        let mut sssr_treasury = ts::take_shared<SssrTreasury>(&sc);
+
+        let ssr_out = amm_pool::redeem(&mut pool, &mut sssr_treasury, sssr_reward, sc.ctx());
+        let fee     = PER_RESPONSE * 30 / 10_000;
+        assert!(coin::value(&ssr_out) == PER_RESPONSE - fee);
+
+        // Return SSR to sender (or burn in test)
+        let mut ssr_treasury = ts::take_shared<SsrTreasury>(&sc);
+        survey_sui_reward::burn(&mut ssr_treasury, ssr_out);
+        ts::return_shared(ssr_treasury);
+        ts::return_shared(sssr_treasury);
+        ts::return_shared(pool);
+    };
+
+    // ── Epilogue: creator closes vault ────────────────────────────────────────
     sc.next_tx(CREATOR);
     {
-        let survey_reg = ts::take_shared<SurveyRegistry>(&sc);
-        assert!(survey_registry::surveys_by_creator(&survey_reg, CREATOR).length() == 1);
-        assert!(survey_registry::total_count(&survey_reg) == 1);
-        ts::return_shared(survey_reg);
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        survey_vault::close(&mut vault, sc.ctx());
+        assert!(survey_vault::status(&vault)        == 1); // STATUS_CLOSED
+        assert!(survey_vault::balance_value(&vault) == 0);
+        ts::return_shared(vault);
+    };
+
+    // Admin withdraws SUI from pool
+    sc.next_tx(ADMIN);
+    {
+        let mut pool    = ts::take_shared<Pool>(&sc);
+        let pool_sui    = amm_pool::sui_reserve(&pool);
+        assert!(pool_sui > 0);
+        let withdrawn = amm_pool::admin_withdraw_sui(&mut pool, pool_sui, sc.ctx());
+        assert!(coin::value(&withdrawn) == pool_sui);
+        coin::burn_for_testing(withdrawn);
+        ts::return_shared(pool);
     };
 
     clock::destroy_for_testing(clk);

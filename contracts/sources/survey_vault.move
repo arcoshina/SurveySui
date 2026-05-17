@@ -3,54 +3,68 @@ module surveysui::survey_vault;
 use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
+use sui::event;
 use sui::table::{Self, Table};
-use surveysui::participant_sbt::{Self, ParticipantSBT};
-
-// ── status constants ──────────────────────────────────────────────────────────
+use surveysui::stacked_survey_reward::{Self, STACKED_SURVEY_REWARD};
+use surveysui::survey_pass::{Self, SurveyPass};
 
 const STATUS_OPEN: u8   = 0;
 const STATUS_CLOSED: u8 = 1;
 
-// ── error codes ───────────────────────────────────────────────────────────────
+/// Vault deposit fee (0.3% in basis points).
+const VAULT_FEE_BPS: u64 = 30;
 
-const ENotAdmin: u64       = 0;
-const ENotCreator: u64     = 1;
-const ENoQuota: u64        = 2;
-const EExpired: u64        = 3;
-const EAlreadyClaimed: u64 = 4;
-const EInvalidSBT: u64     = 5;
-const EVaultClosed: u64    = 6;
+const ENotCreator: u64     = 0;
+const ENoQuota: u64        = 1;
+const EExpired: u64        = 2;
+const EAlreadyClaimed: u64 = 3;
+const EInvalidPass: u64    = 4;
+const EVaultClosed: u64    = 5;
 
-// ── struct ────────────────────────────────────────────────────────────────────
+public struct SurveyClaimed has copy, drop {
+    vault_id: ID,
+    sub_hash: vector<u8>,
+    respondent: address,
+    encrypted_answers: vector<u8>,
+    claimed_at_ms: u64,
+}
 
-/// Survey reward escrow. `T` is the coin type (e.g. REWARD_COIN).
-/// Created unshared so the caller can compose it in a PTB before sharing.
-public struct SurveyVault<phantom T> has key {
+/// Survey vault holding sSSR balance for respondents.
+/// Created unshared so caller can compose with register in one PTB before sharing.
+public struct SurveyVault has key {
     id: UID,
-    balance: Balance<T>,
+    balance: Balance<STACKED_SURVEY_REWARD>,
     per_response: u64,
     max_responses: u64,
     deadline_ms: u64,
     claimed_count: u64,
     claimed_subs: Table<vector<u8>, bool>,
-    admin: address,
+    admin_treasury: address,
     creator: address,
     status: u8,
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
 
-/// Create a vault and return it WITHOUT sharing.
-/// The caller must call `share_vault` at the end of the PTB.
-/// `admin` is the backend key that will call `claim`; creator = tx sender.
-public fun create<T>(
-    coin: Coin<T>,
+/// Create a vault. Deducts VAULT_FEE_BPS of sSSR to admin_treasury.
+/// Returns vault unshared; caller must call `share_vault` at end of PTB.
+public fun create(
+    sssr_coin: Coin<STACKED_SURVEY_REWARD>,
     per_response: u64,
     max_responses: u64,
     deadline_ms: u64,
-    admin: address,
+    admin_treasury: address,
     ctx: &mut TxContext,
-): SurveyVault<T> {
+): SurveyVault {
+    let mut coin = sssr_coin;
+    let total = coin::value(&coin);
+    let fee = total * VAULT_FEE_BPS / 10_000;
+
+    if (fee > 0) {
+        let fee_coin = coin::split(&mut coin, fee, ctx);
+        transfer::public_transfer(fee_coin, admin_treasury);
+    };
+
     SurveyVault {
         id: object::new(ctx),
         balance: coin::into_balance(coin),
@@ -59,53 +73,67 @@ public fun create<T>(
         deadline_ms,
         claimed_count: 0,
         claimed_subs: table::new(ctx),
-        admin,
+        admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
     }
 }
 
-/// Share the vault — the final step of the creation PTB.
-public fun share_vault<T>(vault: SurveyVault<T>) {
+/// Share the vault — final step of creation PTB.
+public fun share_vault(vault: SurveyVault) {
     transfer::share_object(vault);
 }
 
-/// Add funds to the vault. Anyone may call this.
-public fun fund<T>(vault: &mut SurveyVault<T>, coin: Coin<T>) {
+/// Add more sSSR to the vault. Same fee deducted.
+public fun fund(vault: &mut SurveyVault, sssr_coin: Coin<STACKED_SURVEY_REWARD>, ctx: &mut TxContext) {
+    let mut coin = sssr_coin;
+    let total = coin::value(&coin);
+    let fee = total * VAULT_FEE_BPS / 10_000;
+
+    if (fee > 0) {
+        let fee_coin = coin::split(&mut coin, fee, ctx);
+        transfer::public_transfer(fee_coin, vault.admin_treasury);
+    };
+
     balance::join(&mut vault.balance, coin::into_balance(coin));
 }
 
-/// Admin-only: verify SBT validity and pay out `per_response` coins to `recipient`.
-/// Deduplicates by `sub_hash` so a participant cannot claim twice even with a
-/// reissued SBT.
-public fun claim<T>(
-    vault: &mut SurveyVault<T>,
-    sbt: &ParticipantSBT,
-    recipient: address,
+/// Respondent claims per_response sSSR from vault.
+/// Validates SurveyPass, deduplicates by sub_hash, checks quota and deadline.
+public fun claim(
+    vault: &mut SurveyVault,
+    pass: &SurveyPass,
+    sub_hash: vector<u8>,
+    encrypted_answers: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    assert!(ctx.sender() == vault.admin, ENotAdmin);
     assert!(vault.status == STATUS_OPEN, EVaultClosed);
     assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
     assert!(vault.claimed_count < vault.max_responses, ENoQuota);
-    assert!(participant_sbt::is_valid(sbt, clock), EInvalidSBT);
-
-    let sub_hash = participant_sbt::sub_hash(sbt);
+    assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
     assert!(!table::contains(&vault.claimed_subs, sub_hash), EAlreadyClaimed);
 
     table::add(&mut vault.claimed_subs, sub_hash, true);
     vault.claimed_count = vault.claimed_count + 1;
 
+    event::emit(SurveyClaimed {
+        vault_id: object::id(vault),
+        sub_hash,
+        respondent: ctx.sender(),
+        encrypted_answers,
+        claimed_at_ms: clock::timestamp_ms(clock),
+    });
+
     let reward = coin::from_balance(
         balance::split(&mut vault.balance, vault.per_response),
         ctx,
     );
-    transfer::public_transfer(reward, recipient);
+    transfer::public_transfer(reward, ctx.sender());
 }
 
-/// Creator-only: close the vault and return any remaining balance.
-public fun close<T>(vault: &mut SurveyVault<T>, ctx: &mut TxContext) {
+/// Creator closes vault and recovers remaining sSSR.
+public fun close(vault: &mut SurveyVault, ctx: &mut TxContext) {
     assert!(ctx.sender() == vault.creator, ENotCreator);
     let amount = balance::value(&vault.balance);
     if (amount > 0) {
@@ -120,14 +148,16 @@ public fun close<T>(vault: &mut SurveyVault<T>, ctx: &mut TxContext) {
 
 // ── view functions ────────────────────────────────────────────────────────────
 
-public fun per_response<T>(vault: &SurveyVault<T>): u64  { vault.per_response }
-public fun max_responses<T>(vault: &SurveyVault<T>): u64 { vault.max_responses }
-public fun deadline_ms<T>(vault: &SurveyVault<T>): u64   { vault.deadline_ms }
-public fun claimed_count<T>(vault: &SurveyVault<T>): u64 { vault.claimed_count }
-public fun balance_value<T>(vault: &SurveyVault<T>): u64 { balance::value(&vault.balance) }
-public fun status<T>(vault: &SurveyVault<T>): u8         { vault.status }
-public fun admin<T>(vault: &SurveyVault<T>): address     { vault.admin }
-public fun creator<T>(vault: &SurveyVault<T>): address   { vault.creator }
-public fun has_claimed<T>(vault: &SurveyVault<T>, sub_hash: vector<u8>): bool {
+public fun per_response(vault: &SurveyVault): u64  { vault.per_response }
+public fun max_responses(vault: &SurveyVault): u64 { vault.max_responses }
+public fun deadline_ms(vault: &SurveyVault): u64   { vault.deadline_ms }
+public fun claimed_count(vault: &SurveyVault): u64 { vault.claimed_count }
+public fun balance_value(vault: &SurveyVault): u64 { balance::value(&vault.balance) }
+public fun status(vault: &SurveyVault): u8         { vault.status }
+public fun creator(vault: &SurveyVault): address   { vault.creator }
+public fun admin_treasury(vault: &SurveyVault): address { vault.admin_treasury }
+public fun has_claimed(vault: &SurveyVault, sub_hash: vector<u8>): bool {
     table::contains(&vault.claimed_subs, sub_hash)
 }
+
+public fun fee_bps(): u64 { VAULT_FEE_BPS }

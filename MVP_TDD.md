@@ -83,6 +83,10 @@
 └────────────────────────────────────────────────────────────────┘
 ```
 
+### 金流運作的大原則
+
+發起人把 sSSR (stackedSurveySuiReward) 存入每個問卷專屬的 SurveyVault，受訪者從 SurveyVault 領獎勵 sSSR。如果發起人沒有足夠的 sSSR，也可以使用等價的 SUI，合約把 SUI 和新的 SSR 留在 pool，然後把新的 sSSR 跟發起人本來有的 sSSR 一起存進每個問卷專屬的 SurveyVault。
+
 ### 資金流（核心）
 
 ```
@@ -112,6 +116,7 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
    發起者 → survey_vault::close → 退還未派發 SSR
    admin  → amm_pool::admin_withdraw_sui（僅 admin）
 ```
+
 
 ### Sponsored Transaction 路徑（Flow B 核心）
 

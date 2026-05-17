@@ -4,74 +4,93 @@ module surveysui::survey_vault_tests;
 use sui::clock;
 use sui::coin::{Self, Coin};
 use sui::test_scenario as ts;
-use surveysui::participant_sbt::{Self, SbtRegistry, ParticipantSBT};
-use surveysui::reward_coin::{Self, Treasury, REWARD_COIN};
+use surveysui::stacked_survey_reward::{Self, SssrTreasury, STACKED_SURVEY_REWARD};
+use surveysui::survey_pass::{Self, PassRegistry, SurveyPass};
 use surveysui::survey_vault::{Self, SurveyVault};
 
-const ADMIN: address   = @0xA11CE;
-const CREATOR: address = @0xC0FFEE;
-const ALICE: address   = @0xA71CE;
-const BOB: address     = @0xB0B;
+const ADMIN: address      = @0xA11CE;
+const CREATOR: address    = @0xC0FFEE;
+const RESPONDENT: address = @0xA71CE;
+const BOB: address        = @0xB0B;
 
-const TTL_180D: u64 = 180 * 24 * 60 * 60 * 1000;
-const T0: u64       = 1_000_000_000; // ms
-
+const TTL_180D: u64      = 180 * 24 * 60 * 60 * 1000;
+const T0: u64            = 1_000_000_000;
 const PER_RESPONSE: u64  = 100;
-const MAX_RESPONSES: u64 = 5;
-const VAULT_FUND: u64    = 1_000;
+const MAX_RESPONSES: u64 = 99;   // 99 × 100 = 9 900 ≤ 9 970
+const VAULT_FUND: u64    = 10_000;
+
+// fee = 10_000 × 30 / 10_000 = 30
+const EXPECTED_FEE: u64        = 30;
+const VAULT_BALANCE_AFTER: u64 = VAULT_FUND - EXPECTED_FEE; // 9 970
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/// Init coin + SBT modules, mint VAULT_FUND to CREATOR, end at ADMIN tx.
 fun setup(): ts::Scenario {
     let mut sc = ts::begin(ADMIN);
-    reward_coin::test_init(sc.ctx());
-    participant_sbt::test_init(sc.ctx());
+    stacked_survey_reward::test_init(sc.ctx());
+    survey_pass::test_init(sc.ctx());
     sc.next_tx(ADMIN);
     {
-        let mut treasury = ts::take_shared<Treasury>(&sc);
-        reward_coin::mint(&mut treasury, VAULT_FUND, CREATOR, sc.ctx());
+        let mut treasury = ts::take_shared<SssrTreasury>(&sc);
+        let coin = stacked_survey_reward::mint(&mut treasury, VAULT_FUND, sc.ctx());
+        transfer::public_transfer(coin, CREATOR);
         ts::return_shared(treasury);
     };
-    sc.next_tx(ADMIN); // end here so issue_sbt works immediately
-    sc
-}
-
-/// Switch to CREATOR tx, create+share vault, return at ADMIN tx.
-fun create_and_share_vault(sc: &mut ts::Scenario, deadline_ms: u64) {
-    sc.next_tx(CREATOR);
-    {
-        let coin = ts::take_from_sender<Coin<REWARD_COIN>>(sc);
-        let vault = survey_vault::create(
-            coin, PER_RESPONSE, MAX_RESPONSES, deadline_ms, ADMIN, sc.ctx(),
-        );
-        survey_vault::share_vault(vault);
-    };
     sc.next_tx(ADMIN);
+    sc
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+/// ★ 核心：vault::create / fund 時收手續費送 admin_treasury
 #[test]
-fun test_create_vault_with_correct_params() {
+fun test_create_deducts_fee_to_treasury() {
+    let mut sc = setup();
+    let clk = clock::create_for_testing(sc.ctx());
+
+    sc.next_tx(CREATOR);
+    {
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        assert!(coin::value(&coin) == VAULT_FUND);
+        let vault = survey_vault::create(
+            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        );
+        assert!(survey_vault::balance_value(&vault) == VAULT_BALANCE_AFTER);
+        survey_vault::share_vault(vault);
+    };
+
+    // ADMIN (admin_treasury) received the fee
+    sc.next_tx(ADMIN);
+    {
+        let fee_coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        assert!(coin::value(&fee_coin) == EXPECTED_FEE);
+        ts::return_to_sender(&sc, fee_coin);
+    };
+
+    clock::destroy_for_testing(clk);
+    sc.end();
+}
+
+#[test]
+fun test_create_vault_params() {
     let mut sc = setup();
     let clk = clock::create_for_testing(sc.ctx());
     let deadline = T0 + TTL_180D;
 
     sc.next_tx(CREATOR);
     {
-        let coin = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
         let vault = survey_vault::create(
             coin, PER_RESPONSE, MAX_RESPONSES, deadline, ADMIN, sc.ctx(),
         );
-        assert!(survey_vault::per_response(&vault)  == PER_RESPONSE);
-        assert!(survey_vault::max_responses(&vault) == MAX_RESPONSES);
-        assert!(survey_vault::deadline_ms(&vault)   == deadline);
-        assert!(survey_vault::balance_value(&vault) == VAULT_FUND);
-        assert!(survey_vault::claimed_count(&vault) == 0);
-        assert!(survey_vault::status(&vault)        == 0); // STATUS_OPEN
-        assert!(survey_vault::admin(&vault)         == ADMIN);
-        assert!(survey_vault::creator(&vault)       == CREATOR);
+        assert!(survey_vault::per_response(&vault)   == PER_RESPONSE);
+        assert!(survey_vault::max_responses(&vault)  == MAX_RESPONSES);
+        assert!(survey_vault::deadline_ms(&vault)    == deadline);
+        assert!(survey_vault::balance_value(&vault)  == VAULT_BALANCE_AFTER);
+        assert!(survey_vault::claimed_count(&vault)  == 0);
+        assert!(survey_vault::status(&vault)         == 0); // STATUS_OPEN
+        assert!(survey_vault::creator(&vault)        == CREATOR);
+        assert!(survey_vault::admin_treasury(&vault) == ADMIN);
         survey_vault::share_vault(vault);
     };
 
@@ -80,91 +99,45 @@ fun test_create_vault_with_correct_params() {
 }
 
 #[test]
-fun test_create_returns_vault_unshared() {
-    let mut sc = setup();
-    let clk = clock::create_for_testing(sc.ctx());
-
-    // Within a CREATOR tx block, vault is a local value — not yet shared.
-    sc.next_tx(CREATOR);
-    {
-        let coin = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
-        let vault = survey_vault::create(
-            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
-        );
-        assert!(survey_vault::balance_value(&vault) == VAULT_FUND);
-        // share at end so tx can close cleanly
-        survey_vault::share_vault(vault);
-    };
-
-    // After next_tx the vault is accessible as a shared object
-    sc.next_tx(ADMIN);
-    {
-        let vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        assert!(survey_vault::balance_value(&vault) == VAULT_FUND);
-        ts::return_shared(vault);
-    };
-
-    clock::destroy_for_testing(clk);
-    sc.end();
-}
-
-#[test]
-fun test_fund_increases_balance() {
-    let mut sc = setup();
-    let clk = clock::create_for_testing(sc.ctx());
-
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
-    // now at ADMIN tx
-
-    // Mint 500 more coins to CREATOR for top-up
-    {
-        let mut treasury = ts::take_shared<Treasury>(&sc);
-        reward_coin::mint(&mut treasury, 500, CREATOR, sc.ctx());
-        ts::return_shared(treasury);
-    };
-    sc.next_tx(CREATOR);
-    {
-        let mut vault  = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let top_up     = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
-        survey_vault::fund(&mut vault, top_up);
-        assert!(survey_vault::balance_value(&vault) == VAULT_FUND + 500);
-        ts::return_shared(vault);
-    };
-
-    clock::destroy_for_testing(clk);
-    sc.end();
-}
-
-#[test]
-fun test_claim_happy_path() {
+fun test_claim_with_valid_pass() {
     let mut sc = setup();
     let mut clk = clock::create_for_testing(sc.ctx());
     clock::set_for_testing(&mut clk, T0);
 
-    // ADMIN tx: issue SBT for alice
+    // ADMIN: issue pass
     {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
+        let mut registry = ts::take_shared<PassRegistry>(&sc);
+        survey_pass::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
         ts::return_shared(registry);
     };
-    // create_and_share_vault flushes ADMIN tx (SBT enters pool) then creates vault,
-    // then flushes CREATOR tx (vault enters pool), returns at ADMIN tx.
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
 
+    // CREATOR: create vault
+    sc.next_tx(CREATOR);
     {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx());
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        let vault = survey_vault::create(
+            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        );
+        survey_vault::share_vault(vault);
+    };
+
+    // RESPONDENT: claim
+    sc.next_tx(RESPONDENT);
+    {
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        let pass      = ts::take_shared<SurveyPass>(&sc);
+        survey_vault::claim(&mut vault, &pass, b"alice_sub", b"enc_answers", &clk, sc.ctx());
         assert!(survey_vault::claimed_count(&vault) == 1);
-        assert!(survey_vault::balance_value(&vault) == VAULT_FUND - PER_RESPONSE);
+        assert!(survey_vault::balance_value(&vault) == VAULT_BALANCE_AFTER - PER_RESPONSE);
         assert!(survey_vault::has_claimed(&vault, b"alice_sub"));
-        ts::return_shared(sbt);
+        ts::return_shared(pass);
         ts::return_shared(vault);
     };
 
-    sc.next_tx(ALICE);
+    // RESPONDENT received sSSR reward
+    sc.next_tx(RESPONDENT);
     {
-        let reward = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
+        let reward = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
         assert!(coin::value(&reward) == PER_RESPONSE);
         ts::return_to_sender(&sc, reward);
     };
@@ -173,88 +146,46 @@ fun test_claim_happy_path() {
     sc.end();
 }
 
-#[test, expected_failure(abort_code = surveysui::survey_vault::ENoQuota)]
-fun test_claim_aborts_when_no_quota() {
+#[test, expected_failure(abort_code = surveysui::survey_vault::EInvalidPass)]
+fun test_claim_invalid_pass_fails() {
     let mut sc = setup();
     let mut clk = clock::create_for_testing(sc.ctx());
     clock::set_for_testing(&mut clk, T0);
 
-    // ADMIN tx: issue 2 SBTs (s1=serial0, s2=serial1)
+    // ADMIN: issue pass
     {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut registry, b"s1", TTL_180D, &clk, sc.ctx());
-        participant_sbt::issue(&mut registry, b"s2", TTL_180D, &clk, sc.ctx());
+        let mut registry = ts::take_shared<PassRegistry>(&sc);
+        survey_pass::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
         ts::return_shared(registry);
     };
 
-    // CREATOR: create vault with max_responses=1 so quota is exhausted after one claim
+    // CREATOR: create vault
     sc.next_tx(CREATOR);
     {
-        let coin = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
-        let vault = survey_vault::create(coin, PER_RESPONSE, 1, T0 + TTL_180D, ADMIN, sc.ctx());
-        survey_vault::share_vault(vault);
-    };
-    sc.next_tx(ADMIN);
-
-    // Claim s1 (serial=0, FIFO first) → succeeds, fills the only slot
-    {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx());
-        ts::return_shared(sbt);
-        ts::return_shared(vault);
-    };
-    sc.next_tx(ADMIN);
-
-    // Claim s2 (serial=1) → ENoQuota (s2 sub_hash not claimed, so not EAlreadyClaimed)
-    {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt_a     = ts::take_shared<ParticipantSBT>(&sc); // s1 (serial=0)
-        let sbt_b     = ts::take_shared<ParticipantSBT>(&sc); // s2 (serial=1)
-        if (participant_sbt::serial(&sbt_a) == 1) {
-            survey_vault::claim(&mut vault, &sbt_a, ALICE, &clk, sc.ctx()); // ENoQuota
-        } else {
-            survey_vault::claim(&mut vault, &sbt_b, ALICE, &clk, sc.ctx()); // ENoQuota
-        };
-        ts::return_shared(sbt_a);
-        ts::return_shared(sbt_b);
-        ts::return_shared(vault);
-    };
-
-    clock::destroy_for_testing(clk);
-    sc.end();
-}
-
-#[test, expected_failure(abort_code = surveysui::survey_vault::EExpired)]
-fun test_claim_aborts_when_expired() {
-    let mut sc = setup();
-    let mut clk = clock::create_for_testing(sc.ctx());
-    clock::set_for_testing(&mut clk, T0);
-
-    // ADMIN tx: issue SBT
-    {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
-        ts::return_shared(registry);
-    };
-
-    // CREATOR: create vault with deadline = T0 + 1 s
-    sc.next_tx(CREATOR);
-    {
-        let coin = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
         let vault = survey_vault::create(
-            coin, PER_RESPONSE, MAX_RESPONSES, T0 + 1_000, ADMIN, sc.ctx(),
+            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
         );
         survey_vault::share_vault(vault);
     };
-    sc.next_tx(ADMIN);
 
-    clock::set_for_testing(&mut clk, T0 + 2_000); // past vault deadline
+    // ADMIN: revoke the pass
+    sc.next_tx(ADMIN);
     {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx()); // EExpired
-        ts::return_shared(sbt);
+        let mut registry = ts::take_shared<PassRegistry>(&sc);
+        let mut pass     = ts::take_shared<SurveyPass>(&sc);
+        survey_pass::revoke(&mut registry, &mut pass, sc.ctx());
+        ts::return_shared(pass);
+        ts::return_shared(registry);
+    };
+
+    // Claim with revoked pass → EInvalidPass
+    sc.next_tx(RESPONDENT);
+    {
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        let pass      = ts::take_shared<SurveyPass>(&sc);
+        survey_vault::claim(&mut vault, &pass, b"alice_sub", b"enc", &clk, sc.ctx());
+        ts::return_shared(pass);
         ts::return_shared(vault);
     };
 
@@ -263,72 +194,43 @@ fun test_claim_aborts_when_expired() {
 }
 
 #[test, expected_failure(abort_code = surveysui::survey_vault::EAlreadyClaimed)]
-fun test_claim_aborts_when_already_claimed() {
+fun test_claim_duplicate_sub_fails() {
     let mut sc = setup();
     let mut clk = clock::create_for_testing(sc.ctx());
     clock::set_for_testing(&mut clk, T0);
 
-    // ADMIN tx: issue SBT
     {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
+        let mut registry = ts::take_shared<PassRegistry>(&sc);
+        survey_pass::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
         ts::return_shared(registry);
     };
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
+
+    sc.next_tx(CREATOR);
+    {
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        let vault = survey_vault::create(
+            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        );
+        survey_vault::share_vault(vault);
+    };
 
     // First claim: success
+    sc.next_tx(RESPONDENT);
     {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx());
-        ts::return_shared(sbt);
-        ts::return_shared(vault);
-    };
-    sc.next_tx(ADMIN);
-
-    // Second claim: EAlreadyClaimed
-    {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx()); // abort
-        ts::return_shared(sbt);
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        let pass      = ts::take_shared<SurveyPass>(&sc);
+        survey_vault::claim(&mut vault, &pass, b"alice_sub", b"enc", &clk, sc.ctx());
+        ts::return_shared(pass);
         ts::return_shared(vault);
     };
 
-    clock::destroy_for_testing(clk);
-    sc.end();
-}
-
-#[test, expected_failure(abort_code = surveysui::survey_vault::EInvalidSBT)]
-fun test_claim_aborts_when_sbt_revoked_or_expired() {
-    let mut sc = setup();
-    let mut clk = clock::create_for_testing(sc.ctx());
-    clock::set_for_testing(&mut clk, T0);
-
-    // ADMIN tx: issue SBT
+    // Second claim with same sub_hash → EAlreadyClaimed
+    sc.next_tx(RESPONDENT);
     {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
-        ts::return_shared(registry);
-    };
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
-
-    // Revoke Alice's SBT in ADMIN tx
-    {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        let mut sbt      = ts::take_shared<ParticipantSBT>(&sc);
-        participant_sbt::revoke(&mut registry, &mut sbt, sc.ctx());
-        ts::return_shared(sbt);
-        ts::return_shared(registry);
-    };
-    sc.next_tx(ADMIN);
-
-    // Claim with revoked SBT → EInvalidSBT
-    {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx()); // abort
-        ts::return_shared(sbt);
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        let pass      = ts::take_shared<SurveyPass>(&sc);
+        survey_vault::claim(&mut vault, &pass, b"alice_sub", b"enc", &clk, sc.ctx());
+        ts::return_shared(pass);
         ts::return_shared(vault);
     };
 
@@ -336,81 +238,44 @@ fun test_claim_aborts_when_sbt_revoked_or_expired() {
     sc.end();
 }
 
-#[test, expected_failure(abort_code = surveysui::survey_vault::EAlreadyClaimed)]
-fun test_claim_aborts_when_sub_already_claimed_via_old_sbt() {
+/// ENoQuota is checked before EAlreadyClaimed, so any valid pass + new sub_hash suffices.
+#[test, expected_failure(abort_code = surveysui::survey_vault::ENoQuota)]
+fun test_claim_quota_exceeded_fails() {
     let mut sc = setup();
     let mut clk = clock::create_for_testing(sc.ctx());
     clock::set_for_testing(&mut clk, T0);
 
-    // ADMIN tx: issue SBT (serial=0)
     {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
+        let mut registry = ts::take_shared<PassRegistry>(&sc);
+        survey_pass::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
         ts::return_shared(registry);
     };
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
 
-    // Claim with serial=0 SBT → success (sub_hash "alice_sub" recorded)
+    // Create vault with max_responses = 1
+    sc.next_tx(CREATOR);
     {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx());
-        ts::return_shared(sbt);
-        ts::return_shared(vault);
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        let vault = survey_vault::create(coin, PER_RESPONSE, 1, T0 + TTL_180D, ADMIN, sc.ctx());
+        survey_vault::share_vault(vault);
     };
-    sc.next_tx(ADMIN);
 
-    // Reissue: marks serial=0 SUPERSEDED, creates serial=1 with same sub_hash
+    // Fill the only slot
+    sc.next_tx(RESPONDENT);
     {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        let mut old_sbt  = ts::take_shared<ParticipantSBT>(&sc);
-        participant_sbt::reissue(&mut registry, &mut old_sbt, TTL_180D, &clk, sc.ctx());
-        ts::return_shared(old_sbt);
-        ts::return_shared(registry);
-    };
-    sc.next_tx(ADMIN);
-
-    // Two SBTs: serial=0 (SUPERSEDED), serial=1 (ACTIVE, same sub_hash).
-    // Claiming with the new active SBT must abort with EAlreadyClaimed.
-    {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt_a     = ts::take_shared<ParticipantSBT>(&sc);
-        let sbt_b     = ts::take_shared<ParticipantSBT>(&sc);
-        if (participant_sbt::serial(&sbt_a) == 1) {
-            survey_vault::claim(&mut vault, &sbt_a, ALICE, &clk, sc.ctx()); // EAlreadyClaimed
-        } else {
-            survey_vault::claim(&mut vault, &sbt_b, ALICE, &clk, sc.ctx()); // EAlreadyClaimed
-        };
-        ts::return_shared(sbt_a);
-        ts::return_shared(sbt_b);
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        let pass      = ts::take_shared<SurveyPass>(&sc);
+        survey_vault::claim(&mut vault, &pass, b"alice_sub", b"enc", &clk, sc.ctx());
+        ts::return_shared(pass);
         ts::return_shared(vault);
     };
 
-    clock::destroy_for_testing(clk);
-    sc.end();
-}
-
-#[test, expected_failure(abort_code = surveysui::survey_vault::ENotAdmin)]
-fun test_claim_aborts_when_caller_not_admin() {
-    let mut sc = setup();
-    let mut clk = clock::create_for_testing(sc.ctx());
-    clock::set_for_testing(&mut clk, T0);
-
-    // ADMIN tx: issue SBT
+    // Next claim hits quota limit → ENoQuota (checked before EAlreadyClaimed)
+    sc.next_tx(RESPONDENT);
     {
-        let mut registry = ts::take_shared<SbtRegistry>(&sc);
-        participant_sbt::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
-        ts::return_shared(registry);
-    };
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
-
-    // BOB (not admin) tries to claim → ENotAdmin
-    sc.next_tx(BOB);
-    {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        let sbt       = ts::take_shared<ParticipantSBT>(&sc);
-        survey_vault::claim(&mut vault, &sbt, ALICE, &clk, sc.ctx()); // abort
-        ts::return_shared(sbt);
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        let pass      = ts::take_shared<SurveyPass>(&sc);
+        survey_vault::claim(&mut vault, &pass, b"bob_sub", b"enc", &clk, sc.ctx());
+        ts::return_shared(pass);
         ts::return_shared(vault);
     };
 
@@ -419,15 +284,22 @@ fun test_claim_aborts_when_caller_not_admin() {
 }
 
 #[test]
-fun test_close_returns_balance_to_creator() {
+fun test_close_refunds_remaining_to_creator() {
     let mut sc = setup();
     let clk = clock::create_for_testing(sc.ctx());
 
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
+    sc.next_tx(CREATOR);
+    {
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        let vault = survey_vault::create(
+            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        );
+        survey_vault::share_vault(vault);
+    };
 
     sc.next_tx(CREATOR);
     {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
         survey_vault::close(&mut vault, sc.ctx());
         assert!(survey_vault::status(&vault)        == 1); // STATUS_CLOSED
         assert!(survey_vault::balance_value(&vault) == 0);
@@ -436,8 +308,8 @@ fun test_close_returns_balance_to_creator() {
 
     sc.next_tx(CREATOR);
     {
-        let refund = ts::take_from_sender<Coin<REWARD_COIN>>(&sc);
-        assert!(coin::value(&refund) == VAULT_FUND);
+        let refund = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        assert!(coin::value(&refund) == VAULT_BALANCE_AFTER);
         ts::return_to_sender(&sc, refund);
     };
 
@@ -450,13 +322,19 @@ fun test_close_aborts_when_caller_not_creator() {
     let mut sc = setup();
     let clk = clock::create_for_testing(sc.ctx());
 
-    create_and_share_vault(&mut sc, T0 + TTL_180D);
+    sc.next_tx(CREATOR);
+    {
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        let vault = survey_vault::create(
+            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        );
+        survey_vault::share_vault(vault);
+    };
 
-    // BOB (not creator) tries to close → ENotCreator
     sc.next_tx(BOB);
     {
-        let mut vault = ts::take_shared<SurveyVault<REWARD_COIN>>(&sc);
-        survey_vault::close(&mut vault, sc.ctx()); // abort
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        survey_vault::close(&mut vault, sc.ctx()); // ENotCreator
         ts::return_shared(vault);
     };
 

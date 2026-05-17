@@ -22,9 +22,9 @@ function parseDeployOutput(json: DeployOutput): Record<string, string> {
     }
     if (change.type === 'created') {
       const c = change as { type: 'created'; objectType: string; objectId: string }
-      if (c.objectType.includes('TreasuryCap')) vars['RWD_TREASURY_CAP_ID'] = c.objectId
-      if (c.objectType.includes('Pool')) vars['AMM_POOL_ID'] = c.objectId
-      if (c.objectType.includes('SbtRegistry')) vars['SBT_REGISTRY_ID'] = c.objectId
+      if (c.objectType.includes('::survey_sui_reward::Treasury')) vars['SSR_TREASURY_ID'] = c.objectId
+      if (c.objectType.includes('amm_pool::Pool')) vars['AMM_POOL_ID'] = c.objectId
+      if (c.objectType.includes('::survey_registry::Registry')) vars['SURVEY_REGISTRY_ID'] = c.objectId
     }
   }
 
