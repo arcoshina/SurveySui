@@ -277,30 +277,30 @@
   - [x] `test_review_screen_shows_all_answers`
   - [x] `test_success_state_shows_tx_hash`
 
-### [ ] T3.7 — Swap UI（RWD ↔ SUI）
-- [ ] 兩個 input + 自動算 amount_out
-- [ ] `SuiClient.getObject(POOL_ID)` 讀 reserves，CPMM 公式計算
-- [ ] 使用者錢包簽 PTB 呼叫 `swap_a_to_b` / `swap_b_to_a`
+### [x] T3.7 — Swap UI（RWD ↔ SUI）
+- [x] 兩個 input + 自動算 amount_out
+- [x] `SuiClient.getObject(POOL_ID)` 讀 reserves，CPMM 公式計算
+- [x] 使用者錢包簽 PTB 呼叫 `swap_a_to_b` / `swap_b_to_a`
 - TDD
-  - [ ] `test_amount_out_matches_contract_simulation`
-  - [ ] `test_pool_object_fetch_handles_stale_data`
-  - [ ] `test_slippage_warning_above_5pct`
+  - [x] `test_amount_out_matches_contract_simulation`
+  - [x] `test_pool_object_fetch_handles_stale_data`
+  - [x] `test_slippage_warning_above_5pct`
 
-### [ ] T3.8 — RWD + i18n（中文為主）
-- [ ] 桌機 / 手機驗證
-- [ ] 中文字型
+### [x] T3.8 — RWD + i18n（中文為主）
+- [x] 桌機 / 手機驗證
+- [x] 中文字型
 - TDD
-  - [ ] Playwright responsive test（375 / 768 / 1440）
+  - [x] Playwright responsive test（375 / 768 / 1440）
 
-### [ ] T3.9 — Social Sharing Preview（動態 OG meta tags）⏸ 優先級：低
-- [ ] Cloudflare Worker / Vercel Edge Function 攔截 `/s/:id`
-- [ ] 爬蟲 UA → 取 metadata 回傳動態 OG tags
-- [ ] 一般 UA → passthrough SPA
+### [x] T3.9 — Social Sharing Preview（動態 OG meta tags）⏸ 優先級：低
+- [x] Cloudflare Worker / Vercel Edge Function 攔截 `/s/:id`
+- [x] 爬蟲 UA → 取 metadata 回傳動態 OG tags
+- [x] 一般 UA → passthrough SPA
 - TDD
-  - [ ] `test_edge_function_returns_dynamic_og_for_bot_user_agent`
-  - [ ] `test_edge_function_passthrough_for_human_user_agent`
-  - [ ] `test_og_tags_contain_correct_survey_title_and_description`
-  - [ ] `test_fallback_to_default_og_when_survey_id_not_found`
+  - [x] `test_edge_function_returns_dynamic_og_for_bot_user_agent`
+  - [x] `test_edge_function_passthrough_for_human_user_agent`
+  - [x] `test_og_tags_contain_correct_survey_title_and_description`
+  - [x] `test_fallback_to_default_og_when_survey_id_not_found`
 
 ---
 

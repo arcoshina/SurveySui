@@ -95,7 +95,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-screen p-8 max-w-4xl mx-auto">
+    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-2">儀表板</h1>
 
       {!surveyId && (
@@ -110,7 +110,7 @@ export default function DashboardPage() {
 
       {surveyId && stats && survey && (
         <>
-          <div className="grid grid-cols-3 gap-4 my-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 my-6">
             <div className="bg-gray-50 border rounded p-4">
               <p className="text-sm text-gray-500">回覆數</p>
               <p className="text-2xl font-bold" aria-label="response-count">

@@ -84,7 +84,8 @@ export default function FundPage() {
     }
 
     signAndExecute(
-      { transaction: tx },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { transaction: tx as any },
       {
         onSuccess: (result) => {
           setTxDigest(result.digest)

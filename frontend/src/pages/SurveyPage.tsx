@@ -94,8 +94,9 @@ export default function SurveyPage() {
 
   if (phase === 'loading') {
     return (
-      <main className="min-h-screen flex items-center justify-center p-8">
-        <p aria-live="polite">載入問卷中…</p>
+      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
+        <h1 className="text-2xl font-bold mb-6">填寫問卷</h1>
+        <p aria-live="polite" className="text-gray-500">載入問卷中…</p>
       </main>
     )
   }
@@ -104,7 +105,8 @@ export default function SurveyPage() {
 
   if (phase === 'error' || !survey) {
     return (
-      <main className="min-h-screen flex items-center justify-center p-8">
+      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
+        <h1 className="text-2xl font-bold mb-6">填寫問卷</h1>
         <p role="alert" className="text-red-500">
           問卷載入失敗，請稍後再試。
         </p>
@@ -135,7 +137,7 @@ export default function SurveyPage() {
 
   if (phase === 'review' || phase === 'submitting') {
     return (
-      <main className="min-h-screen p-8 max-w-2xl mx-auto">
+      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
         <h1 className="text-2xl font-bold mb-6">確認您的答案</h1>
 
         <div className="space-y-4 mb-8">
@@ -181,7 +183,7 @@ export default function SurveyPage() {
   // ── filling ───────────────────────────────────────────────────────────────
 
   return (
-    <main className="min-h-screen p-8 max-w-2xl mx-auto">
+    <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
       <h1 className="text-2xl font-bold mb-2">{survey.title}</h1>
       <p className="text-sm text-gray-500 mb-6">
         截止日期：{new Date(survey.deadline).toLocaleDateString('zh-TW')}

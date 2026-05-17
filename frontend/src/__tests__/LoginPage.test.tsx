@@ -109,7 +109,7 @@ describe('T3.5 — zkLogin 登入頁', () => {
       return realSetInterval(fn, delay)
     })
     vi.stubGlobal('clearInterval', (id: unknown) => {
-      if (id !== 1) realClearInterval(id as ReturnType<typeof clearInterval>)
+      if (id !== 1) realClearInterval(id as Parameters<typeof clearInterval>[0])
     })
 
     const mockFetch = vi.fn()

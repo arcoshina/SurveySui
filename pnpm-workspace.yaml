@@ -2,3 +2,4 @@ packages:
   - backend
   - frontend
   - scripts
+  - workers/og-preview

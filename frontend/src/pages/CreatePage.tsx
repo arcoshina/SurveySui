@@ -72,7 +72,7 @@ export default function CreatePage() {
   const previewHtml = renderMarkdown(content)
 
   return (
-    <main className="min-h-screen p-8 max-w-6xl mx-auto">
+    <main className="min-h-screen p-4 sm:p-8 max-w-6xl mx-auto">
       <h1 className="text-3xl font-bold mb-6">建立問卷</h1>
 
       {submitSuccess && (
@@ -99,7 +99,7 @@ export default function CreatePage() {
       )}
 
       <form onSubmit={handleSubmit} noValidate>
-        <div className="flex gap-4 mb-6" style={{ height: '400px' }}>
+        <div className="flex flex-col md:flex-row gap-4 mb-6 md:h-100">
           <div className="flex-1 flex flex-col">
             <label htmlFor="content" className="font-semibold mb-1">
               問卷內容（Markdown）
