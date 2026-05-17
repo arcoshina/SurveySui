@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   ConnectButton,
   useCurrentAccount,
@@ -7,29 +7,33 @@ import {
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
 import { estimateSuiCost, buildFundSurveyPtb } from '../lib/ptb'
+import { parseFrontmatter } from '../lib/frontmatter'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 const POOL_ID = import.meta.env.VITE_AMM_POOL_ID ?? ''
 const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS ?? ''
 const RWD_DECIMALS = 1_000_000_000n
 
-interface SurveyParams {
-  perResponse: number
-  maxResponses: number
-  deadlineMs: number
+interface FundState {
+  contentMd: string
 }
 
 export default function FundPage() {
-  const { surveyId } = useParams<{ surveyId: string }>()
   const location = useLocation()
-  const params = location.state as SurveyParams | undefined
+  const navigate = useNavigate()
+  const state = location.state as FundState | undefined
 
   const account = useCurrentAccount()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
 
   const [txStatus, setTxStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [txDigest, setTxDigest] = useState<string | null>(null)
+  const [surveyId, setSurveyId] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const contentMd = state?.contentMd ?? ''
+  const frontmatter = contentMd ? parseFrontmatter(contentMd) : { ok: false as const, error: '缺少問卷內容' }
+  const params = frontmatter.ok ? frontmatter.data : null
 
   const { data: poolData } = useSuiClientQuery(
     'getObject',
@@ -37,7 +41,6 @@ export default function FundPage() {
     { enabled: !!POOL_ID },
   )
 
-  // 從 pool 物件取得儲備量並估算 SUI 消耗
   let suiToSpend: bigint | null = null
   if (params && poolData?.data?.content?.dataType === 'moveObject') {
     const fields = (poolData.data.content as { dataType: string; fields: Record<string, string> })
@@ -53,10 +56,27 @@ export default function FundPage() {
         reserveSui,
         reserveRwd,
       })
-      // 加 1% 滑點緩衝
       suiToSpend = (estimated * 101n) / 100n
     } catch {
       suiToSpend = null
+    }
+  }
+
+  async function postSurvey(vaultObjectId: string, creatorAddress: string): Promise<string | null> {
+    try {
+      const res = await fetch('/surveys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contentMd, vaultObjectId, creatorAddress }),
+      })
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string }
+        throw new Error(err.error ?? `HTTP ${res.status}`)
+      }
+      const data = (await res.json()) as { id: string }
+      return data.id
+    } catch (err) {
+      throw err instanceof Error ? err : new Error('POST /surveys 失敗')
     }
   }
 
@@ -66,7 +86,6 @@ export default function FundPage() {
     setTxStatus('loading')
     setErrorMsg(null)
 
-    // 整筆獎勵 RWD 即為 swap 必須至少收到的數量；否則 vault::create 會缺額
     const totalRwd = BigInt(params.perResponse) * BigInt(params.maxResponses) * RWD_DECIMALS
 
     let tx
@@ -91,9 +110,23 @@ export default function FundPage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { transaction: tx as any },
       {
-        onSuccess: (result) => {
+        onSuccess: async (result) => {
           setTxDigest(result.digest)
-          setTxStatus('success')
+
+          // 從 PTB effects 取得新建的 vault object id（T5.5 會精確過濾 type）
+          const createdObjs = (result as { objectChanges?: Array<{ type: string; objectId?: string }> })
+            .objectChanges
+          const vaultObjectId =
+            createdObjs?.find((c) => c.type === 'created')?.objectId ?? result.digest
+
+          try {
+            const id = await postSurvey(vaultObjectId, account.address)
+            setSurveyId(id)
+            setTxStatus('success')
+          } catch (err) {
+            setErrorMsg(err instanceof Error ? err.message : 'POST /surveys 失敗')
+            setTxStatus('error')
+          }
         },
         onError: (err) => {
           setErrorMsg(err.message)
@@ -103,16 +136,25 @@ export default function FundPage() {
     )
   }
 
-  if (!params) {
+  if (!state || !contentMd) {
     return (
       <main className="min-h-screen p-8 max-w-xl mx-auto">
         <h1 className="text-3xl font-bold mb-4">注資</h1>
-        <p className="text-red-500">找不到問卷參數，請從建立問卷頁面進入。</p>
+        <p className="text-red-500">找不到問卷內容，請從建立問卷頁面進入。</p>
       </main>
     )
   }
 
-  const totalRwd = params.perResponse * params.maxResponses
+  if (!frontmatter.ok) {
+    return (
+      <main className="min-h-screen p-8 max-w-xl mx-auto">
+        <h1 className="text-3xl font-bold mb-4">注資</h1>
+        <p className="text-red-500">Frontmatter 解析錯誤：{frontmatter.error}</p>
+      </main>
+    )
+  }
+
+  const totalRwd = params!.perResponse * params!.maxResponses
 
   return (
     <main className="min-h-screen p-8 max-w-xl mx-auto">
@@ -120,16 +162,12 @@ export default function FundPage() {
 
       <div className="bg-gray-50 border rounded p-4 mb-6 space-y-2 text-sm">
         <p>
-          <span className="font-semibold">問卷 ID：</span>
-          {surveyId}
-        </p>
-        <p>
           <span className="font-semibold">每份獎勵：</span>
-          {params.perResponse} RWD
+          {params!.perResponse} RWD
         </p>
         <p>
           <span className="font-semibold">名額上限：</span>
-          {params.maxResponses}
+          {params!.maxResponses}
         </p>
         <p>
           <span className="font-semibold">所需 RWD 總量：</span>
@@ -153,7 +191,16 @@ export default function FundPage() {
 
       {txStatus === 'success' && txDigest && (
         <div role="status" className="bg-green-100 text-green-800 p-4 rounded mb-4 text-sm break-all">
-          注資成功！TX：{txDigest}
+          <p>注資成功！TX：{txDigest}</p>
+          {surveyId && (
+            <button
+              type="button"
+              onClick={() => navigate(`/dashboard/${surveyId}`)}
+              className="mt-2 underline font-semibold"
+            >
+              前往問卷儀表板 →
+            </button>
+          )}
         </div>
       )}
 

@@ -1,24 +1,32 @@
 # SurveySui 任務進度清單
 
-> 來源：[MVP_TDD.md](MVP_TDD.md)
+> 上游：[專案目標.md](專案目標.md)（願景／Flow A/B/C）→ [MVP_TDD.md](MVP_TDD.md)（架構與設計決策）→ 本檔（任務執行）
 > 狀態圖例：`[ ]` 未開始 / `[~]` 進行中 / `[x]` 完成 / `[-]` 延後或排除
 > TDD 原則：每個 task 先提交「失敗的測試」，再提交「實作 + 測試通過」
+> 標籤：`[A]` Flow A 發起者建立 ／ `[B]` Flow B 受訪者填答 ／ `[C]` Flow C 收尾 ／ `[基建]` 不直接屬於任一 Flow
 
 ---
 
 ## 進度總覽
 
-| 里程碑 | 完成 / 總數 | 備註 |
-|---|---|---|
-| M0 基礎設施 | 3 / 3 | ✅ 完成 |
-| M1 Move Contracts | 6 / 7 | T1.7 testnet 部署延後 |
-| M2 Backend | 9 / 9 | ✅ 完成 |
-| M3 Frontend | 9 / 9 | ✅ 完成 |
-| M4 整合 & Demo | 2 / 3 | T4.3 frontend↔backend contract drift 待修 |
-| M5 Contract drift 全面對齊 | 0 / 9 | 2026-05-17 audit 發現，T4.3 為其子集 |
-| **合計** | **29 / 40** | M5 完成前無法宣告整合可用 |
+| 里程碑 | 完成 / 總數 | 對應目標 | 備註 |
+|---|---|---|---|
+| M0 基礎設施 | 3 / 3 | [基建] | ✅ 完成 |
+| M1 Move Contracts | 6 / 7 | [A][B][C] 金流層 | T1.7 testnet 部署延後 |
+| M2 Backend | 9 / 9 | [A][B][C] 金流層+產品層 | ✅ 完成 |
+| M3 Frontend | 9 / 9 | [A][B][C] 產品層 | ✅ 完成 |
+| M4 整合 & Demo | 2 / 3 | 跨 Flow 整合 | T4.3 frontend↔backend contract drift 待修 |
+| M5 Contract drift 全面對齊 | 0 / 9 | 產品層驗收 | 2026-05-17 audit 發現，T4.3 為其子集 |
+| **合計** | **29 / 40** | — | M5 完成前無法宣告整合可用 |
 
-下一步：**M5 全部完成 → 重跑 e2e（真 backend）→ Definition of Done 驗收**
+下一步：**M5 全部完成 → 重跑 e2e（真 backend）→ [Definition of Done](#definition-of-done最終驗收) 驗收**
+
+### 兩個驗收軸（對齊 [專案目標.md §MVP 要證明什麼](專案目標.md)）
+
+| 驗收軸 | 跨哪些 task | 驗收方式 |
+|---|---|---|
+| **金流層**：注資 → vault → claim → swap 全鏈路無縫 | M1 + T2.6 + T3.3 + T3.7 + T5.5 + T5.6 | 一筆 PTB atomic 注資；受訪者領到 RWD；swap 拿到 SUI；過程鏈上可查 |
+| **產品層**：發起者一氣呵成設計→分享→看結果 | M3 + M5 全部 | e2e（真 backend）跑完 Flow A→B→C 不破 |
 
 ---
 
@@ -201,15 +209,33 @@
 
 ---
 
-## 排除於 MVP（v2 roadmap）
+## v2 Roadmap（排除於 MVP）
+
+### 已於 [專案目標.md](專案目標.md) §MVP 規格總覽中標為「進階」或於 [MVP_TDD.md](MVP_TDD.md) Limitations 排除
 
 - [-] Testnet ↔ Mainnet 跨網路橋
-- [-] 多階段獎勵
+- [-] 多階段獎勵（前 100 名 10 token，101–1000 名 1 token...）
 - [-] AI 輔助 Markdown 編輯 / RAG 建議
-- [-] 進階參與條件（國籍、年齡、UID、邀請碼）
-- [-] 匿名化投票
+- [-] 進階參與條件（國籍、年齡、UID、邀請碼、白名單、平台積分）
+- [-] 匿名化投票（[專案目標.md](專案目標.md) §MVP 方向 #4）
 - [-] 結果加密上鏈
 - [-] Sponsored transaction 給受訪者
+- [-] 發起者使用 SUI 自動 swap 成 RWD 並享手續費折扣
+- [-] 追加金額／更新活動條件
+
+### UI／UX 強化（從原「改進計畫.md」併入，2026-05-17）
+
+- [-] **Logo**：墨水滴進方格（[A][B][C] 全站視覺識別）
+- [-] **Markdown 問卷檔案匯入／匯出**（[A]，發起者可在本機備份問卷草稿）
+- [-] **適當提示／引導**：登入流程、空白狀態、錯誤訊息（[A][B][C]）
+- [-] 進階 Markdown 編輯：預覽即時更新 → AI 輔助 → 自有 RAG（[專案目標.md](專案目標.md) §2.2 b/c/d）
+
+### 合約／部署強化
+
+- [-] **Devnet 預檢部署**：上 testnet 前先在 devnet 試跑（devnet 會定期清除，適合快速反覆驗證）
+- [-] **安全性審計**：admin key 託管、CORS、rate limit、secret rotation
+
+> 上述項目原列於已刪除的 `改進計畫.md`，2026-05-17 整合進本檔。可執行項目進入 v2 開發時，請拉到 M6+ 子段重寫成完整 task + TDD spec。
 
 ---
 

@@ -13,7 +13,7 @@ export interface SurveyRoutesDeps {
   dispatcher?: RewardDispatcher
 }
 
-const CreateSurveyBodySchema = z.object({
+export const CreateSurveyBodySchema = z.object({
   contentMd: z.string().min(1),
   vaultObjectId: z.string().min(1),
   creatorAddress: z.string().min(1),

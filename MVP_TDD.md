@@ -1,16 +1,32 @@
-# SurveySui MVP — 子任務清單 & TDD 測試規劃
+# SurveySui MVP — 架構設計 & TDD 測試規劃
 
 ## Context
 
 `SurveySui` 是 Sui Overflow 2026 黑客松專案，瞄準 [DeFi & Payments 賽道](Overflow%20Tracks/DeFi%20%26%20Payments.md)。
 
-本計畫的目的：把 MVP 規劃拆成**可執行的子任務清單**，每個任務搭配 **TDD 測試案例**（先寫測試，再實作）。
+本檔的角色：在「**做什麼**」（[專案目標.md](專案目標.md)）與「**做到哪**」（[Tasks.md](Tasks.md)）之間，記錄**為什麼這樣設計**——設計決策、三層架構、TDD 策略。
 
-最終 MVP 要證明的兩件事：
+最終 MVP 要證明的兩件事（出自 [專案目標.md](專案目標.md) §MVP 要證明什麼）：
 1. **金流層**：發起者注資 → vault 鎖定 → 受訪者完成問卷 → 自動領到獎勵 → 可自由 swap 換 SUI
 2. **產品層**：發起者能在 UI 上一氣呵成「設計問卷 + 設定獎勵 → 分享 → 看結果」
 
 > **進度追蹤請見 [Tasks.md](Tasks.md)**。本文件保留設計決策與架構參照；已完成任務只保留摘要，未完成任務保留完整 TDD spec。
+
+---
+
+## 目標 → 架構映射
+
+下表把 [專案目標.md](專案目標.md) §2-4 的三段 Flow 與兩個驗收軸，對應到本檔的架構模組與 [Tasks.md](Tasks.md) 的里程碑。讀架構章節時可回頭對照這張表。
+
+| [專案目標.md](專案目標.md) 章節 | 服務的 Flow | 落在哪個架構模組 | 對應 [Tasks.md](Tasks.md) 里程碑 |
+|---|---|---|---|
+| §2 Flow A：發起者建「問卷＋獎勵」 | A | Frontend `/create`、`/fund/:id`；Backend `Survey CRUD`；Move `survey_vault::create/fund`、`survey_registry::register` | T2.4、T3.2、T3.3、T1.3、T1.5、**T5.5**（FE 接 vault id 回寫） |
+| §3 Flow B：受訪者填答 & 領獎 | B | Frontend `/login`、`/s/:id`、`/swap`；Backend `zkLogin verifier`、`Response store`、`Reward dispatcher`；Move `participant_sbt`、`survey_vault::claim`、`amm_pool::swap` | T2.2、T2.3、T2.5、T2.6、T3.5、T3.6、T3.7、T1.2、T1.4、**T5.2/T5.3/T5.7** |
+| §4 Flow C：活動結束 & 收尾 | C | Frontend `/dashboard`；Backend `Stats aggregator`、`/surveys/:id/close`；Move `survey_vault::close` | T2.7、T2.8、T3.4、**T5.4** |
+| §MVP 要證明什麼 #1 金流層 | A+B+C | 整條 PTB：注資 → claim → swap；vault 餘額即時上鏈查詢 | M1 全部、T2.6、T3.3、T3.7、T5.5、T5.6 |
+| §MVP 要證明什麼 #2 產品層 | A+B+C | 三層整合：FE 表單流暢度、BE schema 一致、合約 atomic | M3 全部、**M5 全部**（FE↔BE contract drift）|
+
+> **粗體 task** = 目前未完成、阻擋 Definition of Done 的關鍵節點。
 
 ---
 
@@ -30,29 +46,32 @@
 
 ## 系統架構
 
-### 三層
+### 三層（每行括號標出服務的 Flow）
 
 ```
 ┌─ Frontend (Vite + React + @mysten/dapp-kit, SPA) ───────┐
-│  /create     發起者建立問卷 + 連 Sui Wallet 注資         │
-│  /dashboard  發起者儀表板 + 結束活動                     │
-│  /s/:id      受訪者 zkLogin → 填答 → 顯示獎勵            │
-│  /swap       RWD ↔ SUI swap UI                          │
+│  /create     發起者建立問卷 + 連 Sui Wallet 注資  [Flow A] │
+│  /fund/:id   注資 PTB（swap → create vault → register）[A]│
+│  /dashboard  發起者儀表板 + 結束活動              [Flow C] │
+│  /s/:id      受訪者 zkLogin → 填答 → 顯示獎勵     [Flow B] │
+│  /swap       RWD ↔ SUI swap UI                  [Flow B] │
 └─────────────────────────────────────────────────────────┘
                        ↕ REST / tRPC
 ┌─ Backend (Node.js + Fastify + Prisma + PostgreSQL) ─────┐
-│  zkLogin verifier   (Google OAuth + sub → SBT 對映)     │
-│  Survey CRUD        (Markdown + metadata)                │
-│  Response store     (答案、hash 計算)                    │
-│  Reward dispatcher  (admin key 簽 PTB → 發 RWD)         │
-│  Stats aggregator   (儀表板 API)                         │
+│  zkLogin verifier   Google OAuth + sub → SBT      [B]    │
+│  Survey CRUD        Markdown + metadata            [A]    │
+│  Response store     答案、hash 計算                [B]    │
+│  Reward dispatcher  admin key 簽 PTB → 發 RWD     [B]    │
+│  Stats aggregator   儀表板 API                     [C]    │
+│  Close handler      退款 + 關閉 vault              [C]    │
 └─────────────────────────────────────────────────────────┘
                        ↕ @mysten/sui SDK
 ┌─ Sui Move Contracts (Testnet) ──────────────────────────┐
-│  reward_coin       Coin<RWD> + TreasuryCap              │
-│  participant_sbt   一人一張、不可轉、由後端 admin mint   │
-│  survey_vault      Vault object: 鎖定 RWD + 發獎邏輯     │
-│  amm_pool          CPMM: RWD/SUI swap、add liquidity     │
+│  reward_coin       Coin<RWD> + TreasuryCap         [基建]│
+│  participant_sbt   一人一張、不可轉、admin mint    [B]   │
+│  survey_vault      鎖定 RWD + 發獎 + 退款邏輯      [A/B/C]│
+│  amm_pool          CPMM: RWD/SUI swap              [A/B] │
+│  survey_registry   Survey 註冊 + content_hash 事件 [A]   │
 └─────────────────────────────────────────────────────────┘
 ```
 

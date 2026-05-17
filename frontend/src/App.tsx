@@ -14,7 +14,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/login/callback" element={<LoginCallbackPage />} />
         <Route path="/create" element={<CreatePage />} />
-        <Route path="/fund/:surveyId" element={<FundPage />} />
+        <Route path="/fund" element={<FundPage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/dashboard/:surveyId" element={<DashboardPage />} />
         <Route path="/s/:id" element={<SurveyPage />} />
