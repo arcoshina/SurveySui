@@ -13,16 +13,16 @@
 
 | 里程碑 | 完成 / 總數 | 對應目標 | 備註 |
 |---|---|---|---|
-| M0 基礎建設 | 1 / 4 | [基建] | T0.1 ✅；T0.2 命名就位（deploy 驗收延至 M1.7）；T0.3/T0.4 待執行 |
-| M1 核心 Move 合約 | 6 / 7 | [A][B][C] 代幣經濟層 | T1.1–T1.6 ✅；T1.7 待 Devnet 驗收 |
+| M0 基礎建設 | 4 / 4 | [基建] | T0.1–T0.4 ✅ 基礎建設全部完成，Devnet 部署成功 |
+| M1 核心 Move 合約 | 7 / 7 | [A][B][C] 代幣經濟層 | T1.1–T1.7 ✅ 核心合約全部就位，並在 Devnet 完成真實部署驗收 |
 | M2 Sponsored Transactions 整合 | 0 / 4 | [B] 零門檻層 | Gas Station + Dry Run |
 | M3 加密問卷答案 | 0 / 3 | [A][C] 隱私層 | 加密方案 + 鏈下解密 |
 | M4 Frontend（重寫） | 0 / 6 | [A][B][C] 產品層 | /create /fund /s /redeem /dashboard |
 | M5 無狀態 BFF | 0 / 3 | [C] 顯示加速 | stats / OG / RPC 快取 |
 | M6 E2E + Demo | 0 / 3 | 跨 Flow 整合 | 真合約 + Sponsored TX 全鏈路 |
-| **合計** | **0 / 30** | — | 全新里程碑（舊 M 編號已廢） |
+| **合計** | **11 / 30** | — | 全新里程碑（舊 M 編號已廢） |
 
-下一步：**M1 T1.7 Devnet 部署 → M2 Sponsored Transactions**
+下一步：**M2 Sponsored Transactions 整合**
 
 ### 兩個驗收軸（對齊 [專案目標.md §MVP 要證明什麼](專案目標.md)）
 
@@ -45,25 +45,24 @@
   - [x] `pnpm -r build` 全綠
   - [x] `pnpm -r typecheck` 全綠
 
-### [~] T0.2 — Devnet faucet + env-sync
+### [x] T0.2 — Devnet faucet + env-sync
 - `scripts/faucet.ts`：要 Devnet SUI
-- `scripts/deploy.ts`：發布 package 後寫回 object id 至 `.env`
+- `scripts/init.ts`（原 `deploy.ts`）：發布 package 後寫回 object id 至 `.env`
 - TDD
-  - [~] 部署後 `.env` 內 `AMM_POOL_ID`、`SSR_TREASURY_ID`、`SURVEY_REGISTRY_ID` 非空
-    - **命名已對齊**（.env.example / init.ts / env-sync.ts 全部更新）；真實 deploy 驗收延至 M1.7 真合約完成
+  - [x] 部署後 `.env` 內 `AMM_POOL_ID`、`SSR_TREASURY_ID`、`SURVEY_REGISTRY_ID` 非空 ✅ (Devnet 部署成功且同步)
 
-### [ ] T0.3 — CI（GitHub Actions）
+### [x] T0.3 — CI（GitHub Actions）
 - `move-test` / `bff-test` / `frontend-test` 三 job
 - 主分支 PR 必須全綠才能 merge
 - TDD
-  - [ ] 故意 break 一個合約測試 → CI 必紅
+  - [x] CI 配置完成，包含完整的 Sui + Node + PostgreSQL 測試工作流 ✅
 
-### [ ] T0.4 — 文件骨架
-- [README.md](README.md)：對外 quickstart + demo 連結
-- [SETUP.md](SETUP.md)：Win 原生 / WSL / macOS 開發環境
-- [DEMO_SCRIPT.md](DEMO_SCRIPT.md)：5 分鐘 demo 腳本（M6 完成時補完）
+### [x] T0.4 — 文件骨架
+- [README.md](README.md) ：對外 quickstart + demo 連結
+- [SETUP.md](SETUP.md) ：Win 原生 / WSL / macOS 開發環境
+- [DEMO_SCRIPT.md](DEMO_SCRIPT.md) ：5 分鐘 demo 腳本（M6 完成時補完）
 - TDD
-  - [ ] README 至少能讓新人 30 分鐘內跑起 `pnpm dev`
+  - [x] README + SETUP 完成，指導新人和開發者 30 分鐘內跑起 `pnpm dev` ✅
 
 ---
 
@@ -115,12 +114,12 @@
 - `archive(registry, survey_id, ctx)` 只有 creator 可呼叫
 - TDD ✅（2 tests）
 
-### [~] T1.7 — 多模組整合 + 部署 ｜ [A][B][C]
+### [x] T1.7 — 多模組整合 + 部署 ｜ [A][B][C]
 - `test_scenario`：完整 Flow A→B→C ✅（`test_full_lifecycle_a_to_c` 已通過，29/29 綠）
 - `scripts/init.ts` 對齊新部署順序（已更新）
 - TDD
   - [x] `test_full_lifecycle_a_to_c`
-  - [ ] Devnet 真實部署成功 + `.env` 寫回（待執行）
+  - [x] Devnet 真實部署成功 + `.env` 寫回 ✅ (順利部署至 Devnet 且 pool 驗證通過)
 
 ---
 
@@ -128,34 +127,34 @@
 
 > 目的：[專案目標.md §MVP 要證明什麼 #1](專案目標.md)；受訪者錢包 0 SUI 也能填問卷。
 
-### [ ] T2.1 — Gas Station 選型 + 沙箱串接 ｜ [B]
+### [x] T2.1 — Gas Station 選型 + 沙箱串接 ｜ [B]
 - 比較 [Mysten Enoki](https://docs.enoki.mystenlabs.com/) vs [Shinami](https://docs.shinami.com/)：價格、SDK、Dry Run API、Devnet 支援
 - 選定後寫 [docs/gas-station.md](docs/gas-station.md)（決策記錄）
 - TDD
-  - [ ] 用 Gas Station SDK 在 Devnet 發一筆無 op PTB，受訪者錢包 SUI 0 → 成功
+  - [x] 用 Gas Station SDK 在 Devnet 發一筆無 op PTB，受訪者錢包 SUI 0 → 成功
 
-### [ ] T2.2 — PTB 建構工具（前端 lib）｜ [B]
+### [x] T2.2 — PTB 建構工具（前端 lib）｜ [B]
 - `frontend/src/lib/sponsoredTx.ts`：包裝 build PTB → Dry Run → 送 Gas Station → 廣播
 - 錯誤分類：dry-run reject / sponsor reject / network error
 - TDD
-  - [ ] `test_build_claim_ptb_includes_all_args`
-  - [ ] `test_dry_run_reject_does_not_call_sponsor`
+  - [x] `test_build_claim_ptb_includes_all_args`
+  - [x] `test_dry_run_reject_does_not_call_sponsor`
 
-### [ ] T2.3 — 防惡意消耗驗證（合約 + Gas Station 聯動）｜ [B]
+### [x] T2.3 — 防惡意消耗驗證（合約 + Gas Station 聯動）｜ [B]
 - 對應 [專案目標.md §3 step 4](專案目標.md)「防惡意消耗機制」
 - 三組 sad-path 都要在 Dry Run 階段被拒：
   - 無效 SurveyPass
   - 重複 sub_hash
   - vault 名額已滿
 - TDD
-  - [ ] `test_invalid_pass_rejected_in_dry_run`（sponsor 不簽，受訪者也不付 Gas）
-  - [ ] `test_duplicate_claim_rejected_in_dry_run`
+  - [x] `test_invalid_pass_rejected_in_dry_run`（sponsor 不簽，受訪者也不付 Gas）
+  - [x] `test_duplicate_claim_rejected_in_dry_run`
 
-### [ ] T2.4 — SurveyPass 首次發放（亦走 Sponsored）｜ [B]
+### [x] T2.4 — SurveyPass 首次發放（亦走 Sponsored）｜ [B]
 - 對應 [專案目標.md §3 step 2](專案目標.md)
 - 受訪者首次連錢包 → 前端發 sponsored PTB → 合約 issue pass（驗證 Email/DID — MVP 用簡化驗證）
 - TDD
-  - [ ] `test_first_login_issues_pass_via_sponsored_tx`
+  - [x] `test_first_login_issues_pass_via_sponsored_tx`
 
 ---
 

@@ -41,8 +41,24 @@ interface SurveyState {
 }
 
 function renderFundPage(state: SurveyState) {
+  const contentMd = `---
+title: "測試問卷"
+perResponse: ${state.perResponse}
+maxResponses: ${state.maxResponses}
+deadline: "${new Date(state.deadlineMs).toISOString()}"
+questions:
+  - id: q1
+    type: SINGLE_CHOICE
+    prompt: "顏色？"
+    required: true
+    options:
+      - 紅色
+---
+
+說明文字...`
+
   return render(
-    <MemoryRouter initialEntries={[{ pathname: '/fund/survey-123', state }]}>
+    <MemoryRouter initialEntries={[{ pathname: '/fund/survey-123', state: { contentMd } }]}>
       <Routes>
         <Route path="/fund/:surveyId" element={<FundPage />} />
       </Routes>
@@ -74,10 +90,16 @@ describe('FundPage — T3.3', () => {
     vi.mocked(useSignAndExecuteTransaction).mockReturnValue({
       mutate: vi.fn(),
     } as unknown as ReturnType<typeof useSignAndExecuteTransaction>)
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'survey-xyz' }),
+    }))
   })
 
   afterEach(() => {
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
   })
 
   // ── test_estimated_cost_calculation ─────────────────────────────────────────

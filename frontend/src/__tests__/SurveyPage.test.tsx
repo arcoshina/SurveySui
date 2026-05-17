@@ -1,6 +1,30 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+
+// Mock dapp-kit hooks
+vi.mock('@mysten/dapp-kit', () => ({
+  useCurrentAccount: vi.fn().mockReturnValue({ address: '0xuser' }),
+  useSuiClient: vi.fn().mockReturnValue({
+    executeTransactionBlock: vi.fn().mockResolvedValue({ digest: '0xdeadbeef' }),
+  }),
+  useSignTransaction: vi.fn().mockReturnValue({
+    mutateAsync: vi.fn().mockResolvedValue({ signature: 'mock_user_sig' }),
+  }),
+}))
+
+// Mock sponsoredTx library
+vi.mock('../lib/sponsoredTx', () => ({
+  buildClaimPtb: vi.fn().mockReturnValue({}),
+  dryRunAndSponsorTx: vi.fn().mockResolvedValue({
+    sponsoredTxBytes: 'mock_bytes',
+    sponsorSignature: 'mock_sponsor_sig',
+  }),
+  executeSponsoredTx: vi.fn().mockResolvedValue({ digest: '0xdeadbeef' }),
+}))
+
+import { useCurrentAccount } from '@mysten/dapp-kit'
+import { Transaction } from '@mysten/sui/transactions'
 import SurveyPage from '../pages/SurveyPage'
 
 // ── 測試資料 ────────────────────────────────────────────────────────────────
@@ -11,6 +35,7 @@ const MOCK_SURVEY = {
   status: 'ACTIVE',
   deadline: '2099-12-31T23:59:59Z',
   per_response: 1,
+  vaultObjectId: '0xvault',
   questions: [
     {
       id: 'q1',
@@ -44,7 +69,14 @@ function renderSurveyPage(id = 'survey-abc') {
 // ── 測試 ────────────────────────────────────────────────────────────────────
 
 describe('T3.6 — 問卷填答頁', () => {
+  beforeEach(() => {
+    sessionStorage.setItem('survey_pass_id', '0xpass')
+    sessionStorage.setItem('survey_sub_hash', '0xsubhash')
+    vi.spyOn(Transaction, 'from').mockReturnValue({} as any)
+  })
+
   afterEach(() => {
+    sessionStorage.clear()
     vi.clearAllMocks()
     vi.unstubAllGlobals()
   })

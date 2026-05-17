@@ -1,10 +1,17 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import CreatePage from '../pages/CreatePage'
 
-// 截止日期：2099 年，確保一定在未來
-const FUTURE_DEADLINE = '2099-12-31T23:59'
+// Mock useNavigate hook
+const mockNavigate = vi.fn()
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>()
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 function renderCreatePage() {
   return render(
@@ -14,50 +21,35 @@ function renderCreatePage() {
   )
 }
 
-function fillValidForm() {
-  fireEvent.change(screen.getByLabelText('問卷內容（Markdown）'), {
-    target: { value: '# 測試問卷\n\n請回答以下問題。' },
-  })
-  fireEvent.change(screen.getByLabelText('每份獎勵（RWD）'), {
-    target: { value: '10' },
-  })
-  fireEvent.change(screen.getByLabelText('名額上限'), {
-    target: { value: '100' },
-  })
-  fireEvent.change(screen.getByLabelText('截止日期'), {
-    target: { value: FUTURE_DEADLINE },
-  })
-}
-
 describe('CreatePage', () => {
-  beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn())
-  })
-
   afterEach(() => {
-    vi.unstubAllGlobals()
+    vi.clearAllMocks()
   })
 
   it('test_form_validation_blocks_invalid_input', async () => {
     renderCreatePage()
 
-    // 直接按送出，所有欄位都是空的
-    fireEvent.click(screen.getByRole('button', { name: /建立問卷/ }))
+    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
 
-    // 應顯示所有驗證錯誤
+    // 清空編輯器並按送出
+    fireEvent.change(editor, { target: { value: ' ' } })
+    fireEvent.click(screen.getByRole('button', { name: /下一步：前往注資/ }))
+
+    // 應顯示空內容驗證錯誤
     expect(await screen.findByText('請填寫問卷內容')).toBeInTheDocument()
-    expect(screen.getByText('獎勵金額須大於 0')).toBeInTheDocument()
-    expect(screen.getByText('名額須為正整數')).toBeInTheDocument()
-    expect(screen.getByText('請選擇截止日')).toBeInTheDocument()
 
-    // fetch 不應被呼叫
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+    // 輸入無效的 frontmatter
+    fireEvent.change(editor, { target: { value: '---\ntitle: test\n---\n' } })
+    fireEvent.click(screen.getByRole('button', { name: /下一步：前往注資/ }))
+
+    // 應顯示 frontmatter 錯誤訊息
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
   })
 
   it('test_preview_renders_markdown', () => {
     renderCreatePage()
 
-    const editor = screen.getByLabelText('問卷內容（Markdown）')
+    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
     const preview = screen.getByLabelText('markdown 預覽')
 
     // 輸入 Markdown 標題
@@ -75,33 +67,16 @@ describe('CreatePage', () => {
     expect(preview.querySelector('strong')).toHaveTextContent('重要')
   })
 
-  it('test_submit_calls_create_api', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ id: 'test-survey-123' }),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
+  it('test_submit_navigates_to_fund', async () => {
     renderCreatePage()
-    fillValidForm()
 
-    fireEvent.click(screen.getByRole('button', { name: /建立問卷/ }))
+    fireEvent.click(screen.getByRole('button', { name: /下一步：前往注資/ }))
 
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledOnce()
-    })
-
-    const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/surveys')
-    expect(options.method).toBe('POST')
-
-    const body = JSON.parse(options.body as string)
-    expect(body.content_md).toContain('# 測試問卷')
-    expect(body.per_response).toBe(10)
-    expect(body.max_responses).toBe(100)
-    expect(body.deadline).toBe(new Date(FUTURE_DEADLINE).toISOString())
-
-    // 成功後顯示成功訊息
-    expect(await screen.findByRole('status')).toHaveTextContent('問卷已成功建立')
+    // 應導向 /fund 並攜帶狀態
+    expect(mockNavigate).toHaveBeenCalledWith('/fund', expect.objectContaining({
+      state: expect.objectContaining({
+        contentMd: expect.stringContaining('perResponse'),
+      }),
+    }))
   })
 })

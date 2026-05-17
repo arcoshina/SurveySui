@@ -1,7 +1,7 @@
 import { buildApp } from './app.js'
 import { ProdZkLoginVerifier } from './auth/zklogin-verifier.js'
 import { SbtService } from './sbt/sbt-service.js'
-import { NoOpSbtChainClient } from './sbt/noop-chain-client.js'
+import { SuiSbtChainClient } from './sbt/sui-chain-client.js'
 import { SurveyService } from './survey/survey-service.js'
 import { NoOpSurveyChainClient } from './survey/noop-chain-client.js'
 import { loadAndVerifyAdminKey } from './admin-key.js'
@@ -23,7 +23,7 @@ const googleRedirectUri =
 const adminSecret = requireEnv('ADMIN_SECRET')
 
 const verifier = new ProdZkLoginVerifier({ googleClientId })
-const sbtService = new SbtService(new NoOpSbtChainClient())
+const sbtService = new SbtService(new SuiSbtChainClient())
 const surveyService = new SurveyService(new NoOpSurveyChainClient())
 
 const app = await buildApp({

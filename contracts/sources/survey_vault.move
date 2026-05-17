@@ -1,5 +1,6 @@
 module surveysui::survey_vault;
 
+use std::vector;
 use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
@@ -20,6 +21,7 @@ const EExpired: u64        = 2;
 const EAlreadyClaimed: u64 = 3;
 const EInvalidPass: u64    = 4;
 const EVaultClosed: u64    = 5;
+const EEmptyAnswers: u64   = 6;
 
 public struct SurveyClaimed has copy, drop {
     vault_id: ID,
@@ -112,6 +114,8 @@ public fun claim(
     assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
     assert!(vault.claimed_count < vault.max_responses, ENoQuota);
     assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
+    assert!(survey_pass::sub_hash(pass) == sub_hash, EInvalidPass);
+    assert!(!vector::is_empty(&encrypted_answers), EEmptyAnswers);
     assert!(!table::contains(&vault.claimed_subs, sub_hash), EAlreadyClaimed);
 
     table::add(&mut vault.claimed_subs, sub_hash, true);

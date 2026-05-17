@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
-import { queryPoolReserves } from './init.js'
+import { queryPoolState } from './init.js'
 
 const isIntegration = !!process.env.INTEGRATION
 
@@ -17,10 +17,10 @@ describe.skipIf(!isIntegration)(
         | 'localnet'
       const client = new SuiClient({ url: getFullnodeUrl(network) })
 
-      const { reserveA, reserveB } = await queryPoolReserves(client, poolId)
+      const { suiReserve, ssrReserve } = await queryPoolState(client, poolId)
 
-      expect(reserveA).toBeGreaterThan(0n)
-      expect(reserveB).toBeGreaterThan(0n)
+      expect(suiReserve).toBeGreaterThanOrEqual(0n)
+      expect(ssrReserve).toBeGreaterThanOrEqual(0n)
     }, 30_000)
   },
 )

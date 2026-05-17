@@ -23,7 +23,7 @@ export interface DeployResult {
 
 function buildPackage(): { modules: string[]; dependencies: string[] } {
   const stdout = execSync(
-    `sui move build --dump-bytecode-as-base64 --path "${CONTRACTS_PATH}"`,
+    `sui move build --dump-bytecode-as-base64 --path "${CONTRACTS_PATH}" --build-env testnet`,
     { encoding: 'utf8' },
   )
   const match = stdout.match(/\{[\s\S]*\}/)
@@ -165,12 +165,8 @@ export async function queryPoolState(
     throw new Error(`Pool object ${poolId} not found or not a Move object`)
   }
   const f = obj.data.content.fields as Record<string, unknown>
-  const suiReserve = BigInt(
-    (f.sui_reserve as { fields: { value: string } }).fields.value,
-  )
-  const ssrReserve = BigInt(
-    (f.ssr_reserve as { fields: { value: string } }).fields.value,
-  )
+  const suiReserve = BigInt(f.sui_reserve as string | number)
+  const ssrReserve = BigInt(f.ssr_reserve as string | number)
   const totalSuiInvested = BigInt(f.total_sui_invested as string)
   return { suiReserve, ssrReserve, totalSuiInvested }
 }
@@ -181,7 +177,9 @@ export async function queryPoolState(
 export function writeEnvShared(updates: Record<string, string>): void {
   const envPath = resolve(__dirname, '../../.env.shared')
   mergeEnvFile(envPath, updates)
-  console.log(`\nWritten to .env.shared:`)
+  const rootEnvPath = resolve(__dirname, '../../.env')
+  mergeEnvFile(rootEnvPath, updates)
+  console.log(`\nWritten to .env.shared and .env:`)
   for (const [k, v] of Object.entries(updates)) {
     console.log(`  ${k}=${v}`)
   }
@@ -194,7 +192,9 @@ async function main() {
   const adminPrivKey = requireEnv('SUI_ADMIN_PRIVATE_KEY')
   const adminAddress = requireEnv('SUI_ADMIN_ADDRESS')
 
-  const keypair = Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
+  const keypair = adminPrivKey.startsWith('suiprivkey')
+    ? Ed25519Keypair.fromSecretKey(adminPrivKey)
+    : Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
   const client = new SuiClient({ url: getFullnodeUrl(network) })
 
   // 1. Deploy (creates SsrTreasury, SssrTreasury, SurveyRegistry automatically)

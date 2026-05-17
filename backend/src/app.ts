@@ -5,6 +5,7 @@ import { prisma } from './db.js'
 import { registerAuthRoutes } from './auth/routes.js'
 import { registerSbtAdminRoutes } from './sbt/routes.js'
 import { registerSurveyRoutes } from './survey/routes.js'
+import { registerGasRoutes } from './gas/routes.js'
 import type { ZkLoginVerifier } from './auth/zklogin-verifier.js'
 import type { SbtService } from './sbt/sbt-service.js'
 import type { SurveyService } from './survey/survey-service.js'
@@ -48,6 +49,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerSurveyRoutes(app, {
     surveyService: deps.surveyService,
   })
+
+  registerGasRoutes(app)
 
   return app
 }

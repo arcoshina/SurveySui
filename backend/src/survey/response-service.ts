@@ -17,6 +17,7 @@ export interface SubmitResponseParams {
   subHash: string
   suiAddress: string
   answersJson: unknown
+  claimedTx?: string
   now?: Date
 }
 
@@ -68,6 +69,7 @@ export class ResponseService {
         suiAddress: params.suiAddress,
         answersJson: params.answersJson as Prisma.InputJsonValue,
         contentHash,
+        claimedTx: params.claimedTx || null,
       },
     })
 

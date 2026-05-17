@@ -27,6 +27,7 @@ const SubmitResponseBodySchema = z.object({
   subHash: z.string().min(1),
   suiAddress: z.string().min(1),
   answersJson: z.record(z.unknown()),
+  claimedTx: z.string().optional(),
 })
 
 export function registerSurveyRoutes(
@@ -107,6 +108,14 @@ export function registerSurveyRoutes(
         surveyId: id,
         ...parsed.data,
       })
+
+      if (parsed.data.claimedTx) {
+        return reply.code(201).send({
+          id: result.id,
+          contentHash: result.contentHash,
+          txDigest: parsed.data.claimedTx,
+        })
+      }
 
       const { txDigest } = await dispatcher.dispatch({
         responseId: result.id,
