@@ -76,8 +76,8 @@ export default function SurveyPage() {
         body: JSON.stringify({ answers }),
       })
       if (!res.ok) throw new Error(await res.text())
-      const data = (await res.json()) as { tx_hash: string }
-      setTxHash(data.tx_hash)
+      const data = (await res.json()) as { txDigest: string }
+      setTxHash(data.txDigest)
       setPhase('success')
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : '提交失敗')

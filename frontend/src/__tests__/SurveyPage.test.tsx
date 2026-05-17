@@ -109,7 +109,7 @@ describe('T3.6 — 問卷填答頁', () => {
       vi
         .fn()
         .mockResolvedValueOnce({ ok: true, json: async () => MOCK_SURVEY })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ tx_hash: '0xdeadbeef' }) }),
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ txDigest: '0xdeadbeef' }) }),
     )
 
     renderSurveyPage()

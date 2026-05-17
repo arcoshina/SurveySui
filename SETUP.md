@@ -51,10 +51,29 @@ sui client balance
 
 ### PostgreSQL（後端開發時才需要）
 
-選項 A — 直接安裝（推薦）：
-從 https://www.postgresql.org/download/windows/ 下載 v16 安裝程式
+選項 A — scoop（推薦，user-mode 不需 admin）：
+```powershell
+# 一次性安裝
+scoop install postgresql
 
-選項 B — Docker Desktop：
+# 建 dev role + DB（首次設定，只跑一次；預設 superuser postgres、blank password、trust auth）
+psql -U postgres -h 127.0.0.1 -d postgres -c "CREATE ROLE surveysui LOGIN PASSWORD 'dev_password';"
+psql -U postgres -h 127.0.0.1 -d postgres -c "CREATE DATABASE surveysui_dev OWNER surveysui;"
+```
+
+每次重開機後啟動（idempotent，已在跑會直接結束）：
+```cmd
+scripts\start-pg.cmd
+```
+停止：`scripts\stop-pg.cmd`。
+
+> 要設成開機自啟（Win service）：以系統管理員開 PowerShell 執行
+> `pg_ctl register -N PostgreSQL -D "$env:USERPROFILE\scoop\apps\postgresql\current\data"`。
+
+選項 B — EnterpriseDB installer（系統 service，要 admin）：
+從 https://www.enterprisedb.com/downloads/postgres-postgresql-downloads 下載 v16 安裝程式。
+
+選項 C — Docker Desktop（CI 同版本）：
 ```powershell
 docker run -d --name surveysui-pg `
   -e POSTGRES_USER=surveysui `
@@ -64,9 +83,9 @@ docker run -d --name surveysui-pg `
   postgres:16
 ```
 
-`DATABASE_URL`：
+`DATABASE_URL`（**用 127.0.0.1 不要用 localhost**，避免 IPv6 解析問題）：
 ```
-postgresql://surveysui:dev_password@localhost:5432/surveysui_dev
+postgresql://surveysui:dev_password@127.0.0.1:5432/surveysui_dev
 ```
 
 ---

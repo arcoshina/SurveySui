@@ -9,4 +9,13 @@ export default defineConfig({
       '@': '/src',
     },
   },
+  server: {
+    proxy: {
+      '/surveys': 'http://localhost:3000',
+      '/auth': 'http://localhost:3000',
+      '/me': 'http://localhost:3000',
+      '/admin': 'http://localhost:3000',
+      '/health': 'http://localhost:3000',
+    },
+  },
 })

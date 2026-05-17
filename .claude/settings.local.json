@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(until grep *)",
+      "Read(//c/Users/ARCO_A~1/AppData/Local/Temp/claude/d--Users-Arco-asus-Documents-GitHub-SurveySui/c516bb90-db16-4104-b672-c206fd942d68/tasks/**)"
+    ]
+  }
+}

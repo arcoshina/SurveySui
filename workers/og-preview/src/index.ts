@@ -38,7 +38,7 @@ async function fetchSurveyMeta(
   try {
     const res = await fetch(`${backendUrl}/surveys/${surveyId}`)
     if (!res.ok) return null
-    const data: SurveyResponse = await res.json()
+    const data = (await res.json()) as SurveyResponse
     const title = extractTitle(data.contentMd ?? '')
     const questionCount = Array.isArray(data.questions) ? data.questions.length : 0
     return { title, questionCount }
