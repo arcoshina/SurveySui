@@ -30,7 +30,7 @@ fun setup_pool(): ts::Scenario {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-// sqrt(10 000 × 10 000) = 10 000
+// sqrt(10 000 × 10 000) = 10 000;  caller LP = 10 000 − MINIMUM_LIQUIDITY (1 000) = 9 000.
 #[test]
 fun test_initial_liquidity_mints_correct_lp() {
     let mut sc = ts::begin(ALICE);
@@ -38,7 +38,7 @@ fun test_initial_liquidity_mints_correct_lp() {
         let coin_a = coin::mint_for_testing<COIN_A>(10_000, sc.ctx());
         let coin_b = coin::mint_for_testing<COIN_B>(10_000, sc.ctx());
         let lp = amm_pool::init_pool(coin_a, coin_b, sc.ctx());
-        assert!(coin::value(&lp) == 10_000, 0);
+        assert!(coin::value(&lp) == 9_000, 0);
         // sqrt(100 × 400) = sqrt(40 000) = 200
         let coin_a2 = coin::mint_for_testing<COIN_A>(100, sc.ctx());
         let coin_b2 = coin::mint_for_testing<COIN_B>(400, sc.ctx());
@@ -219,31 +219,39 @@ fun test_swap_succeeds_when_amount_out_meets_min() {
     sc.end();
 }
 
-// Drain all liquidity, then attempt a swap → must abort with EZeroReserve.
-#[test, expected_failure(abort_code = surveysui::amm_pool::EZeroReserve)]
-fun test_swap_aborts_on_zero_reserves() {
+// H3: init below the minimum-liquidity threshold (sqrt(a*b) ≤ MINIMUM_LIQUIDITY)
+// must abort EInsufficientLiquidity. sqrt(31*31)=31 < 1000.
+// (Note: with MINIMUM_LIQUIDITY locked in the pool forever, EZeroReserve is
+// no longer reachable from outside — the const remains as defense-in-depth.)
+#[test, expected_failure(abort_code = surveysui::amm_pool::EInsufficientLiquidity)]
+fun test_init_pool_aborts_when_below_minimum_liquidity() {
     let mut sc = ts::begin(ALICE);
     {
-        // sqrt(1 × 1) = 1 LP — minimum viable pool
-        let coin_a = coin::mint_for_testing<COIN_A>(1, sc.ctx());
-        let coin_b = coin::mint_for_testing<COIN_B>(1, sc.ctx());
+        let coin_a = coin::mint_for_testing<COIN_A>(31, sc.ctx());
+        let coin_b = coin::mint_for_testing<COIN_B>(31, sc.ctx());
         let lp = amm_pool::init_pool(coin_a, coin_b, sc.ctx());
+        transfer::public_transfer(lp, ALICE);
+    };
+    sc.end();
+}
+
+// H3: caller receives lp_total − MINIMUM_LIQUIDITY; pool keeps the rest forever.
+// init(2000, 2000) → sqrt=2000, caller LP=1000, pool.lp_supply=2000.
+#[test]
+fun test_init_pool_locks_minimum_liquidity() {
+    let mut sc = ts::begin(ALICE);
+    {
+        let coin_a = coin::mint_for_testing<COIN_A>(2_000, sc.ctx());
+        let coin_b = coin::mint_for_testing<COIN_B>(2_000, sc.ctx());
+        let lp = amm_pool::init_pool(coin_a, coin_b, sc.ctx());
+        assert!(coin::value(&lp) == 1_000, 0);
         transfer::public_transfer(lp, ALICE);
     };
     sc.next_tx(ALICE);
     {
-        let mut pool = ts::take_shared<Pool<COIN_A, COIN_B>>(&sc);
-        let lp = ts::take_from_sender<Coin<LP<COIN_A, COIN_B>>>(&sc);
-
-        // Remove all liquidity → reserves drop to 0
-        let (coin_a, coin_b) = amm_pool::remove_liquidity(&mut pool, lp, sc.ctx());
-        coin::burn_for_testing(coin_a);
-        coin::burn_for_testing(coin_b);
-
-        // Swap against empty pool → abort EZeroReserve
-        let coin_a2    = coin::mint_for_testing<COIN_A>(1, sc.ctx());
-        let coin_b_out = amm_pool::swap_a_to_b(&mut pool, coin_a2, 0, sc.ctx());
-        coin::burn_for_testing(coin_b_out);
+        let pool = ts::take_shared<Pool<COIN_A, COIN_B>>(&sc);
+        // Supply counts both the caller's 1000 and the locked 1000.
+        assert!(amm_pool::lp_supply(&pool) == 2_000, 1);
         ts::return_shared(pool);
     };
     sc.end();

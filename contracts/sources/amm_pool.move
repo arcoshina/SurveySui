@@ -10,17 +10,23 @@ const EZeroReserve: u64       = 1;
 const EInsufficientLiquidity: u64 = 2;
 const ESlippage: u64          = 3;
 
+/// Minimum LP shares locked permanently inside the pool on first mint,
+/// to prevent first-depositor share-price inflation (Uniswap V2 pattern).
+const MINIMUM_LIQUIDITY: u64  = 1000;
+
 // ── structs ───────────────────────────────────────────────────────────────────
 
 /// Phantom LP token type. `drop` lets `balance::create_supply` accept it as witness.
 public struct LP<phantom A, phantom B> has drop {}
 
-/// Shared CPMM pool. `lp_supply` tracks total outstanding LP shares.
+/// Shared CPMM pool. `lp_supply` tracks total outstanding LP shares
+/// (including `locked_lp`, which is minted on first deposit and never released).
 public struct Pool<phantom A, phantom B> has key {
     id: UID,
     reserve_a: Balance<A>,
     reserve_b: Balance<B>,
     lp_supply: Supply<LP<A, B>>,
+    locked_lp: Balance<LP<A, B>>,
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
@@ -37,16 +43,23 @@ public fun init_pool<A, B>(
     let amount_b = coin::value(&coin_b);
     assert!(amount_a > 0 && amount_b > 0, EZeroAmount);
 
-    let lp_amount = sqrt_u128((amount_a as u128) * (amount_b as u128));
-    assert!(lp_amount > 0, EInsufficientLiquidity);
+    let lp_total = sqrt_u128((amount_a as u128) * (amount_b as u128));
+    // Caller must be able to mint at least 1 LP after MINIMUM_LIQUIDITY is locked.
+    assert!(lp_total > MINIMUM_LIQUIDITY, EInsufficientLiquidity);
+    let lp_amount = lp_total - MINIMUM_LIQUIDITY;
 
     let mut pool = Pool<A, B> {
         id: object::new(ctx),
         reserve_a: coin::into_balance(coin_a),
         reserve_b: coin::into_balance(coin_b),
         lp_supply: balance::create_supply(LP<A, B> {}),
+        locked_lp: balance::zero<LP<A, B>>(),
     };
+    // Lock MINIMUM_LIQUIDITY inside the pool forever — caller receives the rest.
+    let locked = balance::increase_supply(&mut pool.lp_supply, MINIMUM_LIQUIDITY);
+    balance::join(&mut pool.locked_lp, locked);
     let lp_bal = balance::increase_supply(&mut pool.lp_supply, lp_amount);
+
     transfer::share_object(pool);
     coin::from_balance(lp_bal, ctx)
 }

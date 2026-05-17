@@ -91,7 +91,7 @@ fun test_full_lifecycle_e2e_in_move() {
         );
         ts::return_shared(survey_reg);
 
-        // Seed RWD / TEST_SUI pool (equal reserves ⟹ LP = POOL_SEED)
+        // Seed RWD / TEST_SUI pool (equal reserves ⟹ LP = POOL_SEED − MINIMUM_LIQUIDITY)
         let sui_seed = coin::mint_for_testing<TEST_SUI>(POOL_SEED, sc.ctx());
         let lp = amm_pool::init_pool(rwd, sui_seed, sc.ctx());
         transfer::public_transfer(lp, CREATOR);
