@@ -150,8 +150,9 @@ SurveyVault<RWD>
 
 ## 開發文件
 
-- [Tasks.md](Tasks.md) — 任務進度（TDD）
-- [MVP_TDD.md](MVP_TDD.md) — 完整需求與架構設計
+- [Tasks.md](Tasks.md) — 任務進度（TDD，2026-05-17 架構 pivot 後新版 M0–M6）
+- [MVP_TDD.md](MVP_TDD.md) — 完整需求與架構設計（Sponsored TX + SurveyPass + 質押憑證 + 單向 mint 池）
+- [History/V0/](History/V0/) — pivot 前舊版規劃封存
 - [SETUP.md](SETUP.md) — 開發環境設定
 - [Overflow Tracks/DeFi & Payments.md](Overflow%20Tracks/DeFi%20%26%20Payments.md) — 賽道要求
 

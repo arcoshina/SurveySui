@@ -211,7 +211,7 @@ pnpm exec playwright install
 pnpm exec playwright test
 ```
 
-> 目前 e2e 多數 case 仍用 `page.route()` mock 後端（見 [Tasks.md](Tasks.md) M5 T5.9）。完整真 backend e2e 需 docker-compose（M5 完成後啟用）。
+> 新版 e2e 規劃見 [Tasks.md](Tasks.md) M6：Playwright 直接跑真 testnet 合約 + 真 Gas Station，不再用 `page.route()` mock。
 
 ---
 
@@ -282,6 +282,6 @@ pnpm -r typecheck
 
 ## 下一步
 
-- 看 [Tasks.md](Tasks.md) 確認目前進度（M5 為阻擋驗收的關鍵）
+- 看 [Tasks.md](Tasks.md) 確認目前進度（M0 基建 → M1 合約是當前主軸）
 - 看 [DEMO_SCRIPT.md](DEMO_SCRIPT.md) 試跑 5 分鐘 demo
 - 看 [MVP_TDD.md](MVP_TDD.md) 理解架構與設計決策
