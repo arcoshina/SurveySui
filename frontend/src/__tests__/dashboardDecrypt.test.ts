@@ -204,12 +204,7 @@ describe('T3.3 — Dashboard Decrypt', () => {
       expect(events[0].respondent).toBe('0x01')
       expect(mockClient.queryEvents).toHaveBeenCalledWith(
         expect.objectContaining({
-          query: {
-            All: [
-              { MoveEventType: `${packageId}::survey_vault::SurveyClaimed` },
-              { MoveEventField: { path: '/vault_id', value: vaultId } },
-            ],
-          },
+          query: { MoveEventType: `${packageId}::survey_vault::SurveyClaimed` },
         }),
       )
     })

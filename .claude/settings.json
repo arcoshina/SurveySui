@@ -25,7 +25,24 @@
       "Read(//d/d/Users/Arco_asus/Documents/GitHub/SurveySui/History/**)",
       "Bash(cd \"/d/Users/Arco_asus/Documents/GitHub/SurveySui\" && mv workers History/V0/workers && echo \"OK: workers moved\" && ls -la History/V0/)",
       "Bash(pnpm install *)",
-      "Bash(pnpm -r test)"
+      "Bash(pnpm -r test)",
+      "Bash(curl -s -X POST https://fullnode.devnet.sui.io:443 -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"suix_getBalance\",\"params\":[\"0x0b459e39bd7553e28c5641ab90ba8b015e4cdf153877791e0222e11695348a87\"]}')",
+      "PowerShell($env:CI=\"true\"; npx playwright test e2e/lifecycle.spec.ts --workers=1 2>&1)",
+      "PowerShell(cd frontend; $env:CI=\"true\"; npx playwright test e2e/lifecycle.spec.ts --workers=1 2>&1)",
+      "PowerShell(cd frontend; $env:CI=\"true\"; npx playwright test e2e/lifecycle.spec.ts --workers=1 --retries=0 2>&1)",
+      "Bash(curl -s -X POST https://fullnode.devnet.sui.io:443 -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('events count:', len\\(d.get\\('result',{}\\).get\\('data',[]\\)\\)\\); [print\\(ev['parsedJson'].get\\('vault_id'\\), ev['parsedJson'].get\\('respondent'\\)[:10]\\) for ev in d.get\\('result',{}\\).get\\('data',[]\\)[:5]]\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)[:500]\\)\")",
+      "Bash(curl -s -X POST https://fullnode.devnet.sui.io:443 -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"suix_queryEvents\",\"params\":[{\"All\":[{\"MoveEventType\":\"0x29e04f738842cd0d3651293187304084b089b3a6d5ee6daa4633f529622450b9::survey_vault::SurveyClaimed\"},{\"MoveEventField\":{\"path\":\"/vault_id\",\"value\":\"0x69d15e6ce86d5290d4fa1709fa1165f3cb2d21ec78dabd0dbb0e5c20ac9bb4d0\"}}]},null,10,true]}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); r=d.get\\('result',{}\\); print\\('events count:',len\\(r.get\\('data',[]\\)\\)\\); print\\('error:',d.get\\('error'\\)\\)\")",
+      "PowerShell(npx vitest run src/__tests__/dashboardDecrypt.test.ts 2>&1)",
+      "PowerShell($env:CI=\"true\"; npx playwright test e2e/lifecycle.spec.ts --workers=1 --retries=0 2>&1 | Select-Object -Last 80)",
+      "Bash(curl -s -X POST https://fullnode.devnet.sui.io:443 -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"sui_getTransactionBlock\",\"params\":[\"8uPdE2ABZr4TT65V6PSbtyfbEq9BKtvPvDX882Vwyu2N\",{\"showEffects\":true,\"showEvents\":true}]}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); r=d.get\\('result',{}\\); print\\('status:', r.get\\('effects',{}\\).get\\('status'\\)\\); print\\('gasUsed:', r.get\\('effects',{}\\).get\\('gasUsed'\\)\\); print\\('events:'\\); [print\\(' -', ev['type'].split\\('::'\\)[-1], '=>', {k:v for k,v in ev.get\\('parsedJson',{}\\).items\\(\\) if k != 'encrypted_content'}\\) for ev in r.get\\('events',[]\\)]\")",
+      "Bash(curl -s -X POST https://fullnode.devnet.sui.io:443 -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"suix_queryEvents\",\"params\":[{\"MoveEventType\":\"0x29e04f738842cd0d3651293187304084b089b3a6d5ee6daa4633f529622450b9::survey_vault::SurveyClaimed\"},null,20,true]}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); evs=d.get\\('result',{}\\).get\\('data',[]\\); hit=[e for e in evs if e.get\\('parsedJson',{}\\).get\\('vault_id'\\)=='0x218a5e3e4ed9f1fc16e1e137b411dd71cf49e68483145507b5234db4fa274457']; print\\('matched events:',len\\(hit\\)\\); [print\\(' digest:',e.get\\('id',{}\\).get\\('txDigest'\\),'respondent:',e['parsedJson']['respondent'],'claimed_at_ms:',e['parsedJson']['claimed_at_ms']\\) for e in hit]\")",
+      "Bash(curl -s -X POST https://fullnode.devnet.sui.io:443 -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"sui_getObject\",\"params\":[\"0x218a5e3e4ed9f1fc16e1e137b411dd71cf49e68483145507b5234db4fa274457\",{\"showContent\":true}]}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); r=d.get\\('result',{}\\).get\\('data',{}\\).get\\('content',{}\\).get\\('fields',{}\\); print\\('claimed_count:',r.get\\('claimed_count'\\)\\); print\\('max_responses:',r.get\\('max_responses'\\)\\); print\\('balance:',r.get\\('balance'\\)\\); print\\('status:',r.get\\('status'\\)\\); print\\('creator:',r.get\\('creator'\\)\\)\")"
     ],
     "additionalDirectories": [
       "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui"

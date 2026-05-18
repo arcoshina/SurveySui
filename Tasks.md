@@ -19,10 +19,10 @@
 | M3 加密問卷答案                | 3 / 3       | [A][C] 隱私層        | 加密方案 + 鏈下解密 ✅                                      |
 | M4 Frontend（重寫）            | 6 / 6       | [A][B][C] 產品層     | T4.1–T4.6 ✅ /create /fund /s /redeem /dashboard 全綠       |
 | M5 無狀態 BFF                  | 3 / 3       | [C] 顯示加速         | stats / OG / RPC 快取 ✅                                    |
-| M6 E2E + Demo                  | 0 / 3       | 跨 Flow 整合         | 真合約 + Sponsored TX 全鏈路                               |
-| **合計**                       | **24 / 30** | —                    | 全新里程碑（舊 M 編號已廢）                                |
+| M6 E2E + Demo                  | 1 / 3       | 跨 Flow 整合         | 真合約 + Sponsored TX 全鏈路；T6.1 ✅                       |
+| **合計**                       | **25 / 30** | —                    | 全新里程碑（舊 M 編號已廢）                                |
 
-下一步：**M6 E2E + Demo**（M5 全部完成 ✅）
+下一步：**M6 T6.2 + T6.3**（T6.1 happy-path 已在 Devnet 上跑通 ✅）
 
 ### 兩個驗收軸（對齊 [專案目標.md §MVP 要證明什麼](專案目標.md)）
 
@@ -294,11 +294,15 @@
 
 > 目的：[MVP_TDD.md Definition of Done](MVP_TDD.md) — 真合約 + 真 Gas Station 跑完 Flow A→B→C。
 
-### [ ] T6.1 — Playwright happy-path（真合約）｜ [A][B][C]
-- 接 Devnet 真合約 + 真 Gas Station sandbox
+### [x] T6.1 — Playwright happy-path（真合約）｜ [A][B][C]
+- 接 Devnet 真合約 + Mock Wallet Standard（test-side keypair signing + Creator-sponsored gas station route）
 - 流程：建立 → 注資 → 切換錢包（受訪者 0 SUI）→ 填答 → 看憑證 → /redeem 換 SSR → /dashboard 看 1 筆
-- TDD
-  - [ ] `test_full_flow_a_to_c_real_chain`
+- 沿途修復：
+  - `fetchClaimedEvents` 從 `All + MoveEventField` 改為 `MoveEventType` only — devnet RPC 對 `ID` 型別欄位的 `MoveEventField` 過濾回傳 `Invalid params`，導致 dashboard 永遠看到 0 筆
+  - E2E：注資導航斷言 timeout 拉到 30s（給 FundPage 內部對交易結果的 5 輪 retry 緩衝）
+  - E2E：Step 6 dashboard 用 `expect.toPass` polling reload，吸收 devnet event indexer 延遲
+- TDD ✅
+  - [x] `test_full_flow_a_to_c_real_chain`（[frontend/e2e/lifecycle.spec.ts](frontend/e2e/lifecycle.spec.ts) — 19.4s on devnet, 1/1 綠）
 
 ### [ ] T6.2 — Sad-path e2e ｜ [B]
 - 重複填答被拒（Dry Run 階段，受訪者不付 Gas）

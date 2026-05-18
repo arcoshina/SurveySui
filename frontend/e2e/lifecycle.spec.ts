@@ -515,8 +515,10 @@ questions:
     // Click fund
     await page.getByRole('button', { name: '一鍵注資' }).click()
 
-    // Wait for E2E signature, atomic execution, and redirect to dashboard
-    await expect(page).toHaveURL(/\/dashboard\/.+/)
+    // Wait for E2E signature, atomic execution, and redirect to dashboard.
+    // Devnet indexer can be slow returning events/objectChanges; extend timeout to
+    // accommodate the FundPage retry loop (up to ~5 polls × 1s each).
+    await expect(page).toHaveURL(/\/dashboard\/.+/, { timeout: 30000 })
     console.log('[E2E Step 2] Survey successfully funded and registered on-chain!')
 
     // Extract vaultId and keyHash from URL
@@ -622,15 +624,17 @@ questions:
     await page.evaluate(() => {
       window['switchMockAccount']('creator')
     })
-    
-    // Wait for SUI Devnet indexer to catch up (so the single-mount query resolves the event successfully)
-    console.log('[E2E Step 6] Waiting 4 seconds for Devnet RPC indexer to propagate event…')
-    await page.waitForTimeout(4000)
-    
-    await page.goto(`/dashboard/${vaultId}`)
-    
-     // Verify that the dashboard shows 1 response
-    await expect(page.locator('[aria-label="response-count"]')).toContainText('1')
+
+    // DashboardPage only fetches SurveyClaimed events on mount, so we reload the page
+    // in a polling loop until the Devnet indexer has propagated the event. This is more
+    // robust than a fixed sleep — indexer latency on devnet is highly variable.
+    console.log('[E2E Step 6] Polling dashboard for response-count to reach 1 (indexer lag)…')
+    await expect(async () => {
+      await page.goto(`/dashboard/${vaultId}`)
+      await expect(page.locator('[aria-label="response-count"]')).toContainText('1', {
+        timeout: 5000,
+      })
+    }).toPass({ timeout: 60000, intervals: [3000] })
     console.log('[E2E Step 6] Dashboard verified! E2E happy-path completes perfectly!')
   })
 })

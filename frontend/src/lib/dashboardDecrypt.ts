@@ -51,13 +51,10 @@ export interface DashboardStats {
 /**
  * Query all SurveyClaimed events for the given vault from the Sui RPC.
  *
- * Uses an `All` filter combining MoveEventType + MoveEventField so the RPC
- * pre-filters by vault_id server-side, avoiding fetching every vault's events.
- *
- * Defence-in-depth: keep the client-side vault_id check too — Sui RPC support
- * for `MoveEventField` over ID-typed fields varies by node version, and we'd
- * rather discard a stray cross-vault event than show a wrong response on the
- * dashboard.
+ * Filters server-side by MoveEventType only, then narrows to the target vault
+ * client-side. Sui devnet RPC rejects `MoveEventField` over ID-typed fields
+ * with "Invalid params" (the All filter then silently returns zero events),
+ * so we cannot pre-filter by vault_id at the RPC level.
  */
 export async function fetchClaimedEvents(
   client: SuiClient,
@@ -69,12 +66,7 @@ export async function fetchClaimedEvents(
 
   do {
     const page = await client.queryEvents({
-      query: {
-        All: [
-          { MoveEventType: `${packageId}::survey_vault::SurveyClaimed` },
-          { MoveEventField: { path: '/vault_id', value: vaultId } },
-        ],
-      },
+      query: { MoveEventType: `${packageId}::survey_vault::SurveyClaimed` },
       cursor,
       limit: 50,
     })
