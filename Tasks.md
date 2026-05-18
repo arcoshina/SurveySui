@@ -11,25 +11,25 @@
 
 ## 進度總覽
 
-| 里程碑 | 完成 / 總數 | 對應目標 | 備註 |
-|---|---|---|---|
-| M0 基礎建設 | 4 / 4 | [基建] | T0.1–T0.4 ✅ 基礎建設全部完成，Devnet 部署成功 |
-| M1 核心 Move 合約 | 7 / 7 | [A][B][C] 代幣經濟層 | T1.1–T1.7 ✅ 核心合約全部就位，並在 Devnet 完成真實部署驗收 |
-| M2 Sponsored Transactions 整合 | 4 / 4 | [B] 零門檻層 | T2.1–T2.4 ✅ Gas Station + Dry Run + 首登發 Pass 全部完成 |
-| M3 加密問卷答案 | 3 / 3 | [A][C] 隱私層 | 加密方案 + 鏈下解密 ✅ |
-| M4 Frontend（重寫） | 6 / 6 | [A][B][C] 產品層 | T4.1–T4.6 ✅ /create /fund /s /redeem /dashboard 全綠 |
-| M5 無狀態 BFF | 3 / 3 | [C] 顯示加速 | stats / OG / RPC 快取 ✅ |
-| M6 E2E + Demo | 0 / 3 | 跨 Flow 整合 | 真合約 + Sponsored TX 全鏈路 |
-| **合計** | **24 / 30** | — | 全新里程碑（舊 M 編號已廢） |
+| 里程碑                         | 完成 / 總數 | 對應目標             | 備註                                                       |
+| ------------------------------ | ----------- | -------------------- | ---------------------------------------------------------- |
+| M0 基礎建設                    | 4 / 4       | [基建]               | T0.1–T0.4 ✅ 基礎建設全部完成，Devnet 部署成功              |
+| M1 核心 Move 合約              | 7 / 7       | [A][B][C] 代幣經濟層 | T1.1–T1.7 ✅ 核心合約全部就位，並在 Devnet 完成真實部署驗收 |
+| M2 Sponsored Transactions 整合 | 4 / 4       | [B] 零門檻層         | T2.1–T2.4 ✅ Gas Station + Dry Run + 首登發 Pass 全部完成   |
+| M3 加密問卷答案                | 3 / 3       | [A][C] 隱私層        | 加密方案 + 鏈下解密 ✅                                      |
+| M4 Frontend（重寫）            | 6 / 6       | [A][B][C] 產品層     | T4.1–T4.6 ✅ /create /fund /s /redeem /dashboard 全綠       |
+| M5 無狀態 BFF                  | 3 / 3       | [C] 顯示加速         | stats / OG / RPC 快取 ✅                                    |
+| M6 E2E + Demo                  | 0 / 3       | 跨 Flow 整合         | 真合約 + Sponsored TX 全鏈路                               |
+| **合計**                       | **24 / 30** | —                    | 全新里程碑（舊 M 編號已廢）                                |
 
 下一步：**M6 E2E + Demo**（M5 全部完成 ✅）
 
 ### 兩個驗收軸（對齊 [專案目標.md §MVP 要證明什麼](專案目標.md)）
 
-| 驗收軸 | 跨哪些 task | 驗收方式 |
-|---|---|---|
-| **零門檻產品層**（§#1） | M1（survey_pass + vault.claim）+ M2 全部 + M4.B + M6 | 受訪者錢包 SUI 餘額為 0，仍能透過 Sponsored TX 完成填答並收到 stakedSurveySuiReward |
-| **代幣經濟層**（§#3） | M1（amm_pool + staked_survey_reward + survey_sui_reward）+ M6 | 一筆 PTB atomic 注資；受訪者領到質押憑證；憑證可換 `SurveySuiReward`；池中 SUI 僅 admin 提領 |
+| 驗收軸                  | 跨哪些 task                                                   | 驗收方式                                                                                     |
+| ----------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **零門檻產品層**（§#1） | M1（survey_pass + vault.claim）+ M2 全部 + M4.B + M6          | 受訪者錢包 SUI 餘額為 0，仍能透過 Sponsored TX 完成填答並收到 stakedSurveySuiReward          |
+| **代幣經濟層**（§#3）   | M1（amm_pool + staked_survey_reward + survey_sui_reward）+ M6 | 一筆 PTB atomic 注資；受訪者領到質押憑證；憑證可換 `SurveySuiReward`；池中 SUI 僅 admin 提領 |
 
 ---
 

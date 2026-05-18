@@ -9,10 +9,8 @@
 ## 為什麼用 Win 原生（而非 WSL）
 
 - 跨檔案系統 I/O 慢（從 Windows 看 WSL 的 `\\wsl$\...` 或反過來都會掉 5–10x 速度）
-- Claude Code / VSCode 直接在 Win 上跑省去 Remote-WSL 來回切換成本
-- Sui CLI / Node 24 / PostgreSQL 18 在 Win 上都有官方 binary，沒必要再多一層
-
-> 若你已有 WSL 環境且運作正常，本檔的命令也大多可以在 WSL bash 裡微調後使用，但本檔以 PowerShell 為主。
+- VSCode / Claude Code 直接在 Win 上跑省去 Remote-WSL 來回切換成本
+- Sui CLI / Node 24 在 Win 上都有官方 binary，沒必要再多一層
 
 ---
 
@@ -29,8 +27,8 @@
 設定 git（換成你的）：
 
 ```powershell
-git config --global user.name "wesleyshun2"
-git config --global user.email "wesleyshun2@gmail.com"
+git config --global user.name "your-username"
+git config --global user.email "your-email@example.com"
 git config --global init.defaultBranch main
 git config --global core.autocrlf true
 ```
@@ -48,7 +46,7 @@ pnpm -v   # 9.x.x
 
 ---
 
-## Step 2 — Sui CLI（testnet）
+## Step 2 — Sui CLI (Devnet)
 
 ```powershell
 scoop bucket add extras
@@ -56,108 +54,49 @@ scoop install sui
 sui --version
 ```
 
-若 scoop bucket 沒有最新 testnet 版本，fallback：到 [Sui releases](https://github.com/MystenLabs/sui/releases) 抓 `sui-testnet-vX.Y.Z-windows-x86_64.tgz`，解壓後把 `sui.exe` 丟到 `%USERPROFILE%\scoop\shims\` 或任一 PATH 路徑。
+若 scoop bucket 沒有最新 devnet 版本，fallback：到 [Sui releases](https://github.com/MystenLabs/sui/releases) 抓 `sui-devnet-vX.Y.Z-windows-x86_64.tgz`，解壓後把 `sui.exe` 丟到 `%USERPROFILE%\scoop\shims\` 或任一 PATH 路徑。
 
-### 設定 testnet 環境 + admin 錢包
+### 設定 Devnet 環境 + Admin 錢包
 
 ```powershell
-# 第一次跑會問要連哪個網路，選 testnet，URL 填 https://fullnode.testnet.sui.io:443
+# 第一次執行會詢問要連哪個網路，選 devnet，URL 填 https://fullnode.devnet.sui.io:443
 sui client
 
-# 或手動：
-sui client new-env --alias testnet --rpc https://fullnode.testnet.sui.io:443
-sui client switch --env testnet
+# 或手動設定：
+sui client new-env --alias devnet --rpc https://fullnode.devnet.sui.io:443
+sui client switch --env devnet
 
-# 產 admin address（記下 mnemonic！）
+# 產生 admin address（請務必記下助記詞！）
 sui client new-address ed25519 admin
 
-# 查看 active address + 領 testnet SUI
+# 查看當前作用中地址、領取 Devnet SUI 並查詢餘額
 sui client active-address
 sui client faucet
 sui client balance
 ```
 
-> **取出 admin private key**（後面 `.env` 要用）：
+> **取出 admin private key**（後面 `.env` 設定要用）：
 > ```powershell
 > sui keytool export --key-identity <admin-address>
 > ```
-> 取 `aliasedPrivateKey` 的 hex，去掉 `0x` 前綴，填到 `.env` 的 `SUI_ADMIN_PRIVATE_KEY`。
+> 複製輸出的 `aliasedPrivateKey` hex 字串，去掉 `0x` 前綴，填到 `.env` 的 `SUI_ADMIN_PRIVATE_KEY` 欄位中。
 
 ---
 
-## Step 3 — PostgreSQL ≥ 16（scoop 18.4）
+## Step 3 — Repo 初始化
 
 ```powershell
-scoop install postgresql
-```
-
-啟動／停止（repo 根目錄已備好 cmd 腳本）：
-
-```powershell
-# 啟動
-.\scripts\start-pg.cmd
-
-# 停止
-.\scripts\stop-pg.cmd
-```
-
-> scoop 的 PostgreSQL 預設 data 目錄在 `%USERPROFILE%\scoop\persist\postgresql\data`。
-> 第一次啟動前若 data 目錄是空的，需要先 `initdb -D <data-dir> -U postgres`，scoop 通常會自動做。
-
-建立開發用 user + database：
-
-```powershell
-psql -U postgres -h 127.0.0.1 -c "CREATE USER surveysui WITH PASSWORD 'dev_password';"
-psql -U postgres -h 127.0.0.1 -c "CREATE DATABASE surveysui_dev OWNER surveysui;"
-
-# 驗證可連線
-psql -h 127.0.0.1 -U surveysui -d surveysui_dev -c "SELECT version();"
-```
-
-`DATABASE_URL`（已寫在 `.env.example`）：
-
-```
-postgresql://surveysui:dev_password@127.0.0.1:5432/surveysui_dev
-```
-
-> ⚠️ **用 `127.0.0.1` 不要用 `localhost`**：Win 原生 PostgreSQL 在 IPv6 解析有時會卡住。
-
----
-
-## Step 4 — Google OAuth Client（zkLogin 用）
-
-T2.2 / Flow B 受訪者登入會用到：
-
-1. 開 https://console.cloud.google.com/
-2. 建立 Project（例如 `SurveySui-dev`）
-3. **APIs & Services → Credentials → Create OAuth client ID**
-4. Application type: **Web application**
-5. Authorized redirect URIs 至少加：
-   - `http://localhost:3000/auth/google/callback`
-   - `http://localhost:5173/auth/google/callback`
-6. 取得 `Client ID` 與 `Client Secret`，填進 `.env`
-
----
-
-## Step 5 — Repo 初始化
-
-```powershell
-# 在 repo 根目錄
+# 在專案根目錄
 pnpm install
 
 # 複製環境變數範本
 Copy-Item .env.example .env
 # 編輯 .env，填入：
-#   SUI_ADMIN_PRIVATE_KEY / SUI_ADMIN_ADDRESS
-#   GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET
-# （SUI_PACKAGE_ID 等 object ID 在 `pnpm deploy:testnet` 後會自動寫回）
+#   SUI_ADMIN_PRIVATE_KEY
+#   SUI_ADMIN_ADDRESS
+# （其餘合約 Object ID 在 `pnpm deploy:Devnet` 後會自動寫回）
 
-# 跑 DB migration
-cd backend
-pnpm db:migrate
-cd ..
-
-# 全部 build + 單元測試 + 合約測試
+# 全域編譯與單元測試、合約測試
 pnpm -r build
 pnpm -r test
 pnpm move:test
@@ -165,45 +104,38 @@ pnpm move:test
 
 ---
 
-## Step 6 — 部署合約到 Testnet（T1.7）
+## Step 4 — 部署合約到 Devnet
 
 ```powershell
-pnpm deploy:testnet
+pnpm deploy:Devnet
 ```
 
-這會跑 `scripts/src/init.ts`：
+這會執行 `scripts/src/init.ts`：
 
-1. `sui move build` + `sui client publish` 部署 package
-2. mint 種子 RWD
-3. 開 RWD/SUI pool 並注入初始流動性
-4. 把所有 object ID 寫回 `.env`（`SUI_PACKAGE_ID`、`RWD_TREASURY_CAP_ID`、`AMM_POOL_ID`、`SBT_REGISTRY_ID`）
-
-驗證：
-
-```powershell
-sui client object <AMM_POOL_ID>
-# 應看到 reserve_a / reserve_b 兩邊都 > 0
-```
+1. `sui move build` + `sui client publish` 部署合約 package
+2. 自動建立共享物件（`SsrTreasury`、`SssrTreasury`、`SurveyRegistry`）
+3. 初始化 `amm_pool` 共享物件（無須初始資金，空池啟動）
+4. 將所有部署成功的物件 ID 自動寫回 `.env` 和 `.env.shared` 中（`SUI_PACKAGE_ID`、`SSR_TREASURY_ID`、`SSSR_TREASURY_ID`、`AMM_POOL_ID`、`SURVEY_REGISTRY_ID`）
 
 ---
 
-## Step 7 — 跑開發伺服器
+## Step 5 — 啟動本地開發伺服器
 
 ```powershell
-# 在 repo 根目錄，同時起 backend (3000) + frontend (5173)
+# 在專案根目錄，同時啟動無狀態 BFF (3000) 與前端開發伺服器 (5173)
 pnpm dev
 ```
 
-開瀏覽器：
+開啟瀏覽器存取：
 
 | 服務 | URL |
 |---|---|
-| Frontend | http://localhost:5173 |
-| Backend health | http://localhost:3000/health |
+| 前端 | http://localhost:5173 |
+| BFF 健康檢查 | http://localhost:3000/health |
 
 ---
 
-## Step 8 — 跑 e2e（Playwright）
+## Step 6 — 跑 E2E 測試（Playwright）
 
 ```powershell
 cd frontend
@@ -211,46 +143,30 @@ pnpm exec playwright install
 pnpm exec playwright test
 ```
 
-> 新版 e2e 規劃見 [Tasks.md](Tasks.md) M6：Playwright 直接跑真 testnet 合約 + 真 Gas Station，不再用 `page.route()` mock。
+> E2E 測試規劃見 [Tasks.md](Tasks.md) M6：Playwright 直接跑真實 Devnet 合約與真 Gas Station，不採用 mock。
 
 ---
 
-## VSCode 設定
+## VSCode 推薦設定
 
-裝下列 extension（在 Win 端，不是 Remote-WSL）：
+建議在 Windows 端安裝下列延伸模組：
 
 - **ESLint**
 - **Prettier**
-- **Move on Sui**（Mysten Labs 官方）— Move syntax highlight
-- **Prisma** — schema 高亮 + 自動補全
+- **Move on Sui**（Mysten Labs 官方，Move 語法高亮）
 - **Tailwind CSS IntelliSense**
-- **Claude Code**（如果用）
 
 ---
 
 ## 常見問題
 
-### `psql` 連線失敗、卡住不回
-
-九成是 `localhost` 走 IPv6。改 `127.0.0.1`，或在 `pg_hba.conf` 加：
-```
-host  all  all  ::1/128  scram-sha-256
-```
-
 ### `sui client faucet` 拿不到 SUI
 
-Testnet faucet rate limit，等 5-10 分鐘再試一次；或從 [Sui Discord](https://discord.gg/sui) 的 `#testnet-faucet` 頻道領。
+Devnet Faucet 有速率限制，若失敗請等 5-10 分鐘再試；或前往 [Sui Discord](https://discord.gg/sui) 的 `#devnet-faucet` 頻道手動領取。
 
-### `pnpm install` 慢／失敗
+### `pnpm install` 慢或失敗
 
-確認你不是在 OneDrive 同步資料夾下開發。把 repo 移到 `D:\Users\<user>\Documents\GitHub\` 之外的純本機路徑會更穩。
-
-### Move 編譯找不到依賴
-
-```powershell
-cd contracts
-sui move build --skip-fetch-latest-git-deps
-```
+請確認您不在 OneDrive 同步資料夾下開發。將 repo 移動到本機路徑（例如非 GitHub 同步的純本機資料夾）將使 pnpm 與 node 運作更穩定。
 
 ---
 
@@ -261,27 +177,25 @@ sui move build --skip-fetch-latest-git-deps
 node -v
 pnpm -v
 sui --version
-psql --version
 
-# Sui testnet 連線
-sui client active-env       # testnet
+# Sui Devnet 連線與餘額驗證
+sui client active-env       # devnet
 sui client active-address   # 0x...
-sui client balance          # 有 SUI
+sui client balance          # 有 SUI 餘額
 
-# Postgres 連線
-psql -h 127.0.0.1 -U surveysui -d surveysui_dev -c "SELECT 1;"
-
-# Repo build
+# 專案編譯與測試
 pnpm -r build
 pnpm -r typecheck
+pnpm move:test
+pnpm test
 ```
 
-全綠就 ok。
+全綠即代表開發環境設定就緒。
 
 ---
 
 ## 下一步
 
-- 看 [Tasks.md](Tasks.md) 確認目前進度（M0 基建 → M1 合約是當前主軸）
-- 看 [DEMO_SCRIPT.md](DEMO_SCRIPT.md) 試跑 5 分鐘 demo
-- 看 [MVP_TDD.md](MVP_TDD.md) 理解架構與設計決策
+- 閱讀 [Tasks.md](Tasks.md) 確認目前進度與里程碑。
+- 閱讀 [DEMO_SCRIPT.md](DEMO_SCRIPT.md) 了解 5 分鐘 demo 跑測流程。
+- 閱讀 [MVP_TDD.md](MVP_TDD.md) 理解架構與核心設計決策。

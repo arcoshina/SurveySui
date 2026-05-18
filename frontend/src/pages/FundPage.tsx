@@ -5,6 +5,7 @@ import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
   useSignPersonalMessage,
+  useSuiClient,
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
 import { parseFrontmatter } from '../lib/frontmatter'
@@ -65,6 +66,7 @@ export default function FundPage() {
   const navigate = useNavigate()
 
   const account = useCurrentAccount()
+  const suiClient = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
 
@@ -156,6 +158,7 @@ export default function FundPage() {
         contentKey = new Uint8Array(0)
       }
     } catch (err) {
+      console.error('E2E Debug: handleFund signature/encryption catch:', err)
       setErrorMsg(err instanceof Error ? err.message : '簽名或加密失敗')
       setStatus('error')
       return
@@ -177,6 +180,7 @@ export default function FundPage() {
         suiToSpend,
       })
     } catch (err) {
+      console.error('E2E Debug: handleFund build PTB catch:', err)
       setErrorMsg(err instanceof Error ? err.message : 'PTB 建構失敗')
       setStatus('error')
       return
@@ -185,44 +189,102 @@ export default function FundPage() {
     setStatus('submitting')
     signAndExecute(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { transaction: tx as any },
       {
-        onSuccess: (result) => {
-          const changes = (
-            result as {
-              objectChanges?: Array<{
-                type: string
-                objectId?: string
-                objectType?: string
-              }>
+        transaction: tx as any,
+        options: {
+          showObjectChanges: true,
+          showEffects: true,
+        },
+      },
+      {
+        onSuccess: async (result) => {
+          console.log('E2E Debug: signAndExecute onSuccess result:', JSON.stringify(result))
+          try {
+            let txResult = (window as any).mockLastExecutedTransactionResult
+            if (!txResult) {
+              for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                  const res = await suiClient.getTransactionBlock({
+                    digest: result.digest,
+                    options: {
+                      showObjectChanges: true,
+                      showEffects: true,
+                      showEvents: true,
+                    },
+                  })
+                  if (res && ((res.events && res.events.length > 0) || (res.objectChanges && res.objectChanges.length > 0))) {
+                    txResult = res
+                    break
+                  }
+                } catch (e) {
+                  console.warn(`[FundPage] Attempt ${attempt} to fetch tx block failed, retrying...`, e)
+                }
+                await new Promise((resolve) => setTimeout(resolve, 1000))
+              }
             }
-          ).objectChanges
-          const vaultId = extractVaultIdFromEffects(changes)
-          const surveyId = extractSurveyIdFromEffects(changes)
 
-          if (!vaultId) {
-            setErrorMsg('交易成功但無法從 effects 抽出 vault_id')
+            if (!txResult) {
+              throw new Error('無法從節點取得交易資訊')
+            }
+
+            if (txResult.effects && txResult.effects.status && txResult.effects.status.status === 'failure') {
+              throw new Error(`交易鏈上執行失敗: ${txResult.effects.status.error || '未知 Move 錯誤'}`)
+            }
+
+            let vaultId = null
+            let surveyId = null
+
+            // 1. Try to extract from on-chain events (primary)
+            if (txResult.events && txResult.events.length > 0) {
+              const hit = txResult.events.find(
+                (e: any) =>
+                  e.type.endsWith('::survey_registry::SurveyRegistered') ||
+                  e.type.includes('::survey_registry::SurveyRegistered')
+              )
+              if (hit && hit.parsedJson) {
+                vaultId = (hit.parsedJson as any).vault_id
+                surveyId = (hit.parsedJson as any).survey_id
+                console.log('[FundPage] Successfully extracted vaultId and surveyId from events:', vaultId, surveyId)
+              }
+            }
+
+            // 2. Fallback to objectChanges (secondary)
+            if (!vaultId && txResult.objectChanges) {
+              const changes = txResult.objectChanges
+              console.log('E2E Debug: fetched changes fallback:', JSON.stringify(changes))
+              vaultId = extractVaultIdFromEffects(changes)
+              surveyId = extractSurveyIdFromEffects(changes)
+            }
+
+            if (!vaultId) {
+              setErrorMsg('交易成功但無法抽出 vault_id')
+              setStatus('error')
+              return
+            }
+
+            if (surveyId) {
+              window.localStorage.setItem(
+                `${SURVEY_KEY_PREFIX}${surveyId}`,
+                JSON.stringify({
+                  vaultId,
+                  contentKeyB64: contentKey.length > 0 ? bytesToBase64url(contentKey) : '',
+                  createdAt: Date.now(),
+                }),
+              )
+            }
+            window.localStorage.removeItem(`${DRAFT_KEY_PREFIX}${draftId}`)
+
+            const fragment = contentKey.length > 0 ? bytesToBase64url(contentKey) : ''
+            setStatus('success')
+            navigate(`/dashboard/${vaultId}${fragment ? `#${fragment}` : ''}`)
+          } catch (err: any) {
+            console.error('E2E Debug: onSuccess query error:', err)
+            setErrorMsg(err.message || '查詢交易結果失敗')
             setStatus('error')
-            return
           }
-
-          if (surveyId) {
-            window.localStorage.setItem(
-              `${SURVEY_KEY_PREFIX}${surveyId}`,
-              JSON.stringify({
-                vaultId,
-                contentKeyB64: contentKey.length > 0 ? bytesToBase64url(contentKey) : '',
-                createdAt: Date.now(),
-              }),
-            )
-          }
-          window.localStorage.removeItem(`${DRAFT_KEY_PREFIX}${draftId}`)
-
-          const fragment = contentKey.length > 0 ? bytesToBase64url(contentKey) : ''
-          setStatus('success')
-          navigate(`/dashboard/${vaultId}${fragment ? `#${fragment}` : ''}`)
         },
         onError: (err) => {
+          console.error('E2E Debug: handleFund signAndExecute onError:', err)
           setErrorMsg(err.message)
           setStatus('error')
         },

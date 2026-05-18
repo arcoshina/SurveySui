@@ -1,7 +1,7 @@
 import { SuiClient } from '@mysten/sui/client'
 
 async function main() {
-  const packageId = '0x7d3f9a03479d4130ce9895ce4410ed405e5440a45b33ed28d094936183029b82'
+  const packageId = '0x29e04f738842cd0d3651293187304084b089b3a6d5ee6daa4633f529622450b9'
   const client = new SuiClient({ url: 'https://fullnode.devnet.sui.io:443' })
 
   console.log(`Searching for PassRegistry of package: ${packageId}...`)

@@ -216,7 +216,7 @@ function findCreatedBySuffix(
   if (!changes) return null
   const hit = changes.find(
     (c) =>
-      c.type === 'created' &&
+      c.type !== 'deleted' &&
       typeof c.objectType === 'string' &&
       c.objectType.endsWith(suffix),
   )

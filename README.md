@@ -2,7 +2,7 @@
 
 > **Sui Overflow 2026 — DeFi & Payments 賽道**
 >
-> 鏈上問卷獎勵平台：發起者用 SUI 注資 → 受訪者填答領 RWD 代幣 → 一鍵 swap 回 SUI，全程透明、防女巫、自動發獎。
+> 鏈上問卷獎勵平台：發起者用 SUI 注資 → 受訪者填答領 stakedSurveySuiReward 憑證 → 一鍵向池子 redeem 兌換為 SurveySuiReward (SSR) 代幣，全程透明、防女巫、自動發獎。
 
 ---
 
@@ -15,7 +15,6 @@
 | Node.js | ≥ 24 |
 | pnpm | ≥ 9 |
 | Sui CLI | ≥ 1.72 |
-| PostgreSQL | ≥ 16（本機可用 scoop 裝 18.x） |
 
 ### 1. 安裝依賴
 
@@ -27,52 +26,49 @@ pnpm install
 
 ```bash
 cp .env.example .env
-# 填入 SUI_ADMIN_PRIVATE_KEY、GOOGLE_OAUTH_CLIENT_ID 等必要值
+# 填入 SUI_ADMIN_PRIVATE_KEY、SUI_ADMIN_ADDRESS 等必要值
 ```
 
 > 詳細說明見 [SETUP.md](SETUP.md)
 
-### 3. 初始化資料庫
+### 3. 部署合約與初始化 AMM 池
+
+在根目錄執行部署腳本（會將合約發布至 Devnet，初始化 AMM 池，並將 Object ID 自動寫回 `.env` 和 `.env.shared`）：
 
 ```bash
-cd backend
-pnpm db:migrate
+pnpm deploy:Devnet
 ```
 
 ### 4. 啟動開發伺服器
 
 ```bash
-# 根目錄，同時起 backend (port 3000) + frontend (port 5173)
+# 啟動 BFF (port 3000) 與前端 (port 5173)
 pnpm dev
 ```
 
 ### 5. 跑測試
 
 ```bash
-# 所有測試
+# 所有測試（前端 + BFF + 部署腳本測試）
 pnpm test
 
 # Move 合約測試
 pnpm move:test
-
-# E2E（Playwright）
-cd frontend && pnpm exec playwright test
 ```
 
 ---
 
-## 合約地址（Sui Testnet）
+## 合約地址（Sui Devnet）
 
-> 以下 ID 在執行 `pnpm deploy:testnet` 後自動寫入 `.env.shared`
+> 以下 ID 在執行 `pnpm deploy:Devnet` 後自動寫入 `.env.shared` 與 `.env`
 
 | 物件 | Object ID |
 |------|-----------|
-| Package | `<PACKAGE_ID>` |
-| RWD TreasuryCap | `<RWD_TREASURY_CAP_ID>` |
-| AMM Pool (RWD/SUI) | `<AMM_POOL_ID>` |
-| SBT Registry | `<SBT_REGISTRY_ID>` |
-
-> 部署方式：`pnpm deploy:testnet`（執行 `scripts/src/init.ts`）
+| Package | `<SUI_PACKAGE_ID>` |
+| SSR Treasury | `<SSR_TREASURY_ID>` |
+| SSSR Treasury | `<SSSR_TREASURY_ID>` |
+| AMM Pool | `<AMM_POOL_ID>` |
+| Survey Registry | `<SURVEY_REGISTRY_ID>` |
 
 ---
 
@@ -80,38 +76,40 @@ cd frontend && pnpm exec playwright test
 
 | 環境 | URL |
 |------|-----|
-| 線上 Demo（Testnet） | `https://surveysui.demo` *(部署後更新)* |
+| 線上 Demo（Devnet） | `https://surveysui.demo` *(部署後更新)* |
 | 本機前端 | `http://localhost:5173` |
-| 本機 Backend API | `http://localhost:3000` |
+| 本機 BFF API | `http://localhost:3000` |
 
 ---
 
 ## 系統架構
 
 ```
-┌─ Frontend (Vite + React + @mysten/dapp-kit) ─────────────┐
-│  /create        發起者建立問卷 + 設定獎勵                  │
-│  /fund/:id      連 Sui Wallet 注資（PTB atomic）           │
-│  /dashboard     儀表板：回覆數、vault 餘額、結束活動         │
-│  /s/:id         受訪者 zkLogin → 填答 → 顯示 TX hash       │
-│  /swap          RWD ↔ SUI swap UI                        │
-└──────────────────────────────────────────────────────────┘
-                       ↕ REST API
-┌─ Backend (Fastify + Prisma + PostgreSQL) ────────────────┐
-│  zkLogin verifier   Google OAuth → sub → SBT 對映        │
-│  Survey CRUD        Markdown + YAML metadata              │
-│  Response store     資格檢查 + hash 計算                  │
-│  Reward dispatcher  admin key 代簽 PTB → 發 RWD           │
-│  Stats aggregator   儀表板 API                            │
-└──────────────────────────────────────────────────────────┘
-                       ↕ @mysten/sui SDK
-┌─ Sui Move Contracts (Testnet) ───────────────────────────┐
-│  reward_coin       Coin<RWD> + TreasuryCap               │
-│  participant_sbt   一人一張護照（防女巫）                   │
-│  survey_vault      鎖定 RWD + 發獎邏輯                    │
-│  amm_pool          CPMM: RWD/SUI swap                    │
-│  survey_registry   問卷註冊 + 事件                        │
-└──────────────────────────────────────────────────────────┘
+┌─ Frontend (Vite + React + @mysten/dapp-kit + Gas Station) ─┐
+│  /create        建立問卷 + Markdown editor                │
+│  /fund/:id      注資 PTB（invest SUI → mint → vault）     │
+│  /s/:id         受訪者連錢包 → 填答（Sponsored TX）       │
+│  /redeem        stakedSurveySuiReward → SurveySuiReward   │
+│  /dashboard     發起者儀表板 + 結束活動                   │
+└────────────────────────────────────────────────────────────┘
+        ↕ Sponsored sign                ↕ 唯讀查詢 (stats / OG)
+┌─ Gas Station ────────────┐      ┌─ Backend BFF (stateless) ──┐
+│  PTB Dry Run             │      │  /stats/:vault             │
+│  代付 Gas（拒絕無效 TX） │      │  /og/:survey  (動態 meta)  │
+└──────────────────────────┘      │  RPC 快取                  │
+                                  │  ✗ 無 admin key            │
+                                  │  ✗ 無 session              │
+                                  │  ✗ 無業務資料              │
+                                  └────────────────────────────┘
+        ↕ @mysten/sui SDK                       ↕ Sui RPC / indexer
+┌─ Sui Move Contracts (Devnet) ──────────────────────────────────┐
+│  survey_sui_reward      Coin<SSR> + TreasuryCap（pool-only mint）│
+│  staked_survey_reward   質押憑證物件（可向 pool burn 領 SSR）   │
+│  survey_pass            通行證 NFT（不可轉、只驗證、不消耗）    │
+│  survey_vault           問卷預算池（持已 mint 的 SSR）          │
+│  amm_pool               單向 mint 池（SUI in → mint SSR）       │
+│  survey_registry        on-chain 註冊 + 加密答案存儲            │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -120,25 +118,36 @@ cd frontend && pnpm exec playwright test
 
 ```
 發起者 SUI 錢包
-   │ (1) 自己簽 PTB：swap SUI→RWD + 建 SurveyVault
+   │ (1) Flow A PTB (atomic)：
+   │      a. amm_pool::invest_and_mint(SUI in)
+   │         → 池中 SUI ↑，mint 增發 SurveySuiReward 至池
+   │         → 手續費入 Treasury（admin 可賣或燒）
+   │      b. survey_vault::create(reward_per_response, max, conditions)
+   │         → 從池中提撥 SSR 至 vault
+   │      c. survey_registry::register(vault_id, encrypted_content)
+   │
    ▼
-SurveyVault<RWD>
-   │ (2) 受訪者送出問卷後，後端代簽 PTB：vault.claim → 發 RWD
+SurveyVault<SurveySuiReward> (shared object, 由合約驗證後派發)
+   │ (2) Flow B：受訪者送出問卷
+   │     a. Gas Station Dry Run（合約檢查 SurveyPass + 名額 + 未填答）
+   │     b. 通過 → Gas Station 簽 + 廣播
+   │     c. survey_vault::claim → mint stakedSurveySuiReward 給受訪者
    ▼
-受訪者 zkLogin 地址
-   │ (3) 受訪者選擇換 SUI：自己簽 PTB swap RWD→SUI on amm_pool
+受訪者錢包 (stakedSurveySuiReward 物件)
+   │ (3) Flow B 兌換：
+   │     amm_pool::redeem(staked_receipt) → 銷毀憑證、轉出 SurveySuiReward
    ▼
-受訪者 SUI
+受訪者 SurveySuiReward Coin
 ```
 
 ---
 
 ## 核心功能
 
-- **ParticipantSBT 護照機制**：每個 Google 帳號對應一張不可轉移的 SBT，有效期 180 天，到期自動補發，防止女巫攻擊
-- **zkLogin 無縫登入**：受訪者用 Google 帳號登入，無需安裝錢包、無需付 gas（後端代簽）
-- **Atomic PTB 注資**：發起者一筆交易完成 swap + 建 vault + 共享 object，失敗自動 rollback
-- **CPMM AMM**：自建恆積做市商，0.3% 手續費，RWD/SUI 雙向 swap
+- **SurveyPass 通行證機制**：一個地址持有一張 soulbound Pass NFT (不可轉移)，作為防女巫通行憑證，多個問卷可共用且不消耗該物件。
+- **Sponsored Transactions 免 Gas 填答**：藉由 Shinami Gas Station 實現零門檻填答，乾跑（Dry Run）防惡意 Gas 消耗。
+- **Atomic PTB 注資**：發起者一筆交易完成 SUI 投資兌換、金庫建立與問卷註冊，失敗自動 rollback。
+- **單向 Mint Pool 經濟體系**：SUI 投資注入池子帶動 `SurveySuiReward` 升值，保障代幣價值，池中 SUI 僅 admin 可領。
 
 ---
 
@@ -163,7 +172,7 @@ SurveyVault<RWD>
 | 層 | 技術 |
 |----|------|
 | 前端 | Vite 6, React 19, @mysten/dapp-kit, Tailwind CSS, Recharts |
-| 後端 | Node.js, Fastify 5, Prisma 6, PostgreSQL ≥ 16 |
-| 合約 | Sui Move (edition 2024.beta), Testnet |
-| 測試 | Vitest, Playwright, sui move test |
-| CI | GitHub Actions（move-test / backend-test / frontend-test） |
+| BFF | Node.js, Fastify 5, lru-cache |
+| 合約 | Sui Move (edition 2024.beta), Devnet |
+| 測試 | Vitest, Playwright, `sui move test` |
+| CI | GitHub Actions（move-test / bff-test / frontend-test） |

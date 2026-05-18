@@ -6,6 +6,17 @@ import { buildClaimPtb, dryRunAndSponsorTx, executeSponsoredTx } from '../lib/sp
 import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
 import { parseFullSurveyMarkdown } from '../lib/frontmatter'
 
+const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
+
+function normalizeSuiId(id: string): string {
+  if (!id) return ''
+  let cleaned = id.toLowerCase().trim()
+  if (cleaned.startsWith('0x')) {
+    cleaned = cleaned.slice(2)
+  }
+  return cleaned.padStart(64, '0')
+}
+
 interface Question {
   id: string
   type: 'single_choice' | 'multi_choice' | 'text' | 'scale'
@@ -59,11 +70,46 @@ export default function SurveyPage() {
       try {
         const hash = window.location.hash.substring(1)
 
+        let finalSurveyId = surveyId
+
         // Fetch survey object from chain
-        const obj = await suiClient.getObject({
-          id: surveyId,
+        let obj = await suiClient.getObject({
+          id: finalSurveyId,
           options: { showContent: true },
         })
+
+        if (
+          obj.data &&
+          obj.data.content &&
+          obj.data.content.dataType === 'moveObject' &&
+          (obj.data.content.type.endsWith('::survey_vault::SurveyVault') ||
+            obj.data.content.type.includes('::survey_vault::SurveyVault'))
+        ) {
+          console.log('[SurveyPage] Detected vaultId in URL. Querying on-chain registry events...')
+          const events = await suiClient.queryEvents({
+            query: {
+              MoveEventType: `${PACKAGE_ID}::survey_registry::SurveyRegistered`,
+            },
+            limit: 50,
+            order: 'descending',
+          })
+          const hit = events.data.find(
+            (e: any) =>
+              e.parsedJson &&
+              normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(finalSurveyId)
+          )
+          if (!hit) {
+            throw new Error('找不到該金庫關聯的問卷登記記錄')
+          }
+          finalSurveyId = hit.parsedJson.survey_id
+          console.log('[SurveyPage] Resolved surveyId from on-chain event:', finalSurveyId)
+
+          // Re-fetch the true Survey object
+          obj = await suiClient.getObject({
+            id: finalSurveyId,
+            options: { showContent: true },
+          })
+        }
 
         if (!obj.data || !obj.data.content || obj.data.content.dataType !== 'moveObject') {
           throw new Error('找不到該問卷物件')
@@ -263,22 +309,6 @@ export default function SurveyPage() {
       })
 
       const digest = txResult.digest
-
-      // 6. Submit answers and tx hash to backend DB
-      const res = await fetch(`/surveys/${id}/responses`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subHash,
-          suiAddress: account.address,
-          answersJson: answers,
-          claimedTx: digest,
-        }),
-      })
-
-      if (!res.ok) {
-        throw new Error(await res.text())
-      }
 
       setTxHash(digest)
       setPhase('success')
