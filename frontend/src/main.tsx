@@ -10,13 +10,13 @@ import App from './App'
 const queryClient = new QueryClient()
 
 const networks = {
-  testnet: { url: getFullnodeUrl('testnet') },
+  devnet: { url: getFullnodeUrl('devnet') },
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <SuiClientProvider networks={networks} defaultNetwork="testnet">
+      <SuiClientProvider networks={networks} defaultNetwork="devnet">
         <WalletProvider autoConnect>
           <App />
         </WalletProvider>

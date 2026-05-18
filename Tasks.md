@@ -17,12 +17,12 @@
 | M1 核心 Move 合約 | 7 / 7 | [A][B][C] 代幣經濟層 | T1.1–T1.7 ✅ 核心合約全部就位，並在 Devnet 完成真實部署驗收 |
 | M2 Sponsored Transactions 整合 | 0 / 4 | [B] 零門檻層 | Gas Station + Dry Run |
 | M3 加密問卷答案 | 3 / 3 | [A][C] 隱私層 | 加密方案 + 鏈下解密 ✅ |
-| M4 Frontend（重寫） | 0 / 6 | [A][B][C] 產品層 | /create /fund /s /redeem /dashboard |
+| M4 Frontend（重寫） | 1 / 6 | [A][B][C] 產品層 | /create /fund /s /redeem /dashboard |
 | M5 無狀態 BFF | 0 / 3 | [C] 顯示加速 | stats / OG / RPC 快取 |
 | M6 E2E + Demo | 0 / 3 | 跨 Flow 整合 | 真合約 + Sponsored TX 全鏈路 |
-| **合計** | **13 / 30** | — | 全新里程碑（舊 M 編號已廢） |
+| **合計** | **14 / 30** | — | 全新里程碑（舊 M 編號已廢） |
 
-下一步：**M2 Sponsored Transactions 整合**
+下一步：**M4.T4.2 `/create` 建立問卷頁**
 
 ### 兩個驗收軸（對齊 [專案目標.md §MVP 要證明什麼](專案目標.md)）
 
@@ -199,11 +199,12 @@
 > 目的：[專案目標.md §MVP 要證明什麼 #4](專案目標.md) — Markdown 問卷 + 絲滑資金流。
 > 對應 [專案目標.md §2 §3 §4](專案目標.md) Flow A/B/C。
 
-### [ ] T4.1 — Router + dApp Kit 基底 ｜ [基建]
+### [x] T4.1 — Router + dApp Kit 基底 ｜ [基建]
 - 6 路由：`/`（landing）/ `/create` / `/fund/:id` / `/s/:id` / `/redeem` / `/dashboard/:vaultId`
 - `<SuiClientProvider>` + `<WalletProvider>` Devnet
-- TDD
-  - [ ] 各路由 navigate 後渲染對應頁面 component
+- 既存舊路由 `/login` `/login/callback` `/swap` 從 routing table 移除（舊 page 檔暫留，後續 T4.x 重寫）
+- TDD ✅（7 tests，`src/__tests__/router.test.tsx`）
+  - [x] 各路由 navigate 後渲染對應頁面 component（含 fallback `*` → LandingPage）
 
 ### [ ] T4.2 — `/create` 建立問卷頁 ｜ [A]
 - Markdown editor（textarea 即可，MVP 不做 WYSIWYG，對應 [專案目標.md §2 step 2a](專案目標.md)）
