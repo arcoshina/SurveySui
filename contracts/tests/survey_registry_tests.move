@@ -25,7 +25,7 @@ fun test_register_emits_event() {
         survey_registry::register(
             &mut registry,
             object::id_from_address(@0xDEAD),
-            b"content_hash_abc",
+            b"encrypted_blob_abc",
             &clk,
             sc.ctx(),
         );

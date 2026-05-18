@@ -16,11 +16,11 @@
 | M0 基礎建設 | 4 / 4 | [基建] | T0.1–T0.4 ✅ 基礎建設全部完成，Devnet 部署成功 |
 | M1 核心 Move 合約 | 7 / 7 | [A][B][C] 代幣經濟層 | T1.1–T1.7 ✅ 核心合約全部就位，並在 Devnet 完成真實部署驗收 |
 | M2 Sponsored Transactions 整合 | 0 / 4 | [B] 零門檻層 | Gas Station + Dry Run |
-| M3 加密問卷答案 | 0 / 3 | [A][C] 隱私層 | 加密方案 + 鏈下解密 |
+| M3 加密問卷答案 | 3 / 3 | [A][C] 隱私層 | 加密方案 + 鏈下解密 ✅ |
 | M4 Frontend（重寫） | 0 / 6 | [A][B][C] 產品層 | /create /fund /s /redeem /dashboard |
 | M5 無狀態 BFF | 0 / 3 | [C] 顯示加速 | stats / OG / RPC 快取 |
 | M6 E2E + Demo | 0 / 3 | 跨 Flow 整合 | 真合約 + Sponsored TX 全鏈路 |
-| **合計** | **11 / 30** | — | 全新里程碑（舊 M 編號已廢） |
+| **合計** | **13 / 30** | — | 全新里程碑（舊 M 編號已廢） |
 
 下一步：**M2 Sponsored Transactions 整合**
 
@@ -110,7 +110,7 @@
 - TDD ✅（5 tests）
 
 ### [x] T1.6 — `survey_registry`（註冊 + 加密內容）｜ [A][C]
-- `register(vault_id, content_hash, clock, ctx)` 發 `SurveyRegistered` 事件
+- `register(vault_id, encrypted_content, clock, ctx)` 發 `SurveyRegistered` 事件（`encrypted_content` 為完整 blob，非 hash）
 - `archive(registry, survey_id, ctx)` 只有 creator 可呼叫
 - TDD ✅（2 tests）
 
@@ -162,25 +162,35 @@
 
 > 目的：[專案目標.md §2 step 4](專案目標.md)「結果如何交付」 + §4 step 4「鏈上解密讀取或匯出報告」。
 
-### [ ] T3.1 — 加密方案選型
+### [x] T3.1 — 加密方案選型
 - 比較 [Mysten Seal](https://github.com/MystenLabs/seal) vs 對稱加密（AES-GCM + creator 持金鑰 + 鏈下分發）
 - 寫 [docs/encryption.md](docs/encryption.md)
 - TDD
-  - [ ] 比較表完成 + 用戶簽核
+  - [x] 比較表完成 + 用戶簽核 ✅ (MVP 採 AES-GCM + 錢包衍生金鑰；v2 遷 Seal)
 
-### [ ] T3.2 — Creator-side 加密 + 上鏈
+### [x] T3.2 — Creator-side 加密 + 上鏈
 - 前端用 creator 公鑰加密問卷內容 → `survey_registry::register(encrypted_blob)`
 - 答案以 creator 可解密的方式上鏈（`survey_vault::claim(..., encrypted_answers)`）
-- TDD
-  - [ ] `test_encrypted_blob_round_trip`
-  - [ ] `test_third_party_cannot_decrypt`
+- 實作：`frontend/src/lib/crypto.ts`
+  - `encryptSurveyContent(markdown, creatorPubKey)` → `{encryptedBlob, contentKey}`；blob 格式：`[32B pubkey | 12B iv | ciphertext]`
+  - `decryptSurveyContent(blob, contentKey)` → `{markdown, creatorPublicKeyBytes}`
+  - `deriveCreatorKeyPair(walletSigBytes)` → 以 SHA-256(signature) 為 seed 衍生 X25519 keypair（deterministic）
+  - `encryptAnswers(answers, creatorPubKeyBytes)` → ECIES：`[32B ephemeral_pubkey | 12B iv | ciphertext]`
+  - `decryptAnswers(encryptedAnswers, creatorPrivKey)` → 字串
+- TDD ✅（7 tests）
+  - [x] `test_encrypted_blob_round_trip`（內容 + 答案 round trip + 確定性 keypair 三項）
+  - [x] `test_third_party_cannot_decrypt`（錯金鑰 / 錯 keypair / 篡改 4 項）
 
-### [ ] T3.3 — Creator-side 解密 + 統計報告
+### [x] T3.3 — Creator-side 解密 + 統計報告
 - Dashboard 撈 events → 用 creator 私鑰解密 → 統計
 - 對應 [專案目標.md §4 step 4](專案目標.md)
-- TDD
-  - [ ] `test_dashboard_decrypts_all_responses`
-  - [ ] `test_stats_match_decrypted_count`
+- 實作：`frontend/src/lib/dashboardDecrypt.ts`
+  - `fetchClaimedEvents(suiClient, vaultId, packageId)` → 分頁拉 SurveyClaimed events + 依 vault_id 過濾
+  - `decryptAllResponses(events, creatorPrivateKey)` → 批次解密，失敗計入 `failed`
+  - `aggregateStats(responses, totalEvents)` → 逐題計頻率，回傳 `DashboardStats`
+- TDD ✅（9 tests）
+  - [x] `test_dashboard_decrypts_all_responses`
+  - [x] `test_stats_match_decrypted_count`
 
 ---
 
@@ -299,18 +309,15 @@
 
 對應 [專案目標.md §MVP 規格](專案目標.md) 標為「進階」與 [MVP_TDD.md Limitations](MVP_TDD.md)：
 
-- [-] Devnet ↔ Mainnet 跨網路橋
+- [-] testnet ↔ Mainnet 跨網路橋
 - [-] 多階段獎勵（前 100 名 10 SSR，101–1000 名 1 SSR...）
 - [-] AI 輔助 Markdown 編輯 / RAG 建議（[專案目標.md §2 step 2b/c/d](專案目標.md)）
 - [-] 進階參與條件（國籍、年齡、UID、邀請碼、白名單、平台積分）
 - [-] 匿名化投票（[專案目標.md §MVP 方向 #5](專案目標.md) — 與 SurveyPass 防女巫衝突，需更深 zk 設計）
-- [-] `SurveySuiReward` → SUI 反向 swap（需另開 CPMM 池）
 - [-] 追加金額／更新活動條件
-- [-] 鏈下 indexer / 子圖
 - [-] Logo 與品牌視覺識別
 - [-] Markdown 問卷匯入／匯出
-- [-] WYSIWYG Markdown 編輯 / 預覽即時更新
-- [-] Devnet 預檢部署
+- [-] Markdown 編輯 / 預覽即時更新
 - [-] 安全性審計（admin key 託管、CORS、rate limit、secret rotation）
 
 ---

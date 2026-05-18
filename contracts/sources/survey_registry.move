@@ -19,7 +19,7 @@ public struct SurveyRegistered has copy, drop {
     survey_id: ID,
     vault_id: ID,
     creator: address,
-    content_hash: vector<u8>,
+    encrypted_content: vector<u8>,
     registered_at_ms: u64,
 }
 
@@ -30,7 +30,7 @@ public struct Survey has key {
     id: UID,
     vault_id: ID,
     creator: address,
-    content_hash: vector<u8>,
+    encrypted_content: vector<u8>,
     status: u8,
     registered_at_ms: u64,
 }
@@ -59,7 +59,7 @@ fun init(ctx: &mut TxContext) {
 public fun register(
     registry: &mut SurveyRegistry,
     vault_id: ID,
-    content_hash: vector<u8>,
+    encrypted_content: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -70,7 +70,7 @@ public fun register(
         id: object::new(ctx),
         vault_id,
         creator,
-        content_hash,
+        encrypted_content,
         status: STATUS_ACTIVE,
         registered_at_ms: now_ms,
     };
@@ -81,7 +81,7 @@ public fun register(
         survey_id,
         vault_id,
         creator,
-        content_hash,
+        encrypted_content,
         registered_at_ms: now_ms,
     });
 
@@ -105,7 +105,7 @@ public fun archive(survey: &mut Survey, ctx: &TxContext) {
 
 public fun vault_id(survey: &Survey): ID            { survey.vault_id }
 public fun creator(survey: &Survey): address         { survey.creator }
-public fun content_hash(survey: &Survey): vector<u8> { survey.content_hash }
+public fun encrypted_content(survey: &Survey): vector<u8> { survey.encrypted_content }
 public fun status(survey: &Survey): u8              { survey.status }
 public fun registered_at_ms(survey: &Survey): u64   { survey.registered_at_ms }
 public fun total_count(registry: &SurveyRegistry): u64 { registry.total_count }
