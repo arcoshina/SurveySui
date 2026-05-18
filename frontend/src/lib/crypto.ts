@@ -46,7 +46,7 @@ export const KEY_DERIVE_MSG = 'SurveySui encryption key'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function base64urlToBytes(b64url: string): Uint8Array {
+export function base64urlToBytes(b64url: string): Uint8Array {
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/')
   const padded = b64 + '==='.slice(0, (4 - (b64.length % 4)) % 4)
   const binary = atob(padded)

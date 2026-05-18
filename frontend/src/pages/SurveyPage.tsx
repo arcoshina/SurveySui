@@ -3,6 +3,8 @@ import { useParams, Link } from 'react-router-dom'
 import { useCurrentAccount, useSignTransaction, useSuiClient } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import { buildClaimPtb, dryRunAndSponsorTx, executeSponsoredTx } from '../lib/sponsoredTx'
+import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
+import { parseFullSurveyMarkdown } from '../lib/frontmatter'
 
 interface Question {
   id: string
@@ -33,6 +35,7 @@ export default function SurveyPage() {
   const [validationError, setValidationError] = useState<string | null>(null)
   const [txHash, setTxHash] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [creatorPubKey, setCreatorPubKey] = useState<Uint8Array | null>(null)
 
   // Wallet & Client integration
   const account = useCurrentAccount()
@@ -48,14 +51,97 @@ export default function SurveyPage() {
 
   useEffect(() => {
     if (!id) return
-    fetch(`/surveys/${id}`)
-      .then((r) => r.json())
-      .then((data: Survey) => {
-        setSurvey(data)
+    const surveyId: string = id
+
+    setPhase('loading')
+
+    async function loadSurvey() {
+      try {
+        const hash = window.location.hash.substring(1)
+
+        // Fetch survey object from chain
+        const obj = await suiClient.getObject({
+          id: surveyId,
+          options: { showContent: true },
+        })
+
+        if (!obj.data || !obj.data.content || obj.data.content.dataType !== 'moveObject') {
+          throw new Error('找不到該問卷物件')
+        }
+
+        const fields = obj.data.content.fields as any
+        const vault_id = fields.vault_id
+        const status = fields.status // 0 = ACTIVE, 1 = ARCHIVED
+        
+        // Extract encrypted content
+        let rawContent: Uint8Array
+        if (Array.isArray(fields.encrypted_content)) {
+          rawContent = new Uint8Array(fields.encrypted_content.map(Number))
+        } else if (typeof fields.encrypted_content === 'string') {
+          const str = fields.encrypted_content
+          if (str.startsWith('0x')) {
+            rawContent = new Uint8Array(
+              str.slice(2).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || []
+            )
+          } else {
+            // Assume base64
+            const binary = atob(str)
+            rawContent = Uint8Array.from(binary, c => c.charCodeAt(0))
+          }
+        } else {
+          throw new Error('無效的加密內容格式')
+        }
+
+        let markdown = ''
+        let creatorPublicKeyBytes: Uint8Array
+
+        if (hash) {
+          // Decrypt content using hash key
+          let contentKey: Uint8Array
+          try {
+            contentKey = base64urlToBytes(hash)
+          } catch {
+            throw new Error('解密金鑰格式無效')
+          }
+
+          const dec = await decryptSurveyContent(rawContent, contentKey)
+          markdown = dec.markdown
+          creatorPublicKeyBytes = dec.creatorPublicKeyBytes
+        } else {
+          // Unencrypted: first 32 bytes are public key, rest is plain text
+          if (rawContent.length < 32) {
+            throw new Error('問卷內容資料損壞')
+          }
+          creatorPublicKeyBytes = rawContent.slice(0, 32)
+          markdown = new TextDecoder().decode(rawContent.slice(32))
+        }
+
+        // Parse markdown
+        const parsed = parseFullSurveyMarkdown(markdown)
+        if (!parsed.ok) {
+          throw new Error(parsed.error)
+        }
+
+        setSurvey({
+          id: surveyId,
+          title: parsed.data.title,
+          status: status === 0 ? 'ACTIVE' : 'CLOSED',
+          deadline: new Date(parsed.data.deadlineMs).toISOString(),
+          per_response: parsed.data.perResponse,
+          vaultObjectId: vault_id,
+          questions: parsed.data.questions,
+        })
+        setCreatorPubKey(creatorPublicKeyBytes)
         setPhase('filling')
-      })
-      .catch(() => setPhase('error'))
-  }, [id])
+      } catch (err: any) {
+        console.error('Failed to load survey:', err)
+        setSubmitError(err.message || '載入問卷失敗')
+        setPhase('error')
+      }
+    }
+
+    loadSurvey()
+  }, [id, suiClient])
 
   async function handleIssuePass() {
     if (!account) {
@@ -136,10 +222,12 @@ export default function SurveyPage() {
     setSubmitError(null)
 
     try {
-      // 1. Convert answers to serialized hex string
-      const encoder = new TextEncoder()
-      const answersBytes = encoder.encode(JSON.stringify(answers))
-      const encryptedAnswersHex = Array.from(answersBytes)
+      // 1. Encrypt answers using ECIES
+      if (!creatorPubKey) {
+        throw new Error('未載入問卷建立者金鑰，無法加密答案')
+      }
+      const encryptedAnswersBytes = await encryptAnswers(JSON.stringify(answers), creatorPubKey)
+      const encryptedAnswersHex = Array.from(encryptedAnswersBytes)
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('')
 

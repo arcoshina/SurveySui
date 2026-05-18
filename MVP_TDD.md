@@ -39,7 +39,7 @@
 
 | 議題 | 決策 | 理由 |
 |---|---|---|
-| 網路 | **Testnet only**（合約參數化以便未來上 mainnet） | 跨網路橋接成本太高 |
+| 網路 | **Devnet only**（合約參數化以便未來上 mainnet） | 2026-05-17 pivot：MVP 部署目標為 Devnet；跨網路橋接成本太高 |
 | 受訪者 UX | **Sponsored Transactions（Gas Station 代付）** + 合約 Dry Run 防惡意消耗 | [專案目標.md §MVP 要證明什麼 #1](專案目標.md)；受訪者 0 餘額也能填 |
 | 女巫防護 | **`SurveyPass` 物件 + 純驗證不消耗** | [專案目標.md §MVP 要證明什麼 #2](專案目標.md)；同一通行證可用於多份問卷，合約只檢查持有與資格、不銷毀物件 |
 | 獎勵代幣 | **`SurveySuiReward`（fungible coin）+ `stakedSurveySuiReward`（質押憑證物件）** | [專案目標.md §MVP 要證明什麼 #3](專案目標.md)；憑證模型把「填答」與「兌換」解耦，方便未來做空投/批次發放 |
@@ -73,7 +73,7 @@
                                   │  ✗ 無業務資料              │
                                   └────────────────────────────┘
         ↕ @mysten/sui SDK                       ↕ Sui RPC / indexer
-┌─ Sui Move Contracts (Testnet) ─────────────────────────────────┐
+┌─ Sui Move Contracts (Devnet) ──────────────────────────────────┐
 │  survey_sui_reward      Coin<SSR> + TreasuryCap（pool-only mint）│
 │  staked_survey_reward   質押憑證物件（可向 pool burn 領 SSR）   │
 │  survey_pass            通行證 NFT（不可轉、只驗證、不消耗）    │
@@ -152,11 +152,11 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
 |---|---|---|
 | Move 單元 | `sui move test` | CI + 本機 |
 | Move 整合 | `sui move test (test_scenario)` 全 Flow A→B→C atomic | CI + 本機 |
-| Sponsored TX 整合 | Vitest + Gas Station testnet sandbox（dry-run reject 路徑） | 手動 / nightly |
+| Sponsored TX 整合 | Vitest + Gas Station Devnet sandbox（dry-run reject 路徑） | 手動 / nightly |
 | 加密答案 | Vitest 對稱加密 round-trip；鏈下解密一致性 | CI |
 | Frontend unit | Vitest + React Testing Library | CI |
 | BFF unit | Vitest（無 admin key 啟動檢查、stats 聚合純函式） | CI |
-| E2E（真合約） | Playwright + testnet + 真 Gas Station | 手動 / pre-demo |
+| E2E（真合約） | Playwright + Devnet + 真 Gas Station | 手動 / pre-demo |
 
 **TDD 原則**：每個 task 先在 PR 提交「失敗的測試」，再提交「實作 + 測試通過」。
 
@@ -172,7 +172,7 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
 
 ## 已知 Limitations（v2 roadmap，明確排除於 MVP）
 
-- ❌ Testnet ↔ Mainnet 跨網路橋
+- ❌ Devnet ↔ Mainnet 跨網路橋
 - ❌ 多階段獎勵（前 100 名 10 token，101–1000 名 1 token...）
 - ❌ AI 輔助 Markdown 編輯 / RAG 建議
 - ❌ 進階參與條件（國籍、年齡、UID、邀請碼、白名單）
@@ -189,7 +189,7 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
 
 1. `pnpm -r build && pnpm -r test`（所有單元測試綠）
 2. `pnpm move test`（合約測試綠，含 Flow A→B→C 整合）
-3. `pnpm deploy:testnet`（合約 deploy + AMM 種子流動性）
+3. `pnpm deploy:Devnet`（合約 deploy + AMM 種子流動性）
 4. `pnpm dev`（BFF + frontend 起服）
 5. 開瀏覽器：
    - **發起者**：建立「Sui Overflow 滿意度調查」、Markdown 寫題、設 1 SSR/份 × 10 份、注資（一筆 PTB invest→mint→create vault→register）

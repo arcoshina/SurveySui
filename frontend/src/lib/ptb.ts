@@ -1,103 +1,238 @@
 import { Transaction } from '@mysten/sui/transactions'
 
-/**
- * CPMM 反向計算：若要從 swap_b_to_a 得到 rwdOut 數量的 coin_a，
- * 需要投入多少 coin_b (SUI)。
- *
- * 合約 compute_amount_out 公式：
- *   amount_out = reserve_out × amount_in × 997 / (reserve_in × 1000 + amount_in × 997)
- *
- * 對 amount_in 求解並取上整（ceiling）：
- *   amount_in = ceil(rwdOut × reserveSui × 1000 / (997 × (reserveRwd − rwdOut)))
- */
-export function calcSuiInForRwdOut(
-  reserveSui: bigint,
-  reserveRwd: bigint,
-  rwdOut: bigint,
-): bigint {
-  if (rwdOut <= 0n) throw new Error('rwdOut 須大於 0')
-  if (rwdOut >= reserveRwd) throw new Error('RWD 供應不足，所需數量超過池子儲備')
-  const numerator = rwdOut * reserveSui * 1000n
-  const denominator = 997n * (reserveRwd - rwdOut)
-  return (numerator + denominator - 1n) / denominator
-}
+// ── bonding curve constants ───────────────────────────────────────────────────
 
-export interface EstimateParams {
-  perResponseRwd: bigint
+/** Mirrors `amm_pool::BONDING_DECAY` (1e12 MIST = 1000 SUI). */
+export const BONDING_DECAY = 1_000_000_000_000n
+
+/** Vault fee in basis points (mirrors `survey_vault::VAULT_FEE_BPS`). */
+export const VAULT_FEE_BPS = 30n
+
+/** sSSR & SSR coins both use 9 decimals. */
+export const SSSR_BASE_PER_UNIT = 1_000_000_000n
+
+// ── estimate fund cost ────────────────────────────────────────────────────────
+
+export interface EstimateFundCostParams {
+  /** sSSR per response, integer in human units. */
+  perResponse: bigint
+  /** Max responses (quota). */
   maxResponses: number
-  reserveSui: bigint
-  reserveRwd: bigint
+  /** Current `Pool.total_sui_invested` in MIST. */
+  totalSuiInvested: bigint
 }
 
-/** 估算完成一次注資 PTB 所需投入的 SUI（MIST 單位） */
-export function estimateSuiCost(params: EstimateParams): bigint {
-  const { perResponseRwd, maxResponses, reserveSui, reserveRwd } = params
-  const totalRwd = perResponseRwd * BigInt(maxResponses)
-  return calcSuiInForRwdOut(reserveSui, reserveRwd, totalRwd)
+export interface EstimateFundCostResult {
+  /** Total sSSR (base units) the vault must hold to satisfy quota. */
+  netSssrBase: bigint
+  /** Gross sSSR (base units) to mint via invest_and_mint (before vault fee). */
+  grossSssrBase: bigint
+  /** Vault fee deducted on `survey_vault::create` (base units). */
+  vaultFeeBase: bigint
+  /** SUI (MIST) to invest into the pool to receive `grossSssrBase` sSSR. */
+  suiToInvest: bigint
 }
 
-export interface BuildPtbParams {
+/**
+ * Estimate funding cost for a survey vault.
+ *
+ * Bonding curve: `sssr_out = sui_in * DECAY / (DECAY + total_sui_invested)`.
+ * Inverse:       `sui_in   = ceil(sssr_out * (DECAY + total) / DECAY)`.
+ *
+ * Vault charges 30 bps on deposit → mint enough gross sSSR so that after
+ * the fee the vault still holds at least `perResponse * maxResponses` sSSR.
+ */
+export function estimateFundCost(p: EstimateFundCostParams): EstimateFundCostResult {
+  const netSssrBase = p.perResponse * BigInt(p.maxResponses) * SSSR_BASE_PER_UNIT
+
+  // grossSssr = ceil(net * 10000 / 9970)
+  const grossSssrBase = (netSssrBase * 10_000n + 9_970n - 1n) / 9_970n
+  const vaultFeeBase = (grossSssrBase * VAULT_FEE_BPS) / 10_000n
+
+  // suiToInvest = ceil(gross * (DECAY + total) / DECAY)
+  const denom = BONDING_DECAY
+  const numer = grossSssrBase * (BONDING_DECAY + p.totalSuiInvested)
+  const suiToInvest = (numer + denom - 1n) / denom
+
+  return { netSssrBase, grossSssrBase, vaultFeeBase, suiToInvest }
+}
+
+// ── build PTB ─────────────────────────────────────────────────────────────────
+
+export interface BuildCreateSurveyPtbParams {
   packageId: string
   poolId: string
-  perResponseMist: bigint
+  ssrTreasuryId: string
+  sssrTreasuryId: string
+  registryId: string
+  /** Address that receives the 0.3% vault deposit fee. */
+  adminTreasury: string
+  /** sSSR per response, integer in human units. */
+  perResponse: bigint
   maxResponses: number
   deadlineMs: bigint
-  adminAddress: string
+  /** Encrypted survey blob to store in `survey_registry::register`. */
+  encryptedContent: Uint8Array
+  /** MIST amount of SUI to invest into the pool. */
   suiToSpend: bigint
-  minRwdOut: bigint
 }
 
 /**
- * 建構注資 PTB（Programmable Transaction Block）：
- *   1. splitCoins(gas, suiToSpend)                       → suiCoin
- *   2. amm_pool::swap_b_to_a(pool, suiCoin, minRwdOut)   → rwdCoin
- *   3. survey_vault::create(rwdCoin, params...)           → vault（未 share）
- *   4. survey_vault::share_vault(vault)                   → shared object
+ * One-click PTB:
+ *   1. splitCoins(gas, suiToSpend)                                        → suiCoin
+ *   2. amm_pool::invest_and_mint(pool, ssrT, sssrT, suiCoin)              → sssrCoin
+ *   3. survey_vault::create(sssrCoin, per, max, deadline, adminTreasury)   → vault
+ *   4. survey_vault::id_of(&vault)                                         → vaultId
+ *   5. survey_registry::register(registry, vaultId, encryptedContent, clk)
+ *   6. survey_vault::share_vault(vault)
  *
- * 任一步驟失敗時整筆 transaction 自動 rollback（Sui PTB atomic 語意）。
+ * The three logical steps the spec cares about are 2/3/5
+ * (invest_and_mint → create → register); steps 1/4/6 are PTB plumbing.
  */
-export function buildFundSurveyPtb(params: BuildPtbParams): Transaction {
-  const {
-    packageId,
-    poolId,
-    perResponseMist,
-    maxResponses,
-    deadlineMs,
-    adminAddress,
-    suiToSpend,
-    minRwdOut,
-  } = params
-
+export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction {
   const tx = new Transaction()
 
-  const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(suiToSpend)])
+  // 1. carve SUI out of gas
+  const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.suiToSpend)])
 
-  const [rwdCoin] = tx.moveCall({
-    target: `${packageId}::amm_pool::swap_b_to_a`,
-    arguments: [tx.object(poolId), suiCoin, tx.pure.u64(minRwdOut)],
-    typeArguments: [
-      `${packageId}::reward_coin::REWARD_COIN`,
-      '0x2::sui::SUI',
-    ],
-  })
-
-  const [vault] = tx.moveCall({
-    target: `${packageId}::survey_vault::create`,
+  // 2. invest SUI → mint sSSR
+  const [sssrCoin] = tx.moveCall({
+    target: `${p.packageId}::amm_pool::invest_and_mint`,
     arguments: [
-      rwdCoin,
-      tx.pure.u64(perResponseMist),
-      tx.pure.u64(maxResponses),
-      tx.pure.u64(deadlineMs),
-      tx.pure.address(adminAddress),
+      tx.object(p.poolId),
+      tx.object(p.ssrTreasuryId),
+      tx.object(p.sssrTreasuryId),
+      suiCoin,
     ],
-    typeArguments: [`${packageId}::reward_coin::REWARD_COIN`],
   })
 
-  tx.moveCall({
-    target: `${packageId}::survey_vault::share_vault`,
+  // 3. deposit sSSR into a new vault (returns unshared SurveyVault)
+  const [vault] = tx.moveCall({
+    target: `${p.packageId}::survey_vault::create`,
+    arguments: [
+      sssrCoin,
+      tx.pure.u64(p.perResponse * SSSR_BASE_PER_UNIT),
+      tx.pure.u64(p.maxResponses),
+      tx.pure.u64(p.deadlineMs),
+      tx.pure.address(p.adminTreasury),
+    ],
+  })
+
+  // 4. read the vault's on-chain ID so we can pass it to register
+  const [vaultIdValue] = tx.moveCall({
+    target: `${p.packageId}::survey_vault::id_of`,
     arguments: [vault],
-    typeArguments: [`${packageId}::reward_coin::REWARD_COIN`],
+  })
+
+  // 5. register survey with encrypted content blob
+  tx.moveCall({
+    target: `${p.packageId}::survey_registry::register`,
+    arguments: [
+      tx.object(p.registryId),
+      vaultIdValue,
+      tx.pure.vector('u8', Array.from(p.encryptedContent)),
+      tx.object('0x6'), // Clock
+    ],
+  })
+
+  // 6. share the vault so respondents can call `claim` on it
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::share_vault`,
+    arguments: [vault],
   })
 
   return tx
+}
+
+// ── build redeem PTB ──────────────────────────────────────────────────────────
+
+export interface BuildRedeemPtbParams {
+  packageId: string
+  poolId: string
+  sssrTreasuryId: string
+  sssrCoinId: string
+  senderAddress: string
+}
+
+/**
+ * Build redeem PTB:
+ *   1. amm_pool::redeem(pool, sssrTreasury, sssrCoin) -> ssrCoin
+ *   2. transferObjects([ssrCoin], senderAddress)
+ */
+export function buildRedeemPtb(p: BuildRedeemPtbParams): Transaction {
+  const tx = new Transaction()
+
+  const [ssrCoin] = tx.moveCall({
+    target: `${p.packageId}::amm_pool::redeem`,
+    arguments: [
+      tx.object(p.poolId),
+      tx.object(p.sssrTreasuryId),
+      tx.object(p.sssrCoinId),
+    ],
+  })
+
+  tx.transferObjects([ssrCoin], tx.pure.address(p.senderAddress))
+
+  return tx
+}
+
+// ── build close PTB ───────────────────────────────────────────────────────────
+
+export interface BuildClosePtbParams {
+  packageId: string
+  vaultId: string
+}
+
+/**
+ * Build close PTB for the survey creator:
+ *   1. survey_vault::close(vault)
+ *
+ * `close` refunds the remaining sSSR balance back to `vault.creator` on-chain,
+ * so the transaction simply needs the shared vault — no transfer step needed.
+ */
+export function buildClosePtb(p: BuildClosePtbParams): Transaction {
+  const tx = new Transaction()
+
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::close`,
+    arguments: [tx.object(p.vaultId)],
+  })
+
+  return tx
+}
+
+// ── effects extraction ────────────────────────────────────────────────────────
+
+export interface ObjectChangeLike {
+  type: string
+  objectId?: string
+  objectType?: string
+}
+
+function findCreatedBySuffix(
+  changes: readonly ObjectChangeLike[] | undefined,
+  suffix: string,
+): string | null {
+  if (!changes) return null
+  const hit = changes.find(
+    (c) =>
+      c.type === 'created' &&
+      typeof c.objectType === 'string' &&
+      c.objectType.endsWith(suffix),
+  )
+  return hit?.objectId ?? null
+}
+
+/** Extract the newly-created SurveyVault object ID from `objectChanges`. */
+export function extractVaultIdFromEffects(
+  objectChanges: readonly ObjectChangeLike[] | undefined,
+): string | null {
+  return findCreatedBySuffix(objectChanges, '::survey_vault::SurveyVault')
+}
+
+/** Extract the newly-created Survey object ID from `objectChanges`. */
+export function extractSurveyIdFromEffects(
+  objectChanges: readonly ObjectChangeLike[] | undefined,
+): string | null {
+  return findCreatedBySuffix(objectChanges, '::survey_registry::Survey')
 }

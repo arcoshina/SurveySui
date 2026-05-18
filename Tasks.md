@@ -15,14 +15,14 @@
 |---|---|---|---|
 | M0 基礎建設 | 4 / 4 | [基建] | T0.1–T0.4 ✅ 基礎建設全部完成，Devnet 部署成功 |
 | M1 核心 Move 合約 | 7 / 7 | [A][B][C] 代幣經濟層 | T1.1–T1.7 ✅ 核心合約全部就位，並在 Devnet 完成真實部署驗收 |
-| M2 Sponsored Transactions 整合 | 0 / 4 | [B] 零門檻層 | Gas Station + Dry Run |
+| M2 Sponsored Transactions 整合 | 4 / 4 | [B] 零門檻層 | T2.1–T2.4 ✅ Gas Station + Dry Run + 首登發 Pass 全部完成 |
 | M3 加密問卷答案 | 3 / 3 | [A][C] 隱私層 | 加密方案 + 鏈下解密 ✅ |
-| M4 Frontend（重寫） | 1 / 6 | [A][B][C] 產品層 | /create /fund /s /redeem /dashboard |
-| M5 無狀態 BFF | 0 / 3 | [C] 顯示加速 | stats / OG / RPC 快取 |
+| M4 Frontend（重寫） | 6 / 6 | [A][B][C] 產品層 | T4.1–T4.6 ✅ /create /fund /s /redeem /dashboard 全綠 |
+| M5 無狀態 BFF | 3 / 3 | [C] 顯示加速 | stats / OG / RPC 快取 ✅ |
 | M6 E2E + Demo | 0 / 3 | 跨 Flow 整合 | 真合約 + Sponsored TX 全鏈路 |
-| **合計** | **14 / 30** | — | 全新里程碑（舊 M 編號已廢） |
+| **合計** | **24 / 30** | — | 全新里程碑（舊 M 編號已廢） |
 
-下一步：**M4.T4.2 `/create` 建立問卷頁**
+下一步：**M6 E2E + Demo**（M5 全部完成 ✅）
 
 ### 兩個驗收軸（對齊 [專案目標.md §MVP 要證明什麼](專案目標.md)）
 
@@ -206,50 +206,57 @@
 - TDD ✅（7 tests，`src/__tests__/router.test.tsx`）
   - [x] 各路由 navigate 後渲染對應頁面 component（含 fallback `*` → LandingPage）
 
-### [ ] T4.2 — `/create` 建立問卷頁 ｜ [A]
+### [x] T4.2 — `/create` 建立問卷頁 ｜ [A]
 - Markdown editor（textarea 即可，MVP 不做 WYSIWYG，對應 [專案目標.md §2 step 2a](專案目標.md)）
-- 預覽：解析 frontmatter 顯示獎勵設定
-- 「下一步：注資」按鈕 → 帶 markdown blob 跳 `/fund/:draftId`（localStorage 暫存）
-- TDD
-  - [ ] `test_parse_frontmatter`
-  - [ ] `test_invalid_yaml_shows_error`
+- 預覽：解析 frontmatter 顯示獎勵設定（perResponse / maxResponses / deadline）
+- 「下一步：注資」按鈕 → 產生 `draft-<uuid>` draftId、寫 `surveysui:draft:<draftId>` 至 localStorage、跳 `/fund/:draftId`
+- 實作：`frontend/src/pages/CreatePage.tsx` + 既有 `lib/frontmatter.ts`；test-setup 補 localStorage polyfill（jsdom 29 預設無）
+- TDD ✅（3 tests，`src/__tests__/CreatePage.test.tsx`）
+  - [x] `test_parse_frontmatter` — 預覽區顯示解析後的 perResponse / maxResponses / deadline
+  - [x] `test_invalid_yaml_shows_error` — 空內容 / 缺欄位 / 無 frontmatter 三種情境皆顯示錯誤且不導頁
+  - [x] `test_submit_persists_draft_and_navigates_to_fund_with_draft_id` — 有效 frontmatter 時寫 localStorage 並跳 `/fund/:draftId`
 
-### [ ] T4.3 — `/fund/:id` 注資頁 ｜ [A]
-- 顯示「預估 SUI 消耗 + 平台手續費」（呼叫 amm_pool 模擬）
-- 一鍵 PTB：`invest_and_mint → create vault → register survey` 三步 atomic
-- 從 PTB effects 抽出 vault_id、survey_id
-- 處理錢包 reject / 餘額不足
+### [x] T4.3 — `/fund/:id` 注資頁 ｜ [A]
+- 顯示「預估 SUI 消耗 + 平台手續費」（依 bonding curve + 0.3% vault fee 估算）
+- 一鍵 PTB：`invest_and_mint → survey_vault::create → survey_registry::register` 三步 atomic
+  - PTB 實際 6 個 command：splitCoins / invest_and_mint / vault::create / vault::id_of / registry::register / vault::share_vault；「三步」指三個 surveysui 核心 MoveCall
+  - 新增 `survey_vault::id_of(&SurveyVault): ID` helper，讓 PTB 把剛建立的 vault ID 餵給 `survey_registry::register`
+- 從 PTB `objectChanges` 抽出 `vault_id` / `survey_id`（match `::survey_vault::SurveyVault` 與 `::survey_registry::Survey`）
+- 成功後：寫 `surveysui:survey:<id>` 索引（vaultId + contentKey base64url）、刪除 draft、`navigate(/dashboard/<vaultId>#<contentKey>)`
+- 失敗路徑：簽名/加密例外、PTB 建構錯誤、wallet reject 都顯示 `role="alert"`
+- 實作：`frontend/src/lib/ptb.ts`（重寫；新增 `estimateFundCost` / `buildCreateSurveyPtb` / `extractVaultIdFromEffects` / `extractSurveyIdFromEffects`），`frontend/src/pages/FundPage.tsx`（重寫），`contracts/sources/survey_vault.move`（補 `id_of`）
 - 對應 [專案目標.md §2 step 4](專案目標.md)
-- TDD
-  - [ ] `test_ptb_contains_three_commands`
-  - [ ] `test_extract_vault_id_from_effects`
+- TDD ✅（13 tests，`src/__tests__/FundPage.test.tsx`）
+  - [x] `test_ptb_contains_three_commands` — PTB 含 invest_and_mint / vault::create / registry::register 三個 MoveCall
+  - [x] `test_extract_vault_id_from_effects` — 從 objectChanges 找出 SurveyVault / Survey 並排除 mutated Pool
 
-### [ ] T4.4 — `/s/:id` 受訪者填答頁 ｜ [B]
-- 拉鏈上 survey 資料 → 解密 markdown → 渲染問卷
-- 連錢包 → 沒有 SurveyPass 自動發 sponsored 取 pass（呼 M2.T2.4）
-- 送出 → 呼叫 `sponsoredTx.ts`（M2.T2.2）
-- 成功顯示 TX digest + 「我的質押憑證」連結
+### [x] T4.4 — `/s/:id` 受訪者填答頁 ｜ [B]
+- 拉鏈上 survey 資料 → 解密 markdown → 渲染問卷 ✅
+- 連錢包 → 沒有 SurveyPass 自動發 sponsored 取 pass（呼 M2.T2.4） ✅
+- 送出 → 呼叫 `sponsoredTx.ts`（M2.T2.2） ✅
+- 成功顯示 TX digest + 「我的質押憑證」連結 ✅
 - 對應 [專案目標.md §3 全部](專案目標.md)
-- TDD
-  - [ ] `test_render_questions_from_decrypted_md`
-  - [ ] `test_submit_uses_sponsored_path`
+- TDD ✅
+  - [x] `test_render_questions_from_decrypted_md`
+  - [x] `test_submit_uses_sponsored_path`
 
-### [ ] T4.5 — `/redeem` 兌換頁 ｜ [B]
+### [x] T4.5 — `/redeem` 兌換頁 ｜ [B]
 - 列出受訪者持有的所有 `stakedSurveySuiReward` 物件
 - 選擇 → 呼叫 `amm_pool::redeem`
 - 對應 [專案目標.md §3 step 5](專案目標.md)
-- TDD
-  - [ ] `test_lists_user_receipts`
-  - [ ] `test_redeem_returns_ssr`
+- TDD ✅（5 tests，`src/__tests__/RedeemPage.test.tsx`）
+  - [x] `test_lists_user_receipts`
+  - [x] `test_redeem_returns_ssr`
 
-### [ ] T4.6 — `/dashboard/:vaultId` ｜ [A][C]
-- Recharts 統計（單選長條圖、量表平均）
-- 鏈上即時 vault 餘額（從 BFF 或直接 RPC）
-- 結束活動按鈕 → `survey_vault::close` PTB（creator 自簽）
+### [x] T4.6 — `/dashboard/:vaultId` ｜ [A][C]
+- Recharts 統計：creator 簽 personal message 衍生私鑰 → `decryptAllResponses` + `aggregateStats` → 每題長條圖
+- 鏈上即時 vault 餘額：`useSuiClientQuery('getObject')` 拉 `SurveyVault.balance` / `claimed_count` / `max_responses` / `creator` / `status`
+- 結束活動按鈕：`buildClosePtb` → `signAndExecute(survey_vault::close)`；僅 creator + ACTIVE 時 enabled
+- 實作：`frontend/src/pages/DashboardPage.tsx`（重寫；fetch events → 點解密按鈕才動 wallet）、`frontend/src/lib/ptb.ts` 新增 `buildClosePtb`、`frontend/src/__tests__/DashboardPage.test.tsx`（重寫）
 - 對應 [專案目標.md §4 step 1-3](專案目標.md)
-- TDD
-  - [ ] `test_close_button_only_for_creator`
-  - [ ] `test_stats_render_with_zero_responses`
+- TDD ✅（8 tests，`src/__tests__/DashboardPage.test.tsx`）
+  - [x] `test_close_button_only_for_creator` — 4 子情境：creator+ACTIVE 可點 / 非 creator disabled / 未連錢包 disabled / CLOSED disabled；點擊觸發 `buildClosePtb` + `signAndExecute`
+  - [x] `test_stats_render_with_zero_responses` — 0 回覆時顯示「尚無回覆」，不渲染 BarChart，vault 餘額仍正常顯示
 
 ---
 
@@ -257,26 +264,29 @@
 
 > 目的：[MVP_TDD.md 設計決策表](MVP_TDD.md) — BFF 不持 admin key、不簽交易、不存業務資料；只做查詢加速。
 
-### [ ] T5.1 — Stats 聚合 ｜ [C]
+### [x] T5.1 — Stats 聚合 ｜ [C]
 - `GET /stats/:vaultId`：query Sui events → 聚合成 dashboard 用 JSON
 - 純函式 + RPC 快取（記憶體 LRU 60s）
-- TDD
-  - [ ] `test_stats_aggregates_events`
-  - [ ] `test_cache_hit_skips_rpc`
+- 實作：`bff/src/stats/`（fetcher + aggregator + cache + handler）、`bff/src/app.ts`（buildApp 依賴注入）
+- TDD ✅（5 tests，`bff/tests/stats.test.ts`）
+  - [x] `test_stats_aggregates_events`
+  - [x] `test_cache_hit_skips_rpc`
 
-### [ ] T5.2 — OG meta 動態產生 ｜ [A]
+### [x] T5.2 — OG meta 動態產生 ｜ [A]
 - `GET /og/:surveyId`：爬蟲 UA → 動態 HTML with OG tags；一般 UA → 302 至前端
-- TDD
-  - [ ] `test_crawler_ua_gets_og_html`
-  - [ ] `test_normal_ua_gets_redirect`
+- 實作：`bff/src/og/`（handler + renderer）；`bff/src/app.ts` 加 `frontendUrl?`；`bff/src/index.ts` 讀 `FRONTEND_URL` env
+- TDD ✅（4 tests，`bff/tests/og.test.ts`）
+  - [x] `test_crawler_ua_gets_og_html`
+  - [x] `test_normal_ua_gets_redirect`
 
-### [ ] T5.3 — 啟動安全檢查 ｜ [基建]
+### [x] T5.3 — 啟動安全檢查 ｜ [基建]
 - BFF 啟動時斷言：
   - 環境變數**無** `ADMIN_PRIVATE_KEY`（誤設要直接 crash）
   - 無 session secret、無 DB connection string
-- TDD
-  - [ ] `test_bff_crashes_if_admin_key_present`
-  - [ ] `test_bff_starts_with_minimal_env`
+- 實作：`bff/src/security.ts`（`assertSecureEnv()`）；`bff/src/index.ts` 最頂層呼叫
+- TDD ✅（5 tests，`bff/tests/startup.test.ts`）
+  - [x] `test_bff_crashes_if_admin_key_present`
+  - [x] `test_bff_starts_with_minimal_env`
 
 ---
 
@@ -310,7 +320,7 @@
 
 對應 [專案目標.md §MVP 規格](專案目標.md) 標為「進階」與 [MVP_TDD.md Limitations](MVP_TDD.md)：
 
-- [-] testnet ↔ Mainnet 跨網路橋
+- [-] Devnet ↔ Mainnet 跨網路橋
 - [-] 多階段獎勵（前 100 名 10 SSR，101–1000 名 1 SSR...）
 - [-] AI 輔助 Markdown 編輯 / RAG 建議（[專案目標.md §2 step 2b/c/d](專案目標.md)）
 - [-] 進階參與條件（國籍、年齡、UID、邀請碼、白名單、平台積分）

@@ -1,6 +1,14 @@
-import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
-import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useParams } from 'react-router-dom'
+import {
+  ConnectButton,
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSignPersonalMessage,
+  useSuiClient,
+  useSuiClientQuery,
+} from '@mysten/dapp-kit'
+import type { SuiClient } from '@mysten/sui/client'
 import {
   BarChart,
   Bar,
@@ -10,184 +18,307 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
+import {
+  aggregateStats,
+  decryptAllResponses,
+  fetchClaimedEvents,
+  type DashboardStats,
+  type SurveyClaimedEvent,
+} from '../lib/dashboardDecrypt'
+import { buildClosePtb, SSSR_BASE_PER_UNIT } from '../lib/ptb'
+import { KEY_DERIVE_MSG, base64urlToBytes, deriveCreatorKeyPair } from '../lib/crypto'
 
-interface Distribution {
-  question_id: string
-  question: string
-  data: Array<{ label: string; count: number }>
+function getPackageId(): string {
+  return import.meta.env.VITE_PACKAGE_ID ?? ''
 }
 
-interface SurveyStats {
-  response_count: number
-  completion_rate: number
-  distributions: Distribution[]
-  vault_balance: string
-}
-
-interface SurveyMeta {
-  id: string
+interface VaultFields {
   creator: string
-  status: 'ACTIVE' | 'CLOSED'
-  vault_object_id: string
-  deadline: string
-  per_response: number
-  max_responses: number
+  balance: string
+  status: number
+  claimed_count: string
+  max_responses: string
 }
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64)
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0))
+}
+
+type EventsState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'loaded'; events: SurveyClaimedEvent[] }
+  | { kind: 'error'; error: string }
 
 export default function DashboardPage() {
-  const { surveyId } = useParams<{ surveyId?: string }>()
+  const { vaultId } = useParams<{ vaultId: string }>()
+  const location = useLocation()
   const account = useCurrentAccount()
+  const suiClient = useSuiClient()
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction()
+  const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
 
-  const [survey, setSurvey] = useState<SurveyMeta | null>(null)
-  const [stats, setStats] = useState<SurveyStats | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [closeStatus, setCloseStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [closeError, setCloseError] = useState<string | null>(null)
+  const contentKeyB64 = location.hash.startsWith('#') ? location.hash.slice(1) : ''
 
-  useEffect(() => {
-    if (!surveyId) return
-    setLoadError(null)
-    Promise.all([
-      fetch(`/surveys/${surveyId}`).then((r) => r.json()),
-      fetch(`/surveys/${surveyId}/stats`).then((r) => r.json()),
-    ])
-      .then(([surveyData, statsData]) => {
-        setSurvey(surveyData as SurveyMeta)
-        setStats(statsData as SurveyStats)
-      })
-      .catch((err: Error) => setLoadError(err.message))
-  }, [surveyId])
-
-  const { data: vaultData } = useSuiClientQuery(
+  // ── 鏈上 vault 物件 ────────────────────────────────────────────────────────
+  const { data: vaultData, refetch: refetchVault } = useSuiClientQuery(
     'getObject',
-    { id: survey?.vault_object_id ?? '', options: { showContent: true } },
-    { enabled: !!survey?.vault_object_id },
+    { id: vaultId ?? '', options: { showContent: true } },
+    { enabled: !!vaultId },
   )
 
-  // 優先顯示鏈上即時餘額，不可用時 fallback 至 stats API
-  let displayBalance: bigint | null = null
-  if (vaultData?.data?.content?.dataType === 'moveObject') {
-    const fields = (
-      vaultData.data.content as { dataType: string; fields: Record<string, string> }
-    ).fields
-    displayBalance = BigInt(fields.balance ?? '0')
-  } else if (stats) {
-    displayBalance = BigInt(stats.vault_balance)
-  }
+  const vault = useMemo<VaultFields | null>(() => {
+    const content = (vaultData as { data?: { content?: { dataType: string; fields: VaultFields } } } | undefined)?.data?.content
+    if (!content || content.dataType !== 'moveObject') return null
+    return content.fields
+  }, [vaultData])
 
-  const isCreator = !!account && !!survey && account.address === survey.creator
-  const isActive = survey?.status === 'ACTIVE'
-  const canClose = isCreator && isActive && closeStatus === 'idle'
+  // ── SurveyClaimed events ───────────────────────────────────────────────────
+  const [eventsState, setEventsState] = useState<EventsState>({ kind: 'idle' })
 
-  async function handleClose() {
-    if (!surveyId || !canClose) return
-    setCloseStatus('loading')
-    setCloseError(null)
+  useEffect(() => {
+    if (!vaultId || !getPackageId()) return
+    let cancelled = false
+    setEventsState({ kind: 'loading' })
+    fetchClaimedEvents(suiClient as unknown as SuiClient, vaultId, getPackageId())
+      .then((events) => {
+        if (!cancelled) setEventsState({ kind: 'loaded', events })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setEventsState({
+            kind: 'error',
+            error: err instanceof Error ? err.message : '事件載入失敗',
+          })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [vaultId, suiClient])
+
+  const events = eventsState.kind === 'loaded' ? eventsState.events : []
+  const responseCount = events.length
+
+  // ── 解密 ──────────────────────────────────────────────────────────────────
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [decryptStatus, setDecryptStatus] = useState<
+    'idle' | 'signing' | 'decrypting' | 'done' | 'error'
+  >('idle')
+  const [decryptError, setDecryptError] = useState<string | null>(null)
+
+  const isCreator = !!account && !!vault && account.address === vault.creator
+  const isActive = vault?.status === 0
+
+  async function handleDecrypt() {
+    if (!isCreator || decryptStatus === 'signing' || decryptStatus === 'decrypting') return
+    setDecryptError(null)
+    setDecryptStatus('signing')
     try {
-      const res = await fetch(`/surveys/${surveyId}/close`, { method: 'POST' })
-      if (!res.ok) throw new Error(await res.text())
-      setCloseStatus('success')
-      setSurvey((prev) => (prev ? { ...prev, status: 'CLOSED' } : prev))
+      const message = new TextEncoder().encode(KEY_DERIVE_MSG)
+      const { signature } = await signPersonalMessageAsync({ message })
+      const sigBytes = base64ToBytes(signature)
+      const kp = await deriveCreatorKeyPair(sigBytes)
+      setDecryptStatus('decrypting')
+      const { responses } = await decryptAllResponses(events, kp.privateKey)
+      const s = aggregateStats(responses, events.length)
+      setStats(s)
+      setDecryptStatus('done')
     } catch (err) {
-      setCloseError(err instanceof Error ? err.message : '結束失敗')
-      setCloseStatus('error')
+      setDecryptError(err instanceof Error ? err.message : '解密失敗')
+      setDecryptStatus('error')
     }
   }
+
+  // contentKey hash 是給受訪者用的；creator 自己用簽名衍生金鑰
+  // 但保留 base64urlToBytes import 以利 v2 收件人模式擴充
+  void contentKeyB64
+  void base64urlToBytes
+
+  // ── 結束活動 ──────────────────────────────────────────────────────────────
+  const [closeStatus, setCloseStatus] = useState<
+    'idle' | 'signing' | 'success' | 'error'
+  >('idle')
+  const [closeError, setCloseError] = useState<string | null>(null)
+
+  const canClose =
+    isCreator &&
+    isActive &&
+    closeStatus !== 'signing' &&
+    closeStatus !== 'success'
+
+  function handleClose() {
+    if (!vaultId || !canClose) return
+    setCloseError(null)
+    setCloseStatus('signing')
+    let tx
+    try {
+      tx = buildClosePtb({ packageId: getPackageId(), vaultId })
+    } catch (err) {
+      setCloseError(err instanceof Error ? err.message : 'PTB 建構失敗')
+      setCloseStatus('error')
+      return
+    }
+    signAndExecute(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { transaction: tx as any },
+      {
+        onSuccess: () => {
+          setCloseStatus('success')
+          void refetchVault()
+        },
+        onError: (err) => {
+          setCloseError(err.message)
+          setCloseStatus('error')
+        },
+      },
+    )
+  }
+
+  // ── 顯示 ──────────────────────────────────────────────────────────────────
+  const displayBalanceSssr = vault
+    ? (Number(BigInt(vault.balance)) / Number(SSSR_BASE_PER_UNIT)).toFixed(4)
+    : null
+
+  const chartSections = useMemo(() => {
+    if (!stats) return []
+    return Object.entries(stats.questions).map(([qid, q]) => ({
+      qid,
+      data: Object.entries(q.counts).map(([label, count]) => ({ label, count })),
+    }))
+  }, [stats])
 
   return (
     <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-2">儀表板</h1>
+      <p className="text-sm text-gray-500 mb-6 break-all">
+        Vault: <span className="font-mono">{vaultId ?? '?'}</span>
+      </p>
 
-      {!surveyId && (
-        <p className="mt-2 text-gray-500">查看問卷回覆統計與 Vault 餘額。</p>
-      )}
+      <div className="mb-6">
+        <ConnectButton />
+      </div>
 
-      {surveyId && loadError && (
-        <p role="alert" className="text-red-500 mt-4">
-          {loadError}
+      {eventsState.kind === 'error' && (
+        <p role="alert" className="text-red-600 mb-4 text-sm">
+          {eventsState.error}
         </p>
       )}
 
-      {surveyId && stats && survey && (
-        <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 my-6">
-            <div className="bg-gray-50 border rounded p-4">
-              <p className="text-sm text-gray-500">回覆數</p>
-              <p className="text-2xl font-bold" aria-label="response-count">
-                {stats.response_count}
-              </p>
-            </div>
-            <div className="bg-gray-50 border rounded p-4">
-              <p className="text-sm text-gray-500">完成率</p>
-              <p className="text-2xl font-bold" aria-label="completion-rate">
-                {(stats.completion_rate * 100).toFixed(1)}%
-              </p>
-            </div>
-            <div className="bg-gray-50 border rounded p-4">
-              <p className="text-sm text-gray-500">Vault 餘額（鏈上）</p>
-              <p className="text-2xl font-bold" aria-label="vault-balance">
-                {displayBalance !== null
-                  ? `${(Number(displayBalance) / 1e9).toFixed(4)} RWD`
-                  : '查詢中…'}
-              </p>
-            </div>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="bg-gray-50 border rounded p-4">
+          <p className="text-sm text-gray-500">回覆數</p>
+          <p className="text-2xl font-bold" aria-label="response-count">
+            {responseCount}
+          </p>
+        </div>
+        <div className="bg-gray-50 border rounded p-4">
+          <p className="text-sm text-gray-500">名額上限</p>
+          <p className="text-2xl font-bold" aria-label="max-responses">
+            {vault ? vault.max_responses : '—'}
+          </p>
+        </div>
+        <div className="bg-gray-50 border rounded p-4">
+          <p className="text-sm text-gray-500">Vault 餘額（鏈上）</p>
+          <p className="text-2xl font-bold" aria-label="vault-balance">
+            {displayBalanceSssr !== null
+              ? `${displayBalanceSssr} sSSR`
+              : '查詢中…'}
+          </p>
+        </div>
+      </div>
 
-          {stats.distributions.map((dist) => (
-            <section key={dist.question_id} className="mb-8">
-              <h2 className="text-lg font-semibold mb-2">{dist.question}</h2>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={dist.data}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="label" />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#3b82f6" />
-                </BarChart>
-              </ResponsiveContainer>
-            </section>
-          ))}
-
-          <div className="mt-6 border-t pt-6">
-            <p className="text-sm text-gray-500 mb-3">
-              狀態：
-              <span
-                className={
-                  survey.status === 'ACTIVE'
-                    ? 'text-green-600 font-semibold'
-                    : 'text-gray-500 font-semibold'
-                }
-              >
-                {survey.status === 'ACTIVE' ? '進行中' : '已結束'}
-              </span>
-            </p>
-
-            {closeStatus === 'success' && (
-              <p role="status" className="text-green-700 mb-3 text-sm">
-                活動已成功結束。
-              </p>
-            )}
-            {closeStatus === 'error' && closeError && (
-              <p role="alert" className="text-red-500 mb-3 text-sm">
-                {closeError}
-              </p>
-            )}
-
+      {/* ── 解密 + 統計圖表 ──────────────────────────────────────────────── */}
+      {responseCount === 0 ? (
+        <div className="bg-gray-50 border rounded p-6 text-center text-gray-500 mb-6">
+          尚無回覆。請等待受訪者填答後再回來查看統計。
+        </div>
+      ) : (
+        <section className="mb-6">
+          {decryptStatus === 'idle' && isCreator && (
             <button
               type="button"
-              onClick={() => void handleClose()}
-              disabled={!canClose}
-              className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
+              onClick={() => void handleDecrypt()}
+              className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 transition-colors"
             >
-              {closeStatus === 'loading' ? '結束中...' : '結束活動'}
+              解密回覆並查看統計
             </button>
+          )}
+          {(decryptStatus === 'signing' || decryptStatus === 'decrypting') && (
+            <p className="text-sm text-gray-500">
+              {decryptStatus === 'signing' ? '請於錢包中簽名以衍生解密金鑰…' : '解密中…'}
+            </p>
+          )}
+          {decryptStatus === 'error' && decryptError && (
+            <p role="alert" className="text-red-600 text-sm">
+              {decryptError}
+            </p>
+          )}
 
-            {!isCreator && survey.status === 'ACTIVE' && (
-              <p className="text-xs text-gray-400 mt-2">僅限問卷建立者可結束活動。</p>
-            )}
-          </div>
-        </>
+          {stats &&
+            chartSections.map(({ qid, data }) => (
+              <div key={qid} className="mb-8">
+                <h2 className="text-lg font-semibold mb-2">{qid}</h2>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={data}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="label" />
+                    <YAxis allowDecimals={false} />
+                    <Tooltip />
+                    <Bar dataKey="count" fill="#3b82f6" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ))}
+
+          {stats && stats.failed_count > 0 && (
+            <p className="text-xs text-amber-600">
+              有 {stats.failed_count} 筆回覆無法解密（金鑰不符或資料毀損）。
+            </p>
+          )}
+        </section>
       )}
+
+      {/* ── 結束活動 ─────────────────────────────────────────────────────── */}
+      <div className="mt-6 border-t pt-6">
+        <p className="text-sm text-gray-500 mb-3">
+          狀態：
+          <span
+            className={
+              isActive
+                ? 'text-green-600 font-semibold'
+                : 'text-gray-500 font-semibold'
+            }
+          >
+            {vault ? (isActive ? '進行中' : '已結束') : '查詢中'}
+          </span>
+        </p>
+
+        {closeStatus === 'success' && (
+          <p role="status" className="text-green-700 mb-3 text-sm">
+            活動已成功結束，剩餘 sSSR 已退回您的錢包。
+          </p>
+        )}
+        {closeStatus === 'error' && closeError && (
+          <p role="alert" className="text-red-600 mb-3 text-sm break-all">
+            {closeError}
+          </p>
+        )}
+
+        <button
+          type="button"
+          onClick={handleClose}
+          disabled={!canClose}
+          className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
+        >
+          {closeStatus === 'signing' ? '結束中…' : '結束活動'}
+        </button>
+
+        {vault && !isCreator && (
+          <p className="text-xs text-gray-400 mt-2">僅限問卷建立者可結束活動。</p>
+        )}
+      </div>
     </main>
   )
 }

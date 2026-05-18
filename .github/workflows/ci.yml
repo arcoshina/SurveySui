@@ -64,24 +64,10 @@ jobs:
         working-directory: contracts
         run: sui move test
 
-  # ── TypeScript / Node.js backend + scripts tests ──────────────────────────
-  backend-test:
-    name: Backend Tests
+  # ── BFF (stateless) + scripts tests ───────────────────────────────────────
+  bff-test:
+    name: BFF Tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: surveysui
-          POSTGRES_PASSWORD: testpassword
-          POSTGRES_DB: surveysui_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -100,13 +86,11 @@ jobs:
       - name: Test scripts
         run: pnpm --filter @surveysui/scripts test
 
-      - name: Typecheck backend
-        run: pnpm --filter @surveysui/backend typecheck
+      - name: Typecheck BFF
+        run: pnpm --filter @surveysui/bff typecheck
 
-      - name: Test backend
-        run: pnpm --filter @surveysui/backend test
-        env:
-          DATABASE_URL: postgresql://surveysui:testpassword@localhost:5432/surveysui_test
+      - name: Test BFF
+        run: pnpm --filter @surveysui/bff test
 
   # ── Frontend: Vitest unit tests + Playwright E2E ─────────────────────────
   frontend-test:

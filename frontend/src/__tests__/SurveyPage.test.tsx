@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { encryptSurveyContent, bytesToBase64url } from '../lib/crypto'
+
+const mockGetObject = vi.fn()
 
 // Mock dapp-kit hooks
 vi.mock('@mysten/dapp-kit', () => ({
   useCurrentAccount: vi.fn().mockReturnValue({ address: '0xuser' }),
   useSuiClient: vi.fn().mockReturnValue({
     executeTransactionBlock: vi.fn().mockResolvedValue({ digest: '0xdeadbeef' }),
+    getObject: (...args: any[]) => mockGetObject(...args),
   }),
   useSignTransaction: vi.fn().mockReturnValue({
     mutateAsync: vi.fn().mockResolvedValue({ signature: 'mock_user_sig' }),
@@ -23,36 +27,33 @@ vi.mock('../lib/sponsoredTx', () => ({
   executeSponsoredTx: vi.fn().mockResolvedValue({ digest: '0xdeadbeef' }),
 }))
 
-import { useCurrentAccount } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import SurveyPage from '../pages/SurveyPage'
 
 // ── 測試資料 ────────────────────────────────────────────────────────────────
 
-const MOCK_SURVEY = {
-  id: 'survey-abc',
-  title: '測試問卷',
-  status: 'ACTIVE',
-  deadline: '2099-12-31T23:59:59Z',
-  per_response: 1,
-  vaultObjectId: '0xvault',
-  questions: [
-    {
-      id: 'q1',
-      type: 'single_choice',
-      prompt: '您偏好哪種顏色？',
-      options_json: ['紅色', '藍色', '綠色'],
-      required: true,
-    },
-    {
-      id: 'q2',
-      type: 'text',
-      prompt: '其他意見',
-      options_json: null,
-      required: false,
-    },
-  ],
-}
+const MOCK_MD = `---
+title: "測試問卷"
+perResponse: 1
+maxResponses: 100
+deadline: "2099-12-31T23:59:59Z"
+questions:
+  - id: q1
+    type: SINGLE_CHOICE
+    prompt: "您偏好哪種顏色？"
+    required: true
+    options:
+      - 紅色
+      - 藍色
+      - 綠色
+  - id: q2
+    type: SHORT_ANSWER
+    prompt: "其他意見"
+    required: false
+---
+
+問卷說明文字
+`
 
 // ── 輔助函式 ────────────────────────────────────────────────────────────────
 
@@ -69,26 +70,46 @@ function renderSurveyPage(id = 'survey-abc') {
 // ── 測試 ────────────────────────────────────────────────────────────────────
 
 describe('T3.6 — 問卷填答頁', () => {
-  beforeEach(() => {
+  let defaultEncryptedBlob: Uint8Array
+  let defaultContentKey: Uint8Array
+  const creatorPubKey = new Uint8Array(32).fill(1)
+
+  beforeEach(async () => {
     sessionStorage.setItem('survey_pass_id', '0xpass')
     sessionStorage.setItem('survey_sub_hash', '0xsubhash')
     vi.spyOn(Transaction, 'from').mockReturnValue({} as any)
+
+    const enc = await encryptSurveyContent(MOCK_MD, creatorPubKey)
+    defaultEncryptedBlob = enc.encryptedBlob
+    defaultContentKey = enc.contentKey
+
+    // Set default hash for standard tests
+    window.location.hash = bytesToBase64url(defaultContentKey)
+
+    mockGetObject.mockResolvedValue({
+      data: {
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            vault_id: '0xvault',
+            status: 0,
+            encrypted_content: Array.from(defaultEncryptedBlob),
+          },
+        },
+      },
+    })
   })
 
   afterEach(() => {
     sessionStorage.clear()
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    window.location.hash = ''
   })
 
   // ── test_required_questions_block_submit ──────────────────────────────────
 
   it('test_required_questions_block_submit', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: true, json: async () => MOCK_SURVEY }),
-    )
-
     renderSurveyPage()
 
     // 等待題目渲染
@@ -106,11 +127,6 @@ describe('T3.6 — 問卷填答頁', () => {
   // ── test_review_screen_shows_all_answers ──────────────────────────────────
 
   it('test_review_screen_shows_all_answers', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: true, json: async () => MOCK_SURVEY }),
-    )
-
     renderSurveyPage()
 
     expect(await screen.findByText('您偏好哪種顏色？')).toBeInTheDocument()
@@ -138,10 +154,7 @@ describe('T3.6 — 問卷填答頁', () => {
   it('test_success_state_shows_tx_hash', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce({ ok: true, json: async () => MOCK_SURVEY })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ txDigest: '0xdeadbeef' }) }),
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ txDigest: '0xdeadbeef' }) }),
     )
 
     renderSurveyPage()
@@ -159,6 +172,72 @@ describe('T3.6 — 問卷填答頁', () => {
     fireEvent.click(screen.getByRole('button', { name: /確認提交/ }))
 
     // 成功後顯示 TX hash
+    await waitFor(() => {
+      expect(screen.getByLabelText('tx-hash')).toHaveTextContent('0xdeadbeef')
+    })
+  })
+
+  // ── test_render_questions_from_decrypted_md ──────────────────────────────
+
+  it('test_render_questions_from_decrypted_md', async () => {
+    // 驗證已加密模式下的完整解密渲染流程
+    renderSurveyPage()
+
+    expect(await screen.findByText('您偏好哪種顏色？')).toBeInTheDocument()
+    expect(screen.getByLabelText('紅色')).toBeInTheDocument()
+    expect(screen.getByLabelText('藍色')).toBeInTheDocument()
+    expect(screen.getByLabelText('綠色')).toBeInTheDocument()
+    expect(screen.getByLabelText('其他意見')).toBeInTheDocument()
+  })
+
+  // ── test_render_questions_from_unencrypted_md ────────────────────────────
+
+  it('test_render_questions_from_unencrypted_md', async () => {
+    // 設置 URL hash 為空，模擬明文問卷
+    window.location.hash = ''
+
+    const mdBytes = new TextEncoder().encode(MOCK_MD)
+    const unencryptedBlob = new Uint8Array(32 + mdBytes.length)
+    unencryptedBlob.set(creatorPubKey, 0)
+    unencryptedBlob.set(mdBytes, 32)
+
+    mockGetObject.mockResolvedValue({
+      data: {
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            vault_id: '0xvault',
+            status: 0,
+            encrypted_content: Array.from(unencryptedBlob),
+          },
+        },
+      },
+    })
+
+    renderSurveyPage()
+
+    expect(await screen.findByText('您偏好哪種顏色？')).toBeInTheDocument()
+    expect(screen.getByLabelText('紅色')).toBeInTheDocument()
+    expect(screen.getByLabelText('其他意見')).toBeInTheDocument()
+  })
+
+  // ── test_submit_uses_sponsored_path ─────────────────────────────────────
+
+  it('test_submit_uses_sponsored_path', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ txDigest: '0xdeadbeef' }) }),
+    )
+
+    renderSurveyPage()
+
+    expect(await screen.findByText('您偏好哪種顏色？')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('紅色'))
+    fireEvent.change(screen.getByLabelText('其他意見'), { target: { value: '非常棒！' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /預覽答案/ }))
+    fireEvent.click(screen.getByRole('button', { name: /確認提交/ }))
+
     await waitFor(() => {
       expect(screen.getByLabelText('tx-hash')).toHaveTextContent('0xdeadbeef')
     })

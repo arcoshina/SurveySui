@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { renderMarkdown } from '../lib/markdown'
 import { parseFrontmatter } from '../lib/frontmatter'
@@ -26,10 +26,21 @@ questions:
 在這裡撰寫問卷說明文字...
 `
 
+const DRAFT_KEY_PREFIX = 'surveysui:draft:'
+
+function makeDraftId(): string {
+  const cryptoObj = typeof crypto !== 'undefined' ? crypto : undefined
+  if (cryptoObj?.randomUUID) return `draft-${cryptoObj.randomUUID()}`
+  return `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 export default function CreatePage() {
   const navigate = useNavigate()
   const [content, setContent] = useState(TEMPLATE)
   const [error, setError] = useState<string | null>(null)
+  const [encrypt, setEncrypt] = useState(true)
+
+  const parsed = useMemo(() => parseFrontmatter(content), [content])
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -37,16 +48,22 @@ export default function CreatePage() {
       setError('請填寫問卷內容')
       return
     }
-    const result = parseFrontmatter(content)
-    if (!result.ok) {
-      setError(result.error)
+    if (!parsed.ok) {
+      setError(parsed.error)
       return
     }
     setError(null)
-    navigate('/fund', { state: { contentMd: content } })
+
+    const draftId = makeDraftId()
+    window.localStorage.setItem(
+      `${DRAFT_KEY_PREFIX}${draftId}`,
+      JSON.stringify({ contentMd: content, encrypt, savedAt: Date.now() }),
+    )
+    navigate(`/fund/${draftId}`)
   }
 
   const previewHtml = renderMarkdown(content)
+  const deadlineIso = parsed.ok ? new Date(parsed.data.deadlineMs).toISOString() : null
 
   return (
     <main className="min-h-screen p-4 sm:p-8 max-w-6xl mx-auto">
@@ -54,7 +71,7 @@ export default function CreatePage() {
 
       <p className="text-sm text-gray-600 mb-6">
         在 Markdown frontmatter 中填寫獎勵設定：
-        <code className="bg-gray-100 px-1 rounded">perResponse</code>（每份獎勵 RWD 數量）、
+        <code className="bg-gray-100 px-1 rounded">perResponse</code>（每份獎勵 sSSR 數量）、
         <code className="bg-gray-100 px-1 rounded">maxResponses</code>（名額上限）、
         <code className="bg-gray-100 px-1 rounded">deadline</code>（截止日，ISO 格式）。
       </p>
@@ -78,14 +95,57 @@ export default function CreatePage() {
             )}
           </div>
 
-          <div className="flex-1 flex flex-col">
-            <span className="font-semibold mb-1">預覽</span>
+          <div className="flex-1 flex flex-col gap-3">
             <div
-              aria-label="markdown 預覽"
-              className="flex-1 border rounded p-4 overflow-y-auto bg-gray-50 prose max-w-none"
-              dangerouslySetInnerHTML={{ __html: previewHtml }}
-            />
+              aria-label="獎勵設定預覽"
+              className="border rounded p-4 bg-blue-50 text-sm space-y-1"
+            >
+              {parsed.ok ? (
+                <>
+                  <p>
+                    <span className="font-semibold">perResponse：</span>
+                    <span>{parsed.data.perResponse}</span> sSSR / 份
+                  </p>
+                  <p>
+                    <span className="font-semibold">maxResponses：</span>
+                    <span>{parsed.data.maxResponses}</span> 份
+                  </p>
+                  <p>
+                    <span className="font-semibold">deadline：</span>
+                    <time dateTime={deadlineIso!}>{deadlineIso}</time>
+                  </p>
+                  <p className="text-xs text-gray-600 pt-1">
+                    預估總獎勵：
+                    {parsed.data.perResponse * parsed.data.maxResponses} sSSR
+                  </p>
+                </>
+              ) : (
+                <p className="text-red-600">frontmatter 尚未通過：{parsed.error}</p>
+              )}
+            </div>
+
+            <div className="flex-1 flex flex-col">
+              <span className="font-semibold mb-1">Markdown 預覽</span>
+              <div
+                aria-label="markdown 預覽"
+                className="flex-1 border rounded p-4 overflow-y-auto bg-gray-50 prose max-w-none"
+                dangerouslySetInnerHTML={{ __html: previewHtml }}
+              />
+            </div>
           </div>
+        </div>
+
+        <div className="flex items-center gap-2 mb-4">
+          <input
+            id="encrypt-survey"
+            type="checkbox"
+            checked={encrypt}
+            onChange={(e) => setEncrypt(e.target.checked)}
+            className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
+          />
+          <label htmlFor="encrypt-survey" className="text-sm font-medium text-gray-700 cursor-pointer">
+            加密問卷題目（推薦，防範鏈上窺探並保護隱私）
+          </label>
         </div>
 
         <button

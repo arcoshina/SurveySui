@@ -1,39 +1,83 @@
-import { useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   ConnectButton,
   useCurrentAccount,
   useSignAndExecuteTransaction,
+  useSignPersonalMessage,
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
-import { estimateSuiCost, buildFundSurveyPtb } from '../lib/ptb'
 import { parseFrontmatter } from '../lib/frontmatter'
+import {
+  buildCreateSurveyPtb,
+  estimateFundCost,
+  extractSurveyIdFromEffects,
+  extractVaultIdFromEffects,
+  SSSR_BASE_PER_UNIT,
+} from '../lib/ptb'
+import {
+  KEY_DERIVE_MSG,
+  bytesToBase64url,
+  deriveCreatorKeyPair,
+  encryptSurveyContent,
+} from '../lib/crypto'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 const POOL_ID = import.meta.env.VITE_AMM_POOL_ID ?? ''
-const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS ?? ''
-const RWD_DECIMALS = 1_000_000_000n
+const SSR_TREASURY_ID = import.meta.env.VITE_SSR_TREASURY_ID ?? ''
+const SSSR_TREASURY_ID = import.meta.env.VITE_SSSR_TREASURY_ID ?? ''
+const SURVEY_REGISTRY_ID = import.meta.env.VITE_SURVEY_REGISTRY_ID ?? ''
+const ADMIN_TREASURY = import.meta.env.VITE_ADMIN_ADDRESS ?? ''
 
-interface FundState {
+const DRAFT_KEY_PREFIX = 'surveysui:draft:'
+const SURVEY_KEY_PREFIX = 'surveysui:survey:'
+
+/** Slippage buffer: invest 1% more SUI than the curve says, in case `total_sui_invested` shifts. */
+const SLIPPAGE_NUMER = 101n
+const SLIPPAGE_DENOM = 100n
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64)
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0))
+}
+
+interface DraftEntry {
   contentMd: string
+  encrypt?: boolean
+  savedAt: number
+}
+
+function readDraft(draftId: string | undefined): DraftEntry | null {
+  if (!draftId) return null
+  try {
+    const raw = window.localStorage.getItem(`${DRAFT_KEY_PREFIX}${draftId}`)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as DraftEntry
+    if (typeof parsed?.contentMd !== 'string') return null
+    return parsed
+  } catch {
+    return null
+  }
 }
 
 export default function FundPage() {
-  const location = useLocation()
+  const { id: draftId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const state = location.state as FundState | undefined
 
   const account = useCurrentAccount()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
+  const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
 
-  const [txStatus, setTxStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [txDigest, setTxDigest] = useState<string | null>(null)
-  const [surveyId, setSurveyId] = useState<string | null>(null)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [draft, setDraft] = useState<DraftEntry | null>(() => readDraft(draftId))
 
-  const contentMd = state?.contentMd ?? ''
-  const frontmatter = contentMd ? parseFrontmatter(contentMd) : { ok: false as const, error: '缺少問卷內容' }
-  const params = frontmatter.ok ? frontmatter.data : null
+  useEffect(() => {
+    setDraft(readDraft(draftId))
+  }, [draftId])
+
+  const frontmatter = useMemo(
+    () => (draft ? parseFrontmatter(draft.contentMd) : null),
+    [draft],
+  )
 
   const { data: poolData } = useSuiClientQuery(
     'getObject',
@@ -41,120 +85,153 @@ export default function FundPage() {
     { enabled: !!POOL_ID },
   )
 
-  let suiToSpend: bigint | null = null
-  if (params && poolData?.data?.content?.dataType === 'moveObject') {
-    const fields = (poolData.data.content as { dataType: string; fields: Record<string, string> })
-      .fields
-    const reserveRwd = BigInt(fields.reserve_a ?? '0')
-    const reserveSui = BigInt(fields.reserve_b ?? '0')
-    const perResponseRwd = BigInt(params.perResponse) * RWD_DECIMALS
+  const totalSuiInvested = useMemo<bigint>(() => {
+    if (poolData?.data?.content?.dataType !== 'moveObject') return 0n
+    const fields = (poolData.data.content as { fields: Record<string, string> }).fields
+    return BigInt(fields.total_sui_invested ?? '0')
+  }, [poolData])
 
-    try {
-      const estimated = estimateSuiCost({
-        perResponseRwd,
-        maxResponses: params.maxResponses,
-        reserveSui,
-        reserveRwd,
-      })
-      suiToSpend = (estimated * 101n) / 100n
-    } catch {
-      suiToSpend = null
-    }
+  const cost = useMemo(() => {
+    if (!frontmatter?.ok) return null
+    return estimateFundCost({
+      perResponse: BigInt(frontmatter.data.perResponse),
+      maxResponses: frontmatter.data.maxResponses,
+      totalSuiInvested,
+    })
+  }, [frontmatter, totalSuiInvested])
+
+  const suiToSpend = cost ? (cost.suiToInvest * SLIPPAGE_NUMER) / SLIPPAGE_DENOM : null
+
+  const [status, setStatus] = useState<'idle' | 'signing' | 'submitting' | 'success' | 'error'>(
+    'idle',
+  )
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  if (!draftId || !draft) {
+    return (
+      <main className="min-h-screen p-8 max-w-xl mx-auto">
+        <h1 className="text-3xl font-bold mb-4">注資</h1>
+        <p className="text-red-600">找不到問卷草稿（draftId={draftId ?? '?'}）。請從 /create 重新建立。</p>
+      </main>
+    )
   }
 
-  async function postSurvey(vaultObjectId: string, creatorAddress: string): Promise<string | null> {
-    try {
-      const res = await fetch('/surveys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contentMd, vaultObjectId, creatorAddress }),
-      })
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string }
-        throw new Error(err.error ?? `HTTP ${res.status}`)
-      }
-      const data = (await res.json()) as { id: string }
-      return data.id
-    } catch (err) {
-      throw err instanceof Error ? err : new Error('POST /surveys 失敗')
-    }
+  if (!frontmatter?.ok) {
+    return (
+      <main className="min-h-screen p-8 max-w-xl mx-auto">
+        <h1 className="text-3xl font-bold mb-4">注資</h1>
+        <p className="text-red-600">Frontmatter 解析失敗：{frontmatter?.error ?? '未知錯誤'}</p>
+      </main>
+    )
   }
 
-  function handleFund() {
-    if (!params || !account || !suiToSpend) return
+  const params = frontmatter.data
+  const totalSssr = params.perResponse * params.maxResponses
 
-    setTxStatus('loading')
+  async function handleFund() {
+    if (!account || !cost || !suiToSpend || !draft) return
+    setStatus('signing')
     setErrorMsg(null)
 
-    const totalRwd = BigInt(params.perResponse) * BigInt(params.maxResponses) * RWD_DECIMALS
-
-    let tx
+    let creatorPublicKeyBytes: Uint8Array
+    let contentKey: Uint8Array
+    let encryptedBlob: Uint8Array
     try {
-      tx = buildFundSurveyPtb({
-        packageId: PACKAGE_ID,
-        poolId: POOL_ID,
-        perResponseMist: BigInt(params.perResponse) * RWD_DECIMALS,
-        maxResponses: params.maxResponses,
-        deadlineMs: BigInt(params.deadlineMs),
-        adminAddress: ADMIN_ADDRESS,
-        suiToSpend,
-        minRwdOut: totalRwd,
-      })
+      const message = new TextEncoder().encode(KEY_DERIVE_MSG)
+      const { signature } = await signPersonalMessageAsync({ message })
+      const sigBytes = base64ToBytes(signature)
+      const kp = await deriveCreatorKeyPair(sigBytes)
+      creatorPublicKeyBytes = kp.publicKeyBytes
+
+      const shouldEncrypt = draft.encrypt !== false
+      if (shouldEncrypt) {
+        const enc = await encryptSurveyContent(draft.contentMd, creatorPublicKeyBytes)
+        encryptedBlob = enc.encryptedBlob
+        contentKey = enc.contentKey
+      } else {
+        const mdBytes = new TextEncoder().encode(draft.contentMd)
+        encryptedBlob = new Uint8Array(creatorPublicKeyBytes.length + mdBytes.length)
+        encryptedBlob.set(creatorPublicKeyBytes, 0)
+        encryptedBlob.set(mdBytes, creatorPublicKeyBytes.length)
+        contentKey = new Uint8Array(0)
+      }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'PTB 建構失敗')
-      setTxStatus('error')
+      setErrorMsg(err instanceof Error ? err.message : '簽名或加密失敗')
+      setStatus('error')
       return
     }
 
+    let tx
+    try {
+      tx = buildCreateSurveyPtb({
+        packageId: PACKAGE_ID,
+        poolId: POOL_ID,
+        ssrTreasuryId: SSR_TREASURY_ID,
+        sssrTreasuryId: SSSR_TREASURY_ID,
+        registryId: SURVEY_REGISTRY_ID,
+        adminTreasury: ADMIN_TREASURY,
+        perResponse: BigInt(params.perResponse),
+        maxResponses: params.maxResponses,
+        deadlineMs: BigInt(params.deadlineMs),
+        encryptedContent: encryptedBlob,
+        suiToSpend,
+      })
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'PTB 建構失敗')
+      setStatus('error')
+      return
+    }
+
+    setStatus('submitting')
     signAndExecute(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { transaction: tx as any },
       {
-        onSuccess: async (result) => {
-          setTxDigest(result.digest)
+        onSuccess: (result) => {
+          const changes = (
+            result as {
+              objectChanges?: Array<{
+                type: string
+                objectId?: string
+                objectType?: string
+              }>
+            }
+          ).objectChanges
+          const vaultId = extractVaultIdFromEffects(changes)
+          const surveyId = extractSurveyIdFromEffects(changes)
 
-          // 從 PTB effects 取得新建的 vault object id（T5.5 會精確過濾 type）
-          const createdObjs = (result as { objectChanges?: Array<{ type: string; objectId?: string }> })
-            .objectChanges
-          const vaultObjectId =
-            createdObjs?.find((c) => c.type === 'created')?.objectId ?? result.digest
-
-          try {
-            const id = await postSurvey(vaultObjectId, account.address)
-            setSurveyId(id)
-            setTxStatus('success')
-          } catch (err) {
-            setErrorMsg(err instanceof Error ? err.message : 'POST /surveys 失敗')
-            setTxStatus('error')
+          if (!vaultId) {
+            setErrorMsg('交易成功但無法從 effects 抽出 vault_id')
+            setStatus('error')
+            return
           }
+
+          if (surveyId) {
+            window.localStorage.setItem(
+              `${SURVEY_KEY_PREFIX}${surveyId}`,
+              JSON.stringify({
+                vaultId,
+                contentKeyB64: contentKey.length > 0 ? bytesToBase64url(contentKey) : '',
+                createdAt: Date.now(),
+              }),
+            )
+          }
+          window.localStorage.removeItem(`${DRAFT_KEY_PREFIX}${draftId}`)
+
+          const fragment = contentKey.length > 0 ? bytesToBase64url(contentKey) : ''
+          setStatus('success')
+          navigate(`/dashboard/${vaultId}${fragment ? `#${fragment}` : ''}`)
         },
         onError: (err) => {
           setErrorMsg(err.message)
-          setTxStatus('error')
+          setStatus('error')
         },
       },
     )
   }
 
-  if (!state || !contentMd) {
-    return (
-      <main className="min-h-screen p-8 max-w-xl mx-auto">
-        <h1 className="text-3xl font-bold mb-4">注資</h1>
-        <p className="text-red-500">找不到問卷內容，請從建立問卷頁面進入。</p>
-      </main>
-    )
-  }
-
-  if (!frontmatter.ok) {
-    return (
-      <main className="min-h-screen p-8 max-w-xl mx-auto">
-        <h1 className="text-3xl font-bold mb-4">注資</h1>
-        <p className="text-red-500">Frontmatter 解析錯誤：{frontmatter.error}</p>
-      </main>
-    )
-  }
-
-  const totalRwd = params!.perResponse * params!.maxResponses
+  const sui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4)
+  const sssr = (base: bigint) => (Number(base) / Number(SSSR_BASE_PER_UNIT)).toFixed(4)
 
   return (
     <main className="min-h-screen p-8 max-w-xl mx-auto">
@@ -163,25 +240,27 @@ export default function FundPage() {
       <div className="bg-gray-50 border rounded p-4 mb-6 space-y-2 text-sm">
         <p>
           <span className="font-semibold">每份獎勵：</span>
-          {params!.perResponse} RWD
+          {params.perResponse} sSSR
         </p>
         <p>
           <span className="font-semibold">名額上限：</span>
-          {params!.maxResponses}
+          {params.maxResponses}
         </p>
         <p>
-          <span className="font-semibold">所需 RWD 總量：</span>
-          {totalRwd} RWD
+          <span className="font-semibold">獎勵總額（vault 內 net）：</span>
+          {totalSssr} sSSR
+        </p>
+        <p>
+          <span className="font-semibold">平台手續費（0.3%）：</span>
+          <span aria-label="platform-fee">
+            {cost ? `${sssr(cost.vaultFeeBase)} sSSR` : '計算中…'}
+          </span>
         </p>
         <p>
           <span className="font-semibold">預估 SUI 消耗：</span>
-          {suiToSpend === null ? (
-            <span className="text-gray-400">計算中…</span>
-          ) : (
-            <span aria-label="estimated-sui-cost">
-              {(Number(suiToSpend) / 1e9).toFixed(4)} SUI（含 1% 滑點緩衝）
-            </span>
-          )}
+          <span aria-label="estimated-sui-cost">
+            {suiToSpend ? `${sui(suiToSpend)} SUI（含 1% 滑點緩衝）` : '計算中…'}
+          </span>
         </p>
       </div>
 
@@ -189,23 +268,8 @@ export default function FundPage() {
         <ConnectButton />
       </div>
 
-      {txStatus === 'success' && txDigest && (
-        <div role="status" className="bg-green-100 text-green-800 p-4 rounded mb-4 text-sm break-all">
-          <p>注資成功！TX：{txDigest}</p>
-          {surveyId && (
-            <button
-              type="button"
-              onClick={() => navigate(`/dashboard/${surveyId}`)}
-              className="mt-2 underline font-semibold"
-            >
-              前往問卷儀表板 →
-            </button>
-          )}
-        </div>
-      )}
-
-      {txStatus === 'error' && errorMsg && (
-        <p role="alert" className="text-red-500 mb-4 text-sm">
+      {errorMsg && (
+        <p role="alert" className="text-red-600 mb-4 text-sm break-all">
           {errorMsg}
         </p>
       )}
@@ -213,10 +277,14 @@ export default function FundPage() {
       <button
         type="button"
         onClick={handleFund}
-        disabled={!account || !suiToSpend || txStatus === 'loading' || txStatus === 'success'}
+        disabled={!account || !suiToSpend || status === 'signing' || status === 'submitting' || status === 'success'}
         className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50 transition-colors"
       >
-        {txStatus === 'loading' ? '交易中...' : '一鍵注資'}
+        {status === 'signing'
+          ? '簽名中…'
+          : status === 'submitting'
+            ? '送出中…'
+            : '一鍵注資'}
       </button>
     </main>
   )

@@ -165,3 +165,7 @@ public fun has_claimed(vault: &SurveyVault, sub_hash: vector<u8>): bool {
 }
 
 public fun fee_bps(): u64 { VAULT_FEE_BPS }
+
+/// Returns the on-chain ID of an (unshared or shared) vault.
+/// Exposed so PTBs can pipe `create` → `survey_registry::register` in one block.
+public fun id_of(vault: &SurveyVault): ID { object::id(vault) }
