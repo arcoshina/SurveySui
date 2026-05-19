@@ -5,6 +5,7 @@ import { Transaction } from '@mysten/sui/transactions'
 import { buildClaimPtb, dryRunAndSponsorTx, executeSponsoredTx } from '../lib/sponsoredTx'
 import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
 import { parseFullSurveyMarkdown } from '../lib/frontmatter'
+import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 
@@ -33,6 +34,7 @@ interface Survey {
   per_response: number
   vaultObjectId: string // Add vaultObjectId for claiming
   questions: Question[]
+  schemaHash: string
 }
 
 type Answers = Record<string, string | string[]>
@@ -168,6 +170,15 @@ export default function SurveyPage() {
           throw new Error(parsed.error)
         }
 
+        // Resolve on-chain schema_hash, or compute it as fallback
+        let schemaHashHex = ''
+        if (fields.schema_hash) {
+          schemaHashHex = bytesToHex(normalizeBytes(fields.schema_hash))
+        } else {
+          const computed = await computeSchemaHash(parsed.data.questions)
+          schemaHashHex = bytesToHex(computed)
+        }
+
         setSurvey({
           id: surveyId,
           title: parsed.data.title,
@@ -176,6 +187,7 @@ export default function SurveyPage() {
           per_response: parsed.data.perResponse,
           vaultObjectId: vault_id,
           questions: parsed.data.questions,
+          schemaHash: schemaHashHex,
         })
         setCreatorPubKey(creatorPublicKeyBytes)
         setPhase('filling')
@@ -272,7 +284,8 @@ export default function SurveyPage() {
       if (!creatorPubKey) {
         throw new Error('未載入問卷建立者金鑰，無法加密答案')
       }
-      const encryptedAnswersBytes = await encryptAnswers(JSON.stringify(answers), creatorPubKey)
+      const encodedPayload = encodeAnswers(answers, survey.questions, survey.schemaHash)
+      const encryptedAnswersBytes = await encryptAnswers(JSON.stringify(encodedPayload), creatorPubKey)
       const encryptedAnswersHex = Array.from(encryptedAnswersBytes)
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('')

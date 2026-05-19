@@ -73,9 +73,8 @@ fun test_full_lifecycle_a_to_c() {
         assert!(amm_pool::sui_reserve(&pool) == SUI_INVEST);
         assert!(amm_pool::ssr_reserve(&pool) == sssr_received);
 
-        // deposit sSSR into vault (fee deducted here, not at invest)
-        let vault_fee    = sssr_received * 30 / 10_000;
-        let vault_balance_expected = sssr_received - vault_fee;
+        // deposit sSSR into vault (no fee deducted here in V2)
+        let vault_balance_expected = sssr_received;
         let vault = survey_vault::create(
             sssr, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
         );
@@ -85,7 +84,25 @@ fun test_full_lifecycle_a_to_c() {
 
         // register survey
         let mut survey_reg = ts::take_shared<SurveyRegistry>(&sc);
-        survey_registry::register(&mut survey_reg, vault_id, b"survey_hash", &clk, sc.ctx());
+        let questions = vector[
+            survey_registry::new_question(
+                b"q1",
+                b"text",
+                b"What is your name?",
+                vector[],
+                true
+            )
+        ];
+        survey_registry::register(
+            &mut survey_reg,
+            vault_id,
+            b"survey_hash",
+            b"encrypted_content",
+            b"schema_hash",
+            questions,
+            &clk,
+            sc.ctx(),
+        );
         assert!(survey_registry::total_count(&survey_reg) == 1);
         ts::return_shared(survey_reg);
 

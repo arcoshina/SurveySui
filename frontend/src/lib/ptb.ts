@@ -60,6 +60,86 @@ export function estimateFundCost(p: EstimateFundCostParams): EstimateFundCostRes
   return { netSssrBase, grossSssrBase, vaultFeeBase, suiToInvest }
 }
 
+// ── estimate fund cost V2 ─────────────────────────────────────────────────────
+
+export interface EstimateFundCostV2Params {
+  /** sSSR per response, integer in human units. */
+  perResponse: bigint
+  /** Max responses (quota). */
+  maxResponses: number
+  /** Current `Pool.total_sui_invested` in MIST. */
+  totalSuiInvested: bigint
+  /** FeeConfig parameters from Pool. */
+  feeConfig: {
+    totalFeeBps: bigint
+    discountBps: bigint
+  }
+  /** Creator's current sSSR balance in base units. */
+  creatorSssrBalance: bigint
+}
+
+export interface EstimateFundCostV2Result {
+  /** Total sSSR (base units) the vault must hold to satisfy quota. */
+  netSssrBase: bigint
+  /** Effective fee in basis points. */
+  effectiveFeeBps: bigint
+  /** Gross sSSR (base units) the vault needs to have before fee split. */
+  grossSssrBase: bigint
+  /** sSSR (base units) from creator's balance used as offset. */
+  offsetIn: bigint
+  /** New sSSR (base units) to mint. */
+  minted: bigint
+  /** SUI (MIST) to invest into the pool to mint `minted` sSSR. */
+  suiToInvest: bigint
+}
+
+/**
+ * Estimate funding cost V2 for a survey vault.
+ * Handles existing sSSR balance offset and fee config from pool.
+ */
+export function estimateFundCostV2(p: EstimateFundCostV2Params): EstimateFundCostV2Result {
+  const netSssrBase = p.perResponse * BigInt(p.maxResponses) * SSSR_BASE_PER_UNIT
+  const effectiveFeeBps = (p.feeConfig.totalFeeBps * p.feeConfig.discountBps) / 10000n
+
+  if (effectiveFeeBps >= 10000n) {
+    throw new Error('Effective fee rate cannot be 100% or more')
+  }
+
+  // Calculate the required gross sSSR
+  // grossSssrBase - (grossSssrBase * effectiveFeeBps / 10000n) >= netSssrBase
+  let grossSssrBase = (netSssrBase * 10000n) / (10000n - effectiveFeeBps)
+  while (grossSssrBase - (grossSssrBase * effectiveFeeBps) / 10000n < netSssrBase) {
+    grossSssrBase++
+  }
+
+  let offsetIn = 0n
+  let minted = 0n
+
+  if (p.creatorSssrBalance >= grossSssrBase) {
+    offsetIn = grossSssrBase
+    minted = 0n
+  } else {
+    offsetIn = p.creatorSssrBalance
+    minted = grossSssrBase - offsetIn
+  }
+
+  let suiToInvest = 0n
+  if (minted > 0n) {
+    const denom = BONDING_DECAY * INITIAL_SSSR_PER_SUI
+    const numer = minted * (BONDING_DECAY + p.totalSuiInvested)
+    suiToInvest = (numer + denom - 1n) / denom
+  }
+
+  return {
+    netSssrBase,
+    effectiveFeeBps,
+    grossSssrBase,
+    offsetIn,
+    minted,
+    suiToInvest,
+  }
+}
+
 // ── build PTB ─────────────────────────────────────────────────────────────────
 
 export interface BuildCreateSurveyPtbParams {
@@ -68,7 +148,7 @@ export interface BuildCreateSurveyPtbParams {
   ssrTreasuryId: string
   sssrTreasuryId: string
   registryId: string
-  /** Address that receives the 0.3% vault deposit fee. */
+  /** Address that receives the vault deposit fee. */
   adminTreasury: string
   /** sSSR per response, integer in human units. */
   perResponse: bigint
@@ -78,42 +158,44 @@ export interface BuildCreateSurveyPtbParams {
   encryptedContent: Uint8Array
   /** MIST amount of SUI to invest into the pool. */
   suiToSpend: bigint
+
+  // V2 specific parameters (optional for backward compatibility in tests)
+  contentHash?: Uint8Array
+  schemaHash?: Uint8Array
+  questions?: Array<{
+    id: string
+    type: string
+    prompt: string
+    options_json: string[] | null
+    required: boolean
+  }>
+  offsetIn?: bigint
+  creatorSssrCoins?: { coinObjectId: string; balance: string }[]
 }
 
 /**
- * One-click PTB:
- *   1. splitCoins(gas, suiToSpend)                                        → suiCoin
- *   2. amm_pool::invest_and_mint(pool, ssrT, sssrT, suiCoin)              → sssrCoin
- *   3. survey_vault::create(sssrCoin, per, max, deadline, adminTreasury)   → vault
- *   4. survey_vault::id_of(&vault)                                         → vaultId
- *   5. survey_registry::register(registry, vaultId, encryptedContent, clk)
- *   6. survey_vault::share_vault(vault)
- *
- * The three logical steps the spec cares about are 2/3/5
- * (invest_and_mint → create → register); steps 1/4/6 are PTB plumbing.
+ * One-click V2 7-Step PTB:
+ *   1. survey_vault::create_empty                                          → vault
+ *   2. survey_vault::deposit_existing_sssr(vault, offsetCoin)
+ *   3. amm_pool::invest_and_mint (if suiToSpend > 0)                       → mintedCoin
+ *   4. survey_vault::merge_balances(vault, mintedCoin)
+ *   5. survey_vault::split_fee_to_treasury(vault, feeConfig)
+ *   6. survey_registry::register(registry, vaultId, contentHash, ...)
+ *   7. survey_vault::share_vault(vault)
  */
 export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction {
   const tx = new Transaction()
 
-  // 1. carve SUI out of gas
-  const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.suiToSpend)])
+  const contentHash = p.contentHash || new Uint8Array(32)
+  const schemaHash = p.schemaHash || new Uint8Array(32)
+  const questions = p.questions || []
+  const offsetIn = p.offsetIn || 0n
+  const creatorSssrCoins = p.creatorSssrCoins || []
 
-  // 2. invest SUI → mint sSSR
-  const [sssrCoin] = tx.moveCall({
-    target: `${p.packageId}::amm_pool::invest_and_mint`,
-    arguments: [
-      tx.object(p.poolId),
-      tx.object(p.ssrTreasuryId),
-      tx.object(p.sssrTreasuryId),
-      suiCoin,
-    ],
-  })
-
-  // 3. deposit sSSR into a new vault (returns unshared SurveyVault)
+  // 1. Create empty vault
   const [vault] = tx.moveCall({
-    target: `${p.packageId}::survey_vault::create`,
+    target: `${p.packageId}::survey_vault::create_empty`,
     arguments: [
-      sssrCoin,
       tx.pure.u64(p.perResponse * SSSR_BASE_PER_UNIT),
       tx.pure.u64(p.maxResponses),
       tx.pure.u64(p.deadlineMs),
@@ -121,24 +203,127 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     ],
   })
 
-  // 4. read the vault's on-chain ID so we can pass it to register
+  // 2. Deposit existing sSSR offset
+  let offsetCoinInput
+  if (offsetIn > 0n) {
+    if (creatorSssrCoins.length === 0) {
+      throw new Error('No sSSR coins available for offset')
+    }
+    const sortedCoins = [...creatorSssrCoins].sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)))
+    const totalAvailable = sortedCoins.reduce((sum, c) => sum + BigInt(c.balance), 0n)
+    if (totalAvailable < offsetIn) {
+      throw new Error(`Insufficient sSSR balance. Required: ${offsetIn}, Available: ${totalAvailable}`)
+    }
+
+    const primaryCoinId = sortedCoins[0].coinObjectId
+    const primaryCoinInput = tx.object(primaryCoinId)
+
+    let currentSum = BigInt(sortedCoins[0].balance)
+    const coinsToMerge: string[] = []
+    for (let i = 1; i < sortedCoins.length; i++) {
+      if (currentSum >= offsetIn) break
+      coinsToMerge.push(sortedCoins[i].coinObjectId)
+      currentSum += BigInt(sortedCoins[i].balance)
+    }
+
+    if (coinsToMerge.length > 0) {
+      tx.mergeCoins(primaryCoinInput, coinsToMerge.map((id) => tx.object(id)))
+    }
+
+    const [splitCoin] = tx.splitCoins(primaryCoinInput, [tx.pure.u64(offsetIn)])
+    offsetCoinInput = splitCoin
+  } else {
+    const [zeroCoin] = tx.moveCall({
+      target: '0x2::coin::zero',
+      typeArguments: [`${p.packageId}::stacked_survey_reward::STACKED_SURVEY_REWARD`],
+    })
+    offsetCoinInput = zeroCoin
+  }
+
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::deposit_existing_sssr`,
+    arguments: [vault, offsetCoinInput],
+  })
+
+  // 3. Invest & Mint new sSSR
+  let mintedCoin
+  if (p.suiToSpend > 0n) {
+    const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.suiToSpend)])
+    const [newSssrCoin] = tx.moveCall({
+      target: `${p.packageId}::amm_pool::invest_and_mint`,
+      arguments: [
+        tx.object(p.poolId),
+        tx.object(p.ssrTreasuryId),
+        tx.object(p.sssrTreasuryId),
+        suiCoin,
+      ],
+    })
+    mintedCoin = newSssrCoin
+  } else {
+    const [zeroSssr] = tx.moveCall({
+      target: '0x2::coin::zero',
+      typeArguments: [`${p.packageId}::stacked_survey_reward::STACKED_SURVEY_REWARD`],
+    })
+    mintedCoin = zeroSssr
+  }
+
+  // 4. Merge balances
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::merge_balances`,
+    arguments: [vault, mintedCoin],
+  })
+
+  // 5. Split fee to treasury
+  const [feeConfig] = tx.moveCall({
+    target: `${p.packageId}::amm_pool::fee_config`,
+    arguments: [tx.object(p.poolId)],
+  })
+
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::split_fee_to_treasury`,
+    arguments: [vault, feeConfig],
+  })
+
+  // 6. Read vault ID value for register
   const [vaultIdValue] = tx.moveCall({
     target: `${p.packageId}::survey_vault::id_of`,
     arguments: [vault],
   })
 
-  // 5. register survey with encrypted content blob
+  // Build questions vector
+  const questionsArgs = questions.map((q) => {
+    return tx.moveCall({
+      target: `${p.packageId}::survey_registry::new_question`,
+      arguments: [
+        tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.id))),
+        tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.type))),
+        tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.prompt))),
+        tx.pure.vector('vector<u8>', (q.options_json || []).map((opt) => Array.from(new TextEncoder().encode(opt)))),
+        tx.pure.bool(q.required),
+      ],
+    })
+  })
+
+  const questionsVec = tx.makeMoveVec({
+    type: `${p.packageId}::survey_registry::Question`,
+    elements: questionsArgs,
+  })
+
+  // Register survey
   tx.moveCall({
     target: `${p.packageId}::survey_registry::register`,
     arguments: [
       tx.object(p.registryId),
       vaultIdValue,
+      tx.pure.vector('u8', Array.from(contentHash)),
       tx.pure.vector('u8', Array.from(p.encryptedContent)),
+      tx.pure.vector('u8', Array.from(schemaHash)),
+      questionsVec,
       tx.object('0x6'), // Clock
     ],
   })
 
-  // 6. share the vault so respondents can call `claim` on it
+  // 7. Share vault
   tx.moveCall({
     target: `${p.packageId}::survey_vault::share_vault`,
     arguments: [vault],

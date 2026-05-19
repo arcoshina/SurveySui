@@ -19,9 +19,7 @@ const PER_RESPONSE: u64  = 100;
 const MAX_RESPONSES: u64 = 99;   // 99 × 100 = 9 900 ≤ 9 970
 const VAULT_FUND: u64    = 10_000;
 
-// fee = 10_000 × 30 / 10_000 = 30
-const EXPECTED_FEE: u64        = 30;
-const VAULT_BALANCE_AFTER: u64 = VAULT_FUND - EXPECTED_FEE; // 9 970
+const VAULT_BALANCE_AFTER: u64 = VAULT_FUND;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -44,7 +42,7 @@ fun setup(): ts::Scenario {
 
 /// ★ 核心：vault::create / fund 時收手續費送 admin_treasury
 #[test]
-fun test_create_deducts_fee_to_treasury() {
+fun test_create_does_not_deduct_fee() {
     let mut sc = setup();
     let clk = clock::create_for_testing(sc.ctx());
 
@@ -59,12 +57,10 @@ fun test_create_deducts_fee_to_treasury() {
         survey_vault::share_vault(vault);
     };
 
-    // ADMIN (admin_treasury) received the fee
+    // ADMIN (admin_treasury) did NOT receive any fee
     sc.next_tx(ADMIN);
     {
-        let fee_coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
-        assert!(coin::value(&fee_coin) == EXPECTED_FEE);
-        ts::return_to_sender(&sc, fee_coin);
+        assert!(!ts::has_most_recent_for_sender<Coin<STACKED_SURVEY_REWARD>>(&sc));
     };
 
     clock::destroy_for_testing(clk);

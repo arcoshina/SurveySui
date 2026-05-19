@@ -8,6 +8,7 @@ use sui::event;
 use sui::table::{Self, Table};
 use surveysui::stacked_survey_reward::{Self, STACKED_SURVEY_REWARD};
 use surveysui::survey_pass::{Self, SurveyPass};
+use surveysui::amm_pool::{Self, FeeConfig};
 
 const STATUS_OPEN: u8   = 0;
 const STATUS_CLOSED: u8 = 1;
@@ -22,6 +23,7 @@ const EAlreadyClaimed: u64 = 3;
 const EInvalidPass: u64    = 4;
 const EVaultClosed: u64    = 5;
 const EEmptyAnswers: u64   = 6;
+const EInsufficientVaultBalance: u64 = 7;
 
 public struct SurveyClaimed has copy, drop {
     vault_id: ID,
@@ -58,18 +60,9 @@ public fun create(
     admin_treasury: address,
     ctx: &mut TxContext,
 ): SurveyVault {
-    let mut coin = sssr_coin;
-    let total = coin::value(&coin);
-    let fee = total * VAULT_FEE_BPS / 10_000;
-
-    if (fee > 0) {
-        let fee_coin = coin::split(&mut coin, fee, ctx);
-        transfer::public_transfer(fee_coin, admin_treasury);
-    };
-
     SurveyVault {
         id: object::new(ctx),
-        balance: coin::into_balance(coin),
+        balance: coin::into_balance(sssr_coin),
         per_response,
         max_responses,
         deadline_ms,
@@ -87,17 +80,8 @@ public fun share_vault(vault: SurveyVault) {
 }
 
 /// Add more sSSR to the vault. Same fee deducted.
-public fun fund(vault: &mut SurveyVault, sssr_coin: Coin<STACKED_SURVEY_REWARD>, ctx: &mut TxContext) {
-    let mut coin = sssr_coin;
-    let total = coin::value(&coin);
-    let fee = total * VAULT_FEE_BPS / 10_000;
-
-    if (fee > 0) {
-        let fee_coin = coin::split(&mut coin, fee, ctx);
-        transfer::public_transfer(fee_coin, vault.admin_treasury);
-    };
-
-    balance::join(&mut vault.balance, coin::into_balance(coin));
+public fun fund(vault: &mut SurveyVault, sssr_coin: Coin<STACKED_SURVEY_REWARD>, _ctx: &mut TxContext) {
+    balance::join(&mut vault.balance, coin::into_balance(sssr_coin));
 }
 
 /// Respondent claims per_response sSSR from vault.
@@ -148,6 +132,59 @@ public fun close(vault: &mut SurveyVault, ctx: &mut TxContext) {
         transfer::public_transfer(coin, vault.creator);
     };
     vault.status = STATUS_CLOSED;
+}
+
+public fun create_empty(
+    per_response: u64,
+    max_responses: u64,
+    deadline_ms: u64,
+    admin_treasury: address,
+    ctx: &mut TxContext,
+): SurveyVault {
+    SurveyVault {
+        id: object::new(ctx),
+        balance: balance::zero(),
+        per_response,
+        max_responses,
+        deadline_ms,
+        claimed_count: 0,
+        claimed_subs: table::new(ctx),
+        admin_treasury,
+        creator: ctx.sender(),
+        status: STATUS_OPEN,
+    }
+}
+
+public fun deposit_existing_sssr(
+    vault: &mut SurveyVault,
+    sssr_coin: Coin<STACKED_SURVEY_REWARD>,
+) {
+    balance::join(&mut vault.balance, coin::into_balance(sssr_coin));
+}
+
+public fun merge_balances(
+    vault: &mut SurveyVault,
+    new_sssr: Coin<STACKED_SURVEY_REWARD>,
+) {
+    balance::join(&mut vault.balance, coin::into_balance(new_sssr));
+    assert!(balance::value(&vault.balance) >= vault.per_response * vault.max_responses, EInsufficientVaultBalance);
+}
+
+public fun split_fee_to_treasury(
+    vault: &mut SurveyVault,
+    fee_config: &FeeConfig,
+    ctx: &mut TxContext,
+) {
+    let total = balance::value(&vault.balance);
+    let effective_fee_bps = amm_pool::effective(fee_config);
+    let fee = total * (effective_fee_bps as u64) / 10_000;
+    if (fee > 0) {
+        let fee_coin = coin::from_balance(
+            balance::split(&mut vault.balance, fee),
+            ctx,
+        );
+        transfer::public_transfer(fee_coin, vault.admin_treasury);
+    };
 }
 
 // ── view functions ────────────────────────────────────────────────────────────

@@ -8,10 +8,11 @@ use surveysui::survey_sui_reward::{Self, SsrTreasury, SURVEY_SUI_REWARD};
 
 // ── error codes ───────────────────────────────────────────────────────────────
 
-const ENotAdmin: u64          = 0;
-const EZeroAmount: u64        = 1;
-const EInsufficientOutput: u64 = 2;
+const ENotAdmin: u64             = 0;
+const EZeroAmount: u64           = 1;
+const EInsufficientOutput: u64   = 2;
 const EInsufficientLiquidity: u64 = 3;
+const EInvalidFeeConfig: u64     = 4;
 
 // ── bonding curve constants ───────────────────────────────────────────────────
 
@@ -26,7 +27,19 @@ const BONDING_DECAY: u128 = 1_000_000_000_000;
 /// 1 MIST → 1000 sSSR base; 1 SUI (1e9 MIST) → 1e12 sSSR base = 1000 sSSR units.
 const INITIAL_SSSR_PER_SUI: u128 = 1000;
 
+// ── FeeConfig defaults ────────────────────────────────────────────────────────
+
+/// 20% total fee, 50% discount → effective 10%
+const DEFAULT_TOTAL_FEE_BPS: u64 = 2000;
+const DEFAULT_DISCOUNT_BPS: u64  = 5000;
+
 // ── structs ───────────────────────────────────────────────────────────────────
+
+/// Fee configuration: effective_bps = total_fee_bps * discount_bps / 10_000.
+public struct FeeConfig has store, copy, drop {
+    total_fee_bps: u64,
+    discount_bps: u64,
+}
 
 /// Shared bonding-curve pool.
 /// Holds SUI (from creators) and SSR (backing for sSSR in circulation).
@@ -36,6 +49,7 @@ public struct Pool has key {
     ssr_reserve: Balance<SURVEY_SUI_REWARD>,
     total_sui_invested: u128,
     admin: address,
+    fee_config: FeeConfig,
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
@@ -48,7 +62,29 @@ public fun init_pool(admin: address, ctx: &mut TxContext) {
         ssr_reserve: balance::zero(),
         total_sui_invested: 0,
         admin,
+        fee_config: FeeConfig {
+            total_fee_bps: DEFAULT_TOTAL_FEE_BPS,
+            discount_bps: DEFAULT_DISCOUNT_BPS,
+        },
     });
+}
+
+/// Effective fee in basis points: total_fee_bps × discount_bps / 10_000.
+public fun effective(fee: &FeeConfig): u64 {
+    fee.total_fee_bps * fee.discount_bps / 10_000
+}
+
+/// Admin-only: update FeeConfig. Both fields must be ≤ 10_000.
+public fun set_fee_config(
+    pool: &mut Pool,
+    total_fee_bps: u64,
+    discount_bps: u64,
+    ctx: &TxContext,
+) {
+    assert!(ctx.sender() == pool.admin, ENotAdmin);
+    assert!(total_fee_bps <= 10_000, EInvalidFeeConfig);
+    assert!(discount_bps <= 10_000, EInvalidFeeConfig);
+    pool.fee_config = FeeConfig { total_fee_bps, discount_bps };
 }
 
 /// Creator calls this to convert SUI → sSSR (bonding curve, no fee here).
@@ -130,6 +166,9 @@ public fun sui_reserve(pool: &Pool): u64           { balance::value(&pool.sui_re
 public fun ssr_reserve(pool: &Pool): u64           { balance::value(&pool.ssr_reserve) }
 public fun total_sui_invested(pool: &Pool): u128   { pool.total_sui_invested }
 public fun admin(pool: &Pool): address             { pool.admin }
+public fun fee_config(pool: &Pool): &FeeConfig     { &pool.fee_config }
+public fun fee_total_bps(fee: &FeeConfig): u64     { fee.total_fee_bps }
+public fun fee_discount_bps(fee: &FeeConfig): u64  { fee.discount_bps }
 
 // ── internal helpers ──────────────────────────────────────────────────────────
 

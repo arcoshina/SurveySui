@@ -1,0 +1,7 @@
+[
+  { "path": "m/44'/784'/0'/0'/0'", "address": "0xd48810878f36baf94438a91e23fd3021a903371743cd5ff1e0f0a018ef5b84ec" },
+  { "path": "m/44'/784'/1'/0'/0'", "address": "0x18f9b97fe5dd43ff32db0e9b768e88f620b1ffddac548412399f78c0a1873f43" },
+  { "path": "m/44'/784'/2'/0'/0'", "address": "0x5b32cae5a54766ce2ecb430d3ddc2c1793004c198b8bdaec49235b1985146c1c" },
+  { "path": "m/44'/784'/3'/0'/0'", "address": "0x3002777afc913ef1fe6ec489e596cfed12437df08f8e395a2d843dc99a8b816a" },
+  { "path": "m/44'/784'/4'/0'/0'", "address": "0xf51b08480fde1df77dea954c36ab00d1379b3df4b5fd895ebc74f52df4710597" }
+]

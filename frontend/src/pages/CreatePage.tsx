@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit'
 import { renderMarkdown } from '../lib/markdown'
 import { parseFrontmatter } from '../lib/frontmatter'
+import { estimateFundCostV2 } from '../lib/ptb'
+import { formatSssr } from '../lib/format'
 
 const TEMPLATE = `---
 title: "問卷標題"
@@ -21,6 +24,13 @@ questions:
     type: SHORT_ANSWER
     prompt: "有什麼建議？"
     required: false
+  - id: q3
+    type: MULTI_CHOICE
+    prompt: "複選測試"
+    required: false
+    options:
+      - A
+      - B
 ---
 
 在這裡撰寫問卷說明文字...
@@ -40,7 +50,86 @@ export default function CreatePage() {
   const [error, setError] = useState<string | null>(null)
   const [encrypt, setEncrypt] = useState(true)
 
+  const account = useCurrentAccount()
+  const packageId = import.meta.env.VITE_PACKAGE_ID ?? ''
+  const poolId = import.meta.env.VITE_AMM_POOL_ID ?? ''
+
   const parsed = useMemo(() => parseFrontmatter(content), [content])
+
+  const { data: poolData } = useSuiClientQuery(
+    'getObject',
+    { id: poolId, options: { showContent: true } },
+    { enabled: !!poolId },
+  )
+
+  const { data: coinsData } = useSuiClientQuery(
+    'getCoins',
+    {
+      owner: account?.address ?? '',
+      coinType: `${packageId}::stacked_survey_reward::STACKED_SURVEY_REWARD`,
+    },
+    { enabled: !!account && !!packageId },
+  )
+
+  const totalSuiInvested = useMemo<bigint>(() => {
+    if (poolData?.data?.content?.dataType !== 'moveObject') return 0n
+    const fields = (poolData.data.content as { fields: Record<string, string> }).fields
+    return BigInt(fields.total_sui_invested ?? '0')
+  }, [poolData])
+
+  const feeConfig = useMemo(() => {
+    if (poolData?.data?.content?.dataType !== 'moveObject') {
+      return { totalFeeBps: 2000n, discountBps: 5000n }
+    }
+    const fields = (poolData.data.content as { fields: Record<string, any> }).fields
+    const feeFields = fields?.fee_config?.fields
+    if (!feeFields) {
+      return { totalFeeBps: 2000n, discountBps: 5000n }
+    }
+    return {
+      totalFeeBps: BigInt(feeFields.total_fee_bps ?? '2000'),
+      discountBps: BigInt(feeFields.discount_bps ?? '5000'),
+    }
+  }, [poolData])
+
+  const creatorSssrBalance = useMemo(() => {
+    if (!coinsData) return 0n
+    return coinsData.data.reduce((sum, c) => sum + BigInt(c.balance), 0n)
+  }, [coinsData])
+
+  const [costBreakdown, setCostBreakdown] = useState<{
+    netSssrBase: bigint
+    effectiveFeeBps: bigint
+    grossSssrBase: bigint
+    offsetIn: bigint
+    minted: bigint
+    suiToInvest: bigint
+  } | null>(null)
+
+  useEffect(() => {
+    if (!parsed.ok) {
+      setCostBreakdown(null)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      try {
+        const est = estimateFundCostV2({
+          perResponse: BigInt(parsed.data.perResponse),
+          maxResponses: parsed.data.maxResponses,
+          totalSuiInvested,
+          feeConfig,
+          creatorSssrBalance,
+        })
+        setCostBreakdown(est)
+      } catch (e) {
+        console.error(e)
+        setCostBreakdown(null)
+      }
+    }, 200)
+
+    return () => clearTimeout(timer)
+  }, [parsed, totalSuiInvested, feeConfig, creatorSssrBalance])
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -114,10 +203,26 @@ export default function CreatePage() {
                     <span className="font-semibold">deadline：</span>
                     <time dateTime={deadlineIso!}>{deadlineIso}</time>
                   </p>
-                  <p className="text-xs text-gray-600 pt-1">
-                    預估總獎勵：
-                    {parsed.data.perResponse * parsed.data.maxResponses} sSSR
-                  </p>
+                  {costBreakdown && (
+                    <div className="border-t border-blue-200 mt-2 pt-2 space-y-1 text-xs text-gray-700">
+                      <p>
+                        <span className="font-semibold">既有 sSSR 折抵：</span>
+                        <span>{formatSssr(costBreakdown.offsetIn)}</span> sSSR
+                      </p>
+                      <p>
+                        <span className="font-semibold">需新鑄 sSSR (AMM)：</span>
+                        <span>{formatSssr(costBreakdown.minted)}</span> sSSR
+                      </p>
+                      <p>
+                        <span className="font-semibold">平台手續費 (fee)：</span>
+                        <span>{formatSssr(costBreakdown.grossSssrBase * costBreakdown.effectiveFeeBps / 10000n)}</span> sSSR ({Number(costBreakdown.effectiveFeeBps) / 100}%)
+                      </p>
+                      <p className="text-blue-700 font-semibold mt-1">
+                        <span className="font-semibold">預估 SUI 消耗：</span>
+                        <span>{(Number(costBreakdown.suiToInvest) / 1e9).toFixed(4)}</span> SUI
+                      </p>
+                    </div>
+                  )}
                 </>
               ) : (
                 <p className="text-red-600">frontmatter 尚未通過：{parsed.error}</p>

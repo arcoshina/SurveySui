@@ -1,11 +1,8 @@
-const FORBIDDEN_ENV_VARS = ['ADMIN_PRIVATE_KEY', 'SESSION_SECRET', 'DATABASE_URL'] as const
-
 export function assertSecureEnv(): void {
-  for (const key of FORBIDDEN_ENV_VARS) {
-    if (process.env[key]) {
-      throw new Error(
-        `BFF security violation: ${key} must not be set. BFF is stateless and holds no sensitive keys.`,
-      )
-    }
+  if (process.env.SUI_ADMIN_PRIVATE_KEY) {
+    throw new Error('BFF must not hold admin TX key')
+  }
+  if (process.env.SURVEY_PASS_ISSUER_PRIV) {
+    console.log('ticket-only, cannot sign TX')
   }
 }

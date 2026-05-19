@@ -1,28 +1,26 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { assertSecureEnv } from '../src/security.js'
 
-const FORBIDDEN = ['ADMIN_PRIVATE_KEY', 'SESSION_SECRET', 'DATABASE_URL'] as const
-
 // ── test_bff_crashes_if_admin_key_present ─────────────────────────────────────
+// V2 改版：只禁止 SUI_ADMIN_PRIVATE_KEY（INV-7）
 
 describe('test_bff_crashes_if_admin_key_present', () => {
   afterEach(() => {
-    for (const key of FORBIDDEN) delete process.env[key]
+    delete process.env.SUI_ADMIN_PRIVATE_KEY
+    vi.restoreAllMocks()
   })
 
-  it('ADMIN_PRIVATE_KEY 存在時拋出含變數名稱的錯誤', () => {
-    process.env.ADMIN_PRIVATE_KEY = 'super-secret'
-    expect(() => assertSecureEnv()).toThrow('ADMIN_PRIVATE_KEY')
+  it('SUI_ADMIN_PRIVATE_KEY 存在時拋出 INV-7 錯誤', () => {
+    process.env.SUI_ADMIN_PRIVATE_KEY = 'super-secret'
+    expect(() => assertSecureEnv()).toThrow('BFF must not hold admin TX key')
   })
 
-  it('SESSION_SECRET 存在時拋出含變數名稱的錯誤', () => {
-    process.env.SESSION_SECRET = 'some-session-secret'
-    expect(() => assertSecureEnv()).toThrow('SESSION_SECRET')
-  })
-
-  it('DATABASE_URL 存在時拋出含變數名稱的錯誤', () => {
-    process.env.DATABASE_URL = 'postgres://localhost/surveysui'
-    expect(() => assertSecureEnv()).toThrow('DATABASE_URL')
+  it('SURVEY_PASS_ISSUER_PRIV 存在時 log 不拋出', () => {
+    process.env.SURVEY_PASS_ISSUER_PRIV = 'issuer-key'
+    const spy = vi.spyOn(console, 'log')
+    expect(() => assertSecureEnv()).not.toThrow()
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('ticket-only, cannot sign TX'))
+    delete process.env.SURVEY_PASS_ISSUER_PRIV
   })
 })
 
@@ -30,7 +28,8 @@ describe('test_bff_crashes_if_admin_key_present', () => {
 
 describe('test_bff_starts_with_minimal_env', () => {
   beforeEach(() => {
-    for (const key of FORBIDDEN) delete process.env[key]
+    delete process.env.SUI_ADMIN_PRIVATE_KEY
+    delete process.env.SURVEY_PASS_ISSUER_PRIV
   })
 
   it('無禁止變數時不拋出錯誤', () => {

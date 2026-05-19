@@ -8,14 +8,16 @@ import {
   useSuiClient,
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
-import { parseFrontmatter } from '../lib/frontmatter'
+import { parseFrontmatter, parseFullSurveyMarkdown } from '../lib/frontmatter'
+import { renderMarkdown } from '../lib/markdown'
 import {
   buildCreateSurveyPtb,
-  estimateFundCost,
+  estimateFundCostV2,
   extractSurveyIdFromEffects,
   extractVaultIdFromEffects,
   SSSR_BASE_PER_UNIT,
 } from '../lib/ptb'
+import { formatSssr } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
   bytesToBase64url,
@@ -87,20 +89,54 @@ export default function FundPage() {
     { enabled: !!POOL_ID },
   )
 
+  const { data: coinsData } = useSuiClientQuery(
+    'getCoins',
+    {
+      owner: account?.address ?? '',
+      coinType: `${PACKAGE_ID}::stacked_survey_reward::STACKED_SURVEY_REWARD`,
+    },
+    { enabled: !!account && !!PACKAGE_ID },
+  )
+
+  const sssrCoins = useMemo(() => {
+    return coinsData?.data ?? []
+  }, [coinsData])
+
+  const creatorSssrBalance = useMemo(() => {
+    return sssrCoins.reduce((sum, c) => sum + BigInt(c.balance), 0n)
+  }, [sssrCoins])
+
   const totalSuiInvested = useMemo<bigint>(() => {
     if (poolData?.data?.content?.dataType !== 'moveObject') return 0n
     const fields = (poolData.data.content as { fields: Record<string, string> }).fields
     return BigInt(fields.total_sui_invested ?? '0')
   }, [poolData])
 
+  const feeConfig = useMemo(() => {
+    if (poolData?.data?.content?.dataType !== 'moveObject') {
+      return { totalFeeBps: 2000n, discountBps: 5000n }
+    }
+    const fields = (poolData.data.content as { fields: Record<string, any> }).fields
+    const feeFields = fields?.fee_config?.fields
+    if (!feeFields) {
+      return { totalFeeBps: 2000n, discountBps: 5000n }
+    }
+    return {
+      totalFeeBps: BigInt(feeFields.total_fee_bps ?? '2000'),
+      discountBps: BigInt(feeFields.discount_bps ?? '5000'),
+    }
+  }, [poolData])
+
   const cost = useMemo(() => {
     if (!frontmatter?.ok) return null
-    return estimateFundCost({
+    return estimateFundCostV2({
       perResponse: BigInt(frontmatter.data.perResponse),
       maxResponses: frontmatter.data.maxResponses,
       totalSuiInvested,
+      feeConfig,
+      creatorSssrBalance,
     })
-  }, [frontmatter, totalSuiInvested])
+  }, [frontmatter, totalSuiInvested, feeConfig, creatorSssrBalance])
 
   const suiToSpend = cost ? (cost.suiToInvest * SLIPPAGE_NUMER) / SLIPPAGE_DENOM : null
 
@@ -164,6 +200,32 @@ export default function FundPage() {
       return
     }
 
+    const fullSurvey = parseFullSurveyMarkdown(draft.contentMd)
+    if (!fullSurvey.ok) {
+      setErrorMsg(fullSurvey.error)
+      setStatus('error')
+      return
+    }
+
+    const sha256 = async (text: string): Promise<Uint8Array> => {
+      const data = new TextEncoder().encode(text)
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+      return new Uint8Array(hashBuffer)
+    }
+
+    let contentHash: Uint8Array
+    let schemaHash: Uint8Array
+    try {
+      contentHash = await sha256(draft.contentMd)
+      const schemaStr = JSON.stringify(fullSurvey.data.questions || [])
+      schemaHash = await sha256(schemaStr)
+    } catch (err) {
+      console.error('E2E Debug: handleFund hash calculation catch:', err)
+      setErrorMsg('Hash 計算失敗')
+      setStatus('error')
+      return
+    }
+
     let tx
     try {
       tx = buildCreateSurveyPtb({
@@ -178,6 +240,11 @@ export default function FundPage() {
         deadlineMs: BigInt(params.deadlineMs),
         encryptedContent: encryptedBlob,
         suiToSpend,
+        contentHash,
+        schemaHash,
+        questions: fullSurvey.data.questions,
+        offsetIn: cost.offsetIn,
+        creatorSssrCoins: sssrCoins,
       })
     } catch (err) {
       console.error('E2E Debug: handleFund build PTB catch:', err)
@@ -293,11 +360,21 @@ export default function FundPage() {
   }
 
   const sui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4)
-  const sssr = (base: bigint) => (Number(base) / Number(SSSR_BASE_PER_UNIT)).toFixed(4)
+  const sssr = (base: bigint) => formatSssr(base)
 
   return (
     <main className="min-h-screen p-8 max-w-xl mx-auto">
       <h1 className="text-3xl font-bold mb-6">注資問卷金庫</h1>
+
+      {/* 問卷內容預覽 */}
+      <div className="mb-6">
+        <h2 className="text-lg font-bold mb-2 text-gray-800">問卷內容預覽</h2>
+        <div
+          aria-label="markdown 預覽"
+          className="border rounded-xl p-4 max-h-60 overflow-y-auto bg-gray-50 prose max-w-none text-sm"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(draft.contentMd) }}
+        />
+      </div>
 
       <div className="bg-gray-50 border rounded p-4 mb-6 space-y-2 text-sm">
         <p>
@@ -313,9 +390,9 @@ export default function FundPage() {
           {totalSssr} sSSR
         </p>
         <p>
-          <span className="font-semibold">平台手續費（0.3%）：</span>
+          <span className="font-semibold">平台手續費（fee）：</span>
           <span aria-label="platform-fee">
-            {cost ? `${sssr(cost.vaultFeeBase)} sSSR` : '計算中…'}
+            {cost ? `${sssr(cost.grossSssrBase * cost.effectiveFeeBps / 10000n)} sSSR` : '計算中…'}
           </span>
         </p>
         <p>
@@ -325,6 +402,41 @@ export default function FundPage() {
           </span>
         </p>
       </div>
+
+      {cost && (
+        <div className="bg-white border rounded-xl p-6 mb-6 shadow-sm space-y-4 text-sm">
+          <h2 className="text-lg font-bold border-b pb-2 text-gray-800">資金分拆流向</h2>
+          
+          <div className="space-y-4">
+            {/* Section 1: 既有 sSSR 折抵 */}
+            <div className="space-y-1">
+              <h3 className="font-semibold text-gray-700">1. 既有 sSSR 折抵</h3>
+              <p className="text-gray-900 font-mono">抵扣數額: {sssr(cost.offsetIn)} sSSR</p>
+              <p className="text-xs text-gray-500">
+                優先扣除您錢包中已持有的 sSSR 憑證餘額。
+              </p>
+            </div>
+
+            {/* Section 2: AMM 注資 */}
+            <div className="space-y-1">
+              <h3 className="font-semibold text-gray-700">2. AMM 注資</h3>
+              <p className="text-gray-900 font-mono">新購數額: {sssr(cost.minted)} sSSR</p>
+              <p className="text-xs text-gray-500">
+                折抵後仍需通過 AMM 鑄造的 sSSR 數量。
+              </p>
+            </div>
+
+            {/* Section 3: 費率分拆 */}
+            <div className="space-y-1">
+              <h3 className="font-semibold text-gray-700">3. 費率分拆</h3>
+              <p className="text-red-600 font-mono">分拆手續費 (fee): {sssr(cost.grossSssrBase * cost.effectiveFeeBps / 10000n)} sSSR</p>
+              <p className="text-xs text-gray-500">
+                依據 Pool 平台費率 ({Number(cost.effectiveFeeBps) / 100}%) 自動提撥給管理庫。
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="mb-4">
         <ConnectButton />
@@ -340,7 +452,7 @@ export default function FundPage() {
         type="button"
         onClick={handleFund}
         disabled={!account || !suiToSpend || status === 'signing' || status === 'submitting' || status === 'success'}
-        className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50 transition-colors w-full"
       >
         {status === 'signing'
           ? '簽名中…'

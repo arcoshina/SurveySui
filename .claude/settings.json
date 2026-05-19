@@ -88,7 +88,18 @@
       "PowerShell(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 5173,3000 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 1; \\(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 5173,3000 } | Measure-Object\\).Count)",
       "Bash(git mv *)",
       "Bash(git rm *)",
-      "Bash(git reset *)"
+      "Bash(git reset *)",
+      "Bash(node_modules/.bin/tsx src/devAccounts.ts)",
+      "Bash(node_modules/.bin/tsx --eval ' *)",
+      "Bash(node -e ' *)",
+      "Bash(node --input-type=module)",
+      "Bash(node_modules/.bin/tsx src/devAccounts.ts --generate)",
+      "Bash(node --input-type=module --require=\"./node_modules/@mysten/sui\")",
+      "Bash(Select-String \"scure\")",
+      "Bash(node --input-type=commonjs)",
+      "Bash(pnpm --filter @surveysui/frontend test --reporter=verbose)",
+      "Bash(pnpm --filter @surveysui/bff test)",
+      "Bash(pnpm --filter @surveysui/frontend test)"
     ],
     "additionalDirectories": [
       "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui"

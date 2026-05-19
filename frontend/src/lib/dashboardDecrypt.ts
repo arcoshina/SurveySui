@@ -10,6 +10,9 @@
 import type { SuiClient } from '@mysten/sui/client'
 import { decryptAnswers } from './crypto'
 
+import { decodeAnswers } from './answerCodec'
+import type { Question } from './frontmatter'
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /** Mirrors the on-chain SurveyClaimed event fields returned via parsedJson. */
@@ -94,6 +97,8 @@ export async function fetchClaimedEvents(
 export async function decryptAllResponses(
   events: SurveyClaimedEvent[],
   creatorPrivateKey: CryptoKey,
+  questions: Question[],
+  vaultSchemaHash: string | Uint8Array,
 ): Promise<{ responses: DecryptedResponse[]; failed: number }> {
   const responses: DecryptedResponse[] = []
   let failed = 0
@@ -102,7 +107,7 @@ export async function decryptAllResponses(
     try {
       const encryptedBytes = new Uint8Array(ev.encrypted_answers)
       const plaintext = await decryptAnswers(encryptedBytes, creatorPrivateKey)
-      const answers = JSON.parse(plaintext) as Record<string, unknown>
+      const answers = decodeAnswers(plaintext, questions, vaultSchemaHash)
       responses.push({
         respondent: ev.respondent,
         sub_hash: ev.sub_hash,

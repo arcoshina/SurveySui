@@ -6,6 +6,7 @@ import {
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
 import { buildRedeemPtb } from '../lib/ptb'
+import { formatSssr } from '../lib/format'
 
 export default function RedeemPage() {
   const account = useCurrentAccount()
@@ -73,7 +74,7 @@ export default function RedeemPage() {
   }
 
   const formatBalance = (balanceStr: string) => {
-    return (Number(balanceStr) / 1e9).toFixed(4)
+    return formatSssr(balanceStr)
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────

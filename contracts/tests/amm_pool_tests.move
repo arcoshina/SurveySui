@@ -4,7 +4,7 @@ module surveysui::amm_pool_tests;
 use sui::coin::{Self, Coin};
 use sui::sui::SUI;
 use sui::test_scenario as ts;
-use surveysui::amm_pool::{Self, Pool};
+use surveysui::amm_pool::{Self, Pool, FeeConfig};
 use surveysui::stacked_survey_reward::{Self, SssrTreasury, STACKED_SURVEY_REWARD};
 use surveysui::survey_sui_reward::{Self, SsrTreasury, SURVEY_SUI_REWARD};
 
@@ -143,6 +143,113 @@ fun test_non_admin_cannot_withdraw_sui() {
         let mut pool = ts::take_shared<Pool>(&sc);
         let sui_out  = amm_pool::admin_withdraw_sui(&mut pool, 1, sc.ctx()); // ENotAdmin
         coin::burn_for_testing(sui_out);
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+// ── S1.1 AMM / FeeConfig ──────────────────────────────────────────────────────
+
+/// 1 SUI (1e9 MIST) at total_invested=0 mints exactly 1000 sSSR units (1e12 base).
+#[test]
+fun test_initial_ssr_per_sui_one_thousand() {
+    let mut sc = setup();
+    {
+        let mut pool          = ts::take_shared<Pool>(&sc);
+        let mut ssr_treasury  = ts::take_shared<SsrTreasury>(&sc);
+        let mut sssr_treasury = ts::take_shared<SssrTreasury>(&sc);
+
+        let one_sui = 1_000_000_000u64;
+        let sssr = amm_pool::invest_and_mint(
+            &mut pool, &mut ssr_treasury, &mut sssr_treasury,
+            coin::mint_for_testing<SUI>(one_sui, sc.ctx()),
+            sc.ctx(),
+        );
+
+        // 1 SUI → 1000 sSSR units = 1000 × 1e9 base = 1e12
+        assert!(coin::value(&sssr) == 1_000_000_000_000);
+
+        stacked_survey_reward::burn(&mut sssr_treasury, sssr);
+        ts::return_shared(sssr_treasury);
+        ts::return_shared(ssr_treasury);
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+/// init_pool 後 FeeConfig 預設為 total=2000, discount=5000。
+#[test]
+fun test_fee_config_default_values() {
+    let mut sc = setup();
+    {
+        let pool = ts::take_shared<Pool>(&sc);
+        let fee  = amm_pool::fee_config(&pool);
+        assert!(amm_pool::fee_total_bps(fee) == 2000);
+        assert!(amm_pool::fee_discount_bps(fee) == 5000);
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+/// effective() = total × discount / 10_000；驗 5 組輸入。
+#[test]
+fun test_fee_config_effective_formula() {
+    let mut sc = setup();
+    {
+        let mut pool = ts::take_shared<Pool>(&sc);
+
+        // default (2000, 5000) → 1000
+        assert!(amm_pool::effective(amm_pool::fee_config(&pool)) == 1000);
+
+        amm_pool::set_fee_config(&mut pool, 2000, 0, sc.ctx());
+        assert!(amm_pool::effective(amm_pool::fee_config(&pool)) == 0);
+
+        amm_pool::set_fee_config(&mut pool, 2000, 10000, sc.ctx());
+        assert!(amm_pool::effective(amm_pool::fee_config(&pool)) == 2000);
+
+        amm_pool::set_fee_config(&mut pool, 1500, 3000, sc.ctx());
+        assert!(amm_pool::effective(amm_pool::fee_config(&pool)) == 450);
+
+        amm_pool::set_fee_config(&mut pool, 0, 5000, sc.ctx());
+        assert!(amm_pool::effective(amm_pool::fee_config(&pool)) == 0);
+
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+/// 非 admin 呼叫 set_fee_config 必 abort ENotAdmin。
+#[test, expected_failure(abort_code = surveysui::amm_pool::ENotAdmin)]
+fun test_fee_config_setter_admin_only() {
+    let mut sc = setup();
+    sc.next_tx(BOB);
+    {
+        let mut pool = ts::take_shared<Pool>(&sc);
+        amm_pool::set_fee_config(&mut pool, 2000, 5000, sc.ctx()); // ENotAdmin
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+/// total_fee_bps > 10000 必 abort EInvalidFeeConfig。
+#[test, expected_failure(abort_code = surveysui::amm_pool::EInvalidFeeConfig)]
+fun test_fee_config_setter_bounds() {
+    let mut sc = setup();
+    {
+        let mut pool = ts::take_shared<Pool>(&sc);
+        amm_pool::set_fee_config(&mut pool, 10001, 5000, sc.ctx()); // EInvalidFeeConfig
+        ts::return_shared(pool);
+    };
+    sc.end();
+}
+
+/// discount_bps > 10000 也必 abort EInvalidFeeConfig。
+#[test, expected_failure(abort_code = surveysui::amm_pool::EInvalidFeeConfig)]
+fun test_fee_config_setter_bounds_discount_over() {
+    let mut sc = setup();
+    {
+        let mut pool = ts::take_shared<Pool>(&sc);
+        amm_pool::set_fee_config(&mut pool, 2000, 10001, sc.ctx()); // EInvalidFeeConfig
         ts::return_shared(pool);
     };
     sc.end();

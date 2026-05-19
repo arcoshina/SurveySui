@@ -26,7 +26,21 @@ import {
   type SurveyClaimedEvent,
 } from '../lib/dashboardDecrypt'
 import { buildClosePtb, SSSR_BASE_PER_UNIT } from '../lib/ptb'
-import { KEY_DERIVE_MSG, base64urlToBytes, deriveCreatorKeyPair } from '../lib/crypto'
+import { formatSssr } from '../lib/format'
+import { KEY_DERIVE_MSG, base64urlToBytes, deriveCreatorKeyPair, decryptSurveyContent } from '../lib/crypto'
+import { parseFullSurveyMarkdown, type Question } from '../lib/frontmatter'
+import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
+
+const SURVEY_KEY_PREFIX = 'surveysui:survey:'
+
+function normalizeSuiId(id: string): string {
+  if (!id) return ''
+  let cleaned = id.toLowerCase().trim()
+  if (cleaned.startsWith('0x')) {
+    cleaned = cleaned.slice(2)
+  }
+  return cleaned.padStart(64, '0')
+}
 
 function getPackageId(): string {
   return import.meta.env.VITE_PACKAGE_ID ?? ''
@@ -101,6 +115,103 @@ export default function DashboardPage() {
   const events = eventsState.kind === 'loaded' ? eventsState.events : []
   const responseCount = events.length
 
+  // ── 鏈上 survey 物件 ────────────────────────────────────────────────────────
+  const [surveyId, setSurveyId] = useState<string | null>(null)
+  const [surveyData, setSurveyData] = useState<any>(null)
+  const [questions, setQuestions] = useState<Question[] | null>(null)
+  const [schemaHashStr, setSchemaHashStr] = useState<string>('')
+
+  useEffect(() => {
+    if (!vaultId) return
+    let cancelled = false
+    async function resolveSurvey() {
+      if (!suiClient || typeof suiClient.queryEvents !== 'function' || typeof suiClient.getObject !== 'function') return
+      try {
+        console.log('[DashboardPage] Querying on-chain registry events to resolve survey_id...')
+        const events = await suiClient.queryEvents({
+          query: {
+            MoveEventType: `${getPackageId()}::survey_registry::SurveyRegistered`,
+          },
+          limit: 50,
+          order: 'descending',
+        })
+        const hit = events.data.find(
+          (e: any) =>
+            e.parsedJson &&
+            normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(vaultId)
+        )
+        if (hit && !cancelled) {
+          const sId = hit.parsedJson.survey_id
+          setSurveyId(sId)
+          const obj = await suiClient.getObject({
+            id: sId,
+            options: { showContent: true }
+          })
+          if (obj.data && !cancelled) {
+            setSurveyData(obj.data)
+          }
+        }
+      } catch (err) {
+        console.error('[DashboardPage] Failed to resolve survey:', err)
+      }
+    }
+    void resolveSurvey()
+    return () => { cancelled = true }
+  }, [vaultId, suiClient])
+
+  useEffect(() => {
+    if (!surveyData) return
+    const fields = surveyData.content?.fields as any
+    if (!fields) return
+
+    let hashBytes = fields.schema_hash ? normalizeBytes(fields.schema_hash) : new Uint8Array(0)
+    setSchemaHashStr(bytesToHex(hashBytes))
+
+    // Determine contentKey
+    let contentKeyB64 = location.hash.startsWith('#') ? location.hash.slice(1) : ''
+    if (!contentKeyB64) {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i)
+        if (k && k.startsWith(SURVEY_KEY_PREFIX)) {
+          try {
+            const val = JSON.parse(window.localStorage.getItem(k) || '{}')
+            if (val.vaultId === vaultId) {
+              contentKeyB64 = val.contentKeyB64
+              break
+            }
+          } catch {}
+        }
+      }
+    }
+
+    let rawContent = normalizeBytes(fields.encrypted_content)
+
+    async function loadQuestions() {
+      try {
+        if (contentKeyB64) {
+          const keyBytes = base64urlToBytes(contentKeyB64)
+          const dec = await decryptSurveyContent(rawContent, keyBytes)
+          const parsed = parseFullSurveyMarkdown(dec.markdown)
+          if (parsed.ok) {
+            setQuestions(parsed.data.questions)
+          }
+        } else {
+          if (rawContent.length >= 32) {
+            const md = new TextDecoder().decode(rawContent.slice(32))
+            const parsed = parseFullSurveyMarkdown(md)
+            if (parsed.ok) {
+              setQuestions(parsed.data.questions)
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[DashboardPage] Failed to decrypt/parse survey questions:', err)
+      }
+    }
+
+    void loadQuestions()
+  }, [surveyData, vaultId, location.hash])
+
   // ── 解密 ──────────────────────────────────────────────────────────────────
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [decryptStatus, setDecryptStatus] = useState<
@@ -121,7 +232,7 @@ export default function DashboardPage() {
       const sigBytes = base64ToBytes(signature)
       const kp = await deriveCreatorKeyPair(sigBytes)
       setDecryptStatus('decrypting')
-      const { responses } = await decryptAllResponses(events, kp.privateKey)
+      const { responses } = await decryptAllResponses(events, kp.privateKey, questions || [], schemaHashStr || '')
       const s = aggregateStats(responses, events.length)
       setStats(s)
       setDecryptStatus('done')
@@ -178,16 +289,21 @@ export default function DashboardPage() {
 
   // ── 顯示 ──────────────────────────────────────────────────────────────────
   const displayBalanceSssr = vault
-    ? (Number(BigInt(vault.balance)) / Number(SSSR_BASE_PER_UNIT)).toFixed(4)
+    ? formatSssr(vault.balance)
     : null
 
   const chartSections = useMemo(() => {
     if (!stats) return []
-    return Object.entries(stats.questions).map(([qid, q]) => ({
-      qid,
-      data: Object.entries(q.counts).map(([label, count]) => ({ label, count })),
-    }))
-  }, [stats])
+    return Object.entries(stats.questions).map(([qid, q]) => {
+      const question = questions?.find((q) => q.id === qid)
+      const title = question ? `${qid}: ${question.prompt}` : qid
+      return {
+        qid,
+        title,
+        data: Object.entries(q.counts).map(([label, count]) => ({ label, count })),
+      }
+    })
+  }, [stats, questions])
 
   return (
     <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
@@ -257,9 +373,9 @@ export default function DashboardPage() {
           )}
 
           {stats &&
-            chartSections.map(({ qid, data }) => (
+            chartSections.map(({ qid, title, data }) => (
               <div key={qid} className="mb-8">
-                <h2 className="text-lg font-semibold mb-2">{qid}</h2>
+                <h2 className="text-lg font-semibold mb-2">{title}</h2>
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={data}>
                     <CartesianGrid strokeDasharray="3 3" />

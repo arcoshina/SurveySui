@@ -7,6 +7,8 @@ import {
   type SurveyClaimedEvent,
 } from '../lib/dashboardDecrypt'
 import { deriveCreatorKeyPair, encryptAnswers, KEY_DERIVE_MSG } from '../lib/crypto'
+import { encodeAnswers } from '../lib/answerCodec'
+import type { Question } from '../lib/frontmatter'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -16,13 +18,21 @@ async function makeCreatorKeyPair(salt = 'wallet-A') {
   return deriveCreatorKeyPair(sig)
 }
 
+const mockQuestions: Question[] = [
+  { id: 'q1', type: 'single_choice', prompt: 'q1', options_json: [], required: true },
+  { id: 'q2', type: 'single_choice', prompt: 'q2', options_json: [], required: false },
+]
+
+const mockSchemaHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+
 async function makeEncryptedEvent(
   answers: Record<string, unknown>,
   publicKeyBytes: Uint8Array,
   vaultId = '0xvault001',
   respondent = '0xabc',
 ): Promise<SurveyClaimedEvent> {
-  const encrypted = await encryptAnswers(JSON.stringify(answers), publicKeyBytes)
+  const encoded = encodeAnswers(answers as any, mockQuestions, mockSchemaHash)
+  const encrypted = await encryptAnswers(JSON.stringify(encoded), publicKeyBytes)
   return {
     vault_id: vaultId,
     sub_hash: [1, 2, 3],
@@ -40,18 +50,18 @@ describe('T3.3 — Dashboard Decrypt', () => {
       const { publicKeyBytes, privateKey } = await makeCreatorKeyPair()
 
       const events = await Promise.all([
-        makeEncryptedEvent({ q1: 'Good', q2: 4 }, publicKeyBytes, '0xvault', '0x01'),
-        makeEncryptedEvent({ q1: 'Bad', q2: 2 }, publicKeyBytes, '0xvault', '0x02'),
-        makeEncryptedEvent({ q1: 'Good', q2: 5 }, publicKeyBytes, '0xvault', '0x03'),
+        makeEncryptedEvent({ q1: 'Good', q2: '4' }, publicKeyBytes, '0xvault', '0x01'),
+        makeEncryptedEvent({ q1: 'Bad', q2: '2' }, publicKeyBytes, '0xvault', '0x02'),
+        makeEncryptedEvent({ q1: 'Good', q2: '5' }, publicKeyBytes, '0xvault', '0x03'),
       ])
 
-      const { responses, failed } = await decryptAllResponses(events, privateKey)
+      const { responses, failed } = await decryptAllResponses(events, privateKey, mockQuestions, mockSchemaHash)
 
       expect(responses).toHaveLength(3)
       expect(failed).toBe(0)
-      expect(responses[0].answers).toEqual({ q1: 'Good', q2: 4 })
-      expect(responses[1].answers).toEqual({ q1: 'Bad', q2: 2 })
-      expect(responses[2].answers).toEqual({ q1: 'Good', q2: 5 })
+      expect(responses[0].answers).toEqual({ q1: 'Good', q2: '4' })
+      expect(responses[1].answers).toEqual({ q1: 'Bad', q2: '2' })
+      expect(responses[2].answers).toEqual({ q1: 'Good', q2: '5' })
       expect(responses[0].respondent).toBe('0x01')
     })
 
@@ -71,6 +81,8 @@ describe('T3.3 — Dashboard Decrypt', () => {
       const { responses, failed } = await decryptAllResponses(
         [goodEvent, corruptEvent],
         privateKey,
+        mockQuestions,
+        mockSchemaHash,
       )
       expect(responses).toHaveLength(1)
       expect(failed).toBe(1)
@@ -85,7 +97,7 @@ describe('T3.3 — Dashboard Decrypt', () => {
         makeEncryptedEvent({ q1: 'Bad' }, publicKeyBytes),
       ])
 
-      const { responses, failed } = await decryptAllResponses(events, wrongKey)
+      const { responses, failed } = await decryptAllResponses(events, wrongKey, mockQuestions, mockSchemaHash)
       expect(responses).toHaveLength(0)
       expect(failed).toBe(2)
     })
@@ -98,12 +110,12 @@ describe('T3.3 — Dashboard Decrypt', () => {
       const { publicKeyBytes, privateKey } = await makeCreatorKeyPair()
 
       const events = await Promise.all([
-        makeEncryptedEvent({ q1: 'Good', q2: 4 }, publicKeyBytes),
-        makeEncryptedEvent({ q1: 'Bad', q2: 2 }, publicKeyBytes),
-        makeEncryptedEvent({ q1: 'Good', q2: 5 }, publicKeyBytes),
+        makeEncryptedEvent({ q1: 'Good', q2: '4' }, publicKeyBytes),
+        makeEncryptedEvent({ q1: 'Bad', q2: '2' }, publicKeyBytes),
+        makeEncryptedEvent({ q1: 'Good', q2: '5' }, publicKeyBytes),
       ])
 
-      const { responses } = await decryptAllResponses(events, privateKey)
+      const { responses } = await decryptAllResponses(events, privateKey, mockQuestions, mockSchemaHash)
       const stats = aggregateStats(responses, events.length)
 
       expect(stats.total_responses).toBe(3)
@@ -115,12 +127,12 @@ describe('T3.3 — Dashboard Decrypt', () => {
       const { publicKeyBytes, privateKey } = await makeCreatorKeyPair()
 
       const events = await Promise.all([
-        makeEncryptedEvent({ q1: 'Good', q2: 4 }, publicKeyBytes),
-        makeEncryptedEvent({ q1: 'Bad', q2: 2 }, publicKeyBytes),
-        makeEncryptedEvent({ q1: 'Good', q2: 5 }, publicKeyBytes),
+        makeEncryptedEvent({ q1: 'Good', q2: '4' }, publicKeyBytes),
+        makeEncryptedEvent({ q1: 'Bad', q2: '2' }, publicKeyBytes),
+        makeEncryptedEvent({ q1: 'Good', q2: '5' }, publicKeyBytes),
       ])
 
-      const { responses } = await decryptAllResponses(events, privateKey)
+      const { responses } = await decryptAllResponses(events, privateKey, mockQuestions, mockSchemaHash)
       const stats = aggregateStats(responses, events.length)
 
       expect(stats.questions['q1'].counts['Good']).toBe(2)
@@ -145,6 +157,8 @@ describe('T3.3 — Dashboard Decrypt', () => {
       const { responses, failed } = await decryptAllResponses(
         [goodEvent, badEvent],
         privateKey,
+        mockQuestions,
+        mockSchemaHash,
       )
       const stats = aggregateStats(responses, 2)
 

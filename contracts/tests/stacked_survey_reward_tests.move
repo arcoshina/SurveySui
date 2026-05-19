@@ -54,3 +54,14 @@ fun test_burn_reduces_sssr_supply() {
 
     sc.end();
 }
+
+#[test]
+fun test_display_sssr_rounding() {
+    assert!(stacked_survey_reward::display_sssr(1_000_000_001) == 1_000_000_000);
+    assert!(stacked_survey_reward::display_sssr(999_999_999) == 1_000_000_000);
+    assert!(stacked_survey_reward::display_sssr(123_456_789_012) == 123_456_800_000);
+    assert!(stacked_survey_reward::display_sssr(50_000) == 100_000);
+    assert!(stacked_survey_reward::display_sssr(49_999) == 0);
+    assert!(stacked_survey_reward::display_sssr(0) == 0);
+}
+

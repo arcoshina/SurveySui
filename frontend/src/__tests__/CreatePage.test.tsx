@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import CreatePage from '../pages/CreatePage'
 
@@ -11,6 +11,43 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => mockNavigate,
   }
 })
+
+vi.mock('@mysten/dapp-kit', () => ({
+  useCurrentAccount: vi.fn().mockReturnValue({ address: '0x123' }),
+  useSuiClientQuery: vi.fn((queryName) => {
+    if (queryName === 'getObject') {
+      return {
+        data: {
+          data: {
+            content: {
+              dataType: 'moveObject',
+              fields: {
+                total_sui_invested: '0',
+                fee_config: {
+                  fields: {
+                    total_fee_bps: '2000',
+                    discount_bps: '5000',
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if (queryName === 'getCoins') {
+      return {
+        data: {
+          data: [
+            { coinObjectId: '0xcoin1', balance: '5000000000' } // 5 sSSR
+          ]
+        }
+      }
+    }
+    return { data: null }
+  }),
+  ConnectButton: () => null,
+}))
 
 function renderCreatePage() {
   return render(
@@ -99,5 +136,31 @@ describe('CreatePage — T4.2 /create 建立問卷頁', () => {
     expect(stored).not.toBeNull()
     const parsed = JSON.parse(stored!)
     expect(parsed.contentMd).toBe(VALID_FRONTMATTER)
+  })
+
+  it('test_create_page_shows_cost_breakdown_realtime — 即時顯示估計費用', async () => {
+    renderCreatePage()
+
+    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
+    fireEvent.change(editor, { target: { value: VALID_FRONTMATTER } })
+
+    await waitFor(() => {
+      expect(screen.getByText(/既有 sSSR 折抵/i)).toBeInTheDocument()
+      expect(screen.getByText(/需新鑄 sSSR \(AMM\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/平台手續費 \(fee\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/預估 SUI 消耗/i)).toBeInTheDocument()
+    }, { timeout: 1000 })
+  })
+
+  it('test_create_page_preview_plus_fund_combined_step — 整合步驟', async () => {
+    renderCreatePage()
+
+    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
+    fireEvent.change(editor, { target: { value: VALID_FRONTMATTER } })
+
+    const nextBtn = screen.getByRole('button', { name: /下一步：前往注資/ })
+    fireEvent.click(nextBtn)
+
+    expect(mockNavigate).toHaveBeenCalled()
   })
 })

@@ -3,6 +3,8 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    - cron: '0 2 * * *'  # 每日 02:00 UTC 跑 nightly e2e（避開 Devnet 抖動影響 PR gate）
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -114,6 +116,45 @@ jobs:
       - name: Test frontend (Vitest)
         run: pnpm --filter @surveysui/frontend test
 
+      # Playwright e2e 已移至 e2e-nightly job，不在 PR gate 跑
+      # 原因：Devnet 抖動會隨機讓 e2e 失敗，阻塞所有 PR merge
+
+  # ── Nightly E2E（只在 schedule trigger 跑，不在 push/PR）──────────────────
+  e2e-nightly:
+    name: Nightly E2E (Devnet)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    env:
+      SUI_NETWORK: devnet
+      SUI_RPC_URL: https://fullnode.devnet.sui.io:443
+      SUI_PACKAGE_ID: ${{ secrets.SUI_PACKAGE_ID }}
+      AMM_POOL_ID: ${{ secrets.AMM_POOL_ID }}
+      SSR_TREASURY_ID: ${{ secrets.SSR_TREASURY_ID }}
+      SSSR_TREASURY_ID: ${{ secrets.SSSR_TREASURY_ID }}
+      SURVEY_REGISTRY_ID: ${{ secrets.SURVEY_REGISTRY_ID }}
+      PASS_REGISTRY_ID: ${{ secrets.PASS_REGISTRY_ID }}
+      SUI_ADMIN_PRIVATE_KEY: ${{ secrets.SUI_ADMIN_PRIVATE_KEY }}
+      BFF_URL: http://localhost:3100
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start BFF (background)
+        run: |
+          SUI_PACKAGE_ID=$SUI_PACKAGE_ID \
+          SUI_RPC_URL=$SUI_RPC_URL \
+          PORT=3100 \
+          pnpm --filter @surveysui/bff start &
+          sleep 5
+
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -124,5 +165,5 @@ jobs:
       - name: Install Playwright with system deps
         run: pnpm --filter @surveysui/frontend exec playwright install --with-deps chromium
 
-      - name: Test E2E (Playwright)
+      - name: Test E2E Playwright (Devnet)
         run: pnpm --filter @surveysui/frontend test:e2e

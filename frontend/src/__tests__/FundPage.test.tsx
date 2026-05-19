@@ -97,7 +97,7 @@ function renderFundPage(draftId: string) {
 
 describe('ptb lib — T4.3', () => {
   describe('test_ptb_contains_three_commands', () => {
-    it('一鍵 PTB 包含 invest_and_mint / survey_vault::create / survey_registry::register 三個主要 MoveCall', () => {
+    it('一鍵 PTB 包含 V2 七步驟相關主要 MoveCall', () => {
       const tx = buildCreateSurveyPtb({
         packageId: PACKAGE_ID,
         poolId: POOL_ID,
@@ -110,6 +110,11 @@ describe('ptb lib — T4.3', () => {
         deadlineMs: 4102444800000n,
         encryptedContent: new Uint8Array([1, 2, 3, 4]),
         suiToSpend: 10_000_000n, // 0.01 SUI
+        contentHash: new Uint8Array(32),
+        schemaHash: new Uint8Array(32),
+        questions: [],
+        offsetIn: 0n,
+        creatorSssrCoins: [],
       })
 
       const data = tx.getData()
@@ -117,7 +122,10 @@ describe('ptb lib — T4.3', () => {
 
       const targets = moveCalls.map((c) => c.MoveCall?.function)
       expect(targets).toContain('invest_and_mint')
-      expect(targets).toContain('create')
+      expect(targets).toContain('create_empty')
+      expect(targets).toContain('deposit_existing_sssr')
+      expect(targets).toContain('merge_balances')
+      expect(targets).toContain('split_fee_to_treasury')
       expect(targets).toContain('register')
     })
 
@@ -134,6 +142,11 @@ describe('ptb lib — T4.3', () => {
         deadlineMs: 4102444800000n,
         encryptedContent: new Uint8Array([1, 2, 3, 4]),
         suiToSpend: 10_000_000n,
+        contentHash: new Uint8Array(32),
+        schemaHash: new Uint8Array(32),
+        questions: [],
+        offsetIn: 0n,
+        creatorSssrCoins: [],
       })
 
       const data = tx.getData()
@@ -143,7 +156,7 @@ describe('ptb lib — T4.3', () => {
 
       const byFn = (fn: string) => moveCalls.find((m) => m.function === fn)
       expect(byFn('invest_and_mint')?.module).toBe('amm_pool')
-      expect(byFn('create')?.module).toBe('survey_vault')
+      expect(byFn('create_empty')?.module).toBe('survey_vault')
       expect(byFn('register')?.module).toBe('survey_registry')
     })
   })
@@ -259,16 +272,38 @@ describe('FundPage — T4.3 注資頁', () => {
       }),
     } as unknown as ReturnType<typeof useSuiClient>)
 
-    vi.mocked(useSuiClientQuery).mockReturnValue({
-      data: {
-        data: {
-          content: {
-            dataType: 'moveObject',
-            fields: { total_sui_invested: '0' },
+    vi.mocked(useSuiClientQuery).mockImplementation((queryName: string) => {
+      if (queryName === 'getObject') {
+        return {
+          data: {
+            data: {
+              content: {
+                dataType: 'moveObject',
+                fields: {
+                  total_sui_invested: '0',
+                  fee_config: {
+                    fields: {
+                      total_fee_bps: '2000',
+                      discount_bps: '5000',
+                    }
+                  }
+                },
+              },
+            },
           },
-        },
-      },
-    } as ReturnType<typeof useSuiClientQuery>)
+        } as any
+      }
+      if (queryName === 'getCoins') {
+        return {
+          data: {
+            data: [
+              { coinObjectId: '0xcoin1', balance: '10000000000' } // 10 sSSR
+            ]
+          }
+        } as any
+      }
+      return { data: null } as any
+    })
 
     vi.mocked(useSignAndExecuteTransaction).mockReturnValue({
       mutate: vi.fn(),
@@ -381,4 +416,94 @@ describe('FundPage — T4.3 注資頁', () => {
       expect(screen.getByTestId('page-dashboard')).toBeInTheDocument()
     })
   })
+
+  it('test_fund_page_renders_three_sections — 明確渲染出三個資金流區段', () => {
+    writeDraft('draft-ok', validDraftMd())
+    vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xtest' } as any)
+
+    renderFundPage('draft-ok')
+
+    expect(screen.getByText(/既有 sSSR 折抵/i)).toBeInTheDocument()
+    expect(screen.getByText(/AMM 注資/i)).toBeInTheDocument()
+    expect(screen.getByText(/費率分拆/i)).toBeInTheDocument()
+  })
+
+  it('test_fund_page_sends_correct_parameters_to_ptb — 送出時傳遞正確參數呼叫 PTB', async () => {
+    writeDraft('draft-ok', validDraftMd())
+    vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xtest' } as any)
+    
+    const mockPtb = vi.fn().mockReturnValue(new Transaction())
+    vi.mocked(buildCreateSurveyPtb).mockImplementation(mockPtb)
+
+    const mockSign = vi.fn(
+      (_tx: unknown, callbacks: { onSuccess: (r: any) => void }) => {
+        callbacks.onSuccess({
+          digest: 'DIGEST_OK',
+          objectChanges: [],
+        })
+      }
+    )
+    vi.mocked(useSignAndExecuteTransaction).mockReturnValue({
+      mutate: mockSign,
+    } as any)
+
+    renderFundPage('draft-ok')
+
+    const btn = screen.getByRole('button', { name: /一鍵注資/ })
+    fireEvent.click(btn)
+
+    await waitFor(() => {
+      expect(mockPtb).toHaveBeenCalled()
+      const args = mockPtb.mock.calls[0][0]
+      expect(args).toHaveProperty('contentHash')
+      expect(args).toHaveProperty('schemaHash')
+      expect(args).toHaveProperty('questions')
+      expect(args).toHaveProperty('offsetIn')
+      expect(args).toHaveProperty('creatorSssrCoins')
+    })
+  })
+
+  it('test_create_page_breakdown_matches_move_after_submit — submit 前 UI 顯示的數值 == 實際打到鏈上的 PTB 參數', async () => {
+    writeDraft('draft-ok', validDraftMd())
+    vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xtest' } as any)
+
+    const mockPtb = vi.fn().mockReturnValue(new Transaction())
+    vi.mocked(buildCreateSurveyPtb).mockImplementation(mockPtb)
+
+    const mockSign = vi.fn(
+      (_tx: unknown, callbacks: { onSuccess: (r: any) => void }) => {
+        callbacks.onSuccess({
+          digest: 'DIGEST_OK',
+          objectChanges: [],
+        })
+      }
+    )
+    vi.mocked(useSignAndExecuteTransaction).mockReturnValue({
+      mutate: mockSign,
+    } as any)
+
+    renderFundPage('draft-ok')
+
+    // Wait for cost estimation to populate in UI
+    await waitFor(() => {
+      expect(screen.getByText(/抵扣數額: 10.0000 sSSR/i)).toBeInTheDocument()
+    })
+
+    expect(screen.getByText(/新購數額: 1.1111 sSSR/i)).toBeInTheDocument()
+    expect(screen.getByText(/分拆手續費 \(fee\): 1.1111 sSSR/i)).toBeInTheDocument()
+    expect(screen.getByText(/0.0011 SUI/i)).toBeInTheDocument()
+
+    // Click submit
+    const btn = screen.getByRole('button', { name: /一鍵注資/ })
+    fireEvent.click(btn)
+
+    await waitFor(() => {
+      expect(mockPtb).toHaveBeenCalled()
+      const args = mockPtb.mock.calls[0][0]
+      // Matches: offsetIn = 10_000_000_000n, suiToSpend = 1_122_223n
+      expect(args.offsetIn).toBe(10_000_000_000n)
+      expect(args.suiToSpend).toBe(1_122_223n)
+    })
+  })
 })
+

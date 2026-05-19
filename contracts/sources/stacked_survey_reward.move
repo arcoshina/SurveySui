@@ -52,6 +52,12 @@ public fun total_supply(treasury: &SssrTreasury): u64 {
 
 public fun supply_cap(): u64 { TOTAL_SUPPLY_CAP }
 
+public fun display_sssr(amount: u64): u64 {
+    let decimals_to_round = 100000;
+    let half = decimals_to_round / 2;
+    ((amount + half) / decimals_to_round) * decimals_to_round
+}
+
 #[test_only]
 public fun test_init(ctx: &mut TxContext) {
     init(STACKED_SURVEY_REWARD {}, ctx);
