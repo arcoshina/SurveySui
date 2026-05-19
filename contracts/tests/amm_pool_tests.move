@@ -30,13 +30,13 @@ fun setup(): ts::Scenario {
 /// Bonding curve: each successive investment yields fewer sSSR per MIST.
 #[test]
 fun test_bonding_curve_price_increases() {
-    // At total=0 the curve is 1:1
+    // At total=0 the curve mints 1000 sSSR base per MIST (1 SUI → 1000 sSSR).
     let at_zero  = amm_pool::compute_sssr_amount_for_test(1_000_000, 0);
-    assert!(at_zero == 1_000_000);
+    assert!(at_zero == 1_000_000_000);
 
     // After DECAY MIST invested the ratio halves
     let at_decay = amm_pool::compute_sssr_amount_for_test(1_000_000, 1_000_000_000_000);
-    assert!(at_decay == 500_000);
+    assert!(at_decay == 500_000_000);
 
     assert!(at_decay < at_zero);
 }

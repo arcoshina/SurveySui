@@ -29,7 +29,7 @@ cp .env.example .env
 # 填入 SUI_ADMIN_PRIVATE_KEY、SUI_ADMIN_ADDRESS 等必要值
 ```
 
-> 詳細說明見 [SETUP.md](SETUP.md)
+> 詳細說明見 [SETUP.md](docs/SETUP.md)
 
 ### 3. 部署合約與初始化 AMM 池
 
@@ -153,17 +153,16 @@ SurveyVault<SurveySuiReward> (shared object, 由合約驗證後派發)
 
 ## 5 分鐘 Demo
 
-請見 [DEMO_SCRIPT.md](DEMO_SCRIPT.md)
+請見 [DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
 
 ---
 
 ## 開發文件
 
-- [Tasks.md](Tasks.md) — 任務進度（TDD，2026-05-17 架構 pivot 後新版 M0–M6）
-- [MVP_TDD.md](MVP_TDD.md) — 完整需求與架構設計（Sponsored TX + SurveyPass + 質押憑證 + 單向 mint 池）
-- [History/V0/](History/V0/) — pivot 前舊版規劃封存
-- [SETUP.md](SETUP.md) — 開發環境設定
-- [Overflow Tracks/DeFi & Payments.md](Overflow%20Tracks/DeFi%20%26%20Payments.md) — 賽道要求
+- [Tasks.md](docs/Tasks.md) — 任務進度（TDD，2026-05-17 架構 pivot 後新版 M0–M6）
+- [MVP_TDD.md](docs/MVP_TDD.md) — 完整需求與架構設計（Sponsored TX + SurveyPass + 質押憑證 + 單向 mint 池）
+- [SETUP.md](docs/SETUP.md) — 開發環境設定
+- [Overflow Tracks/DeFi & Payments.md](docs/Overflow%20Tracks/DeFi%20%26%20Payments.md) — 賽道要求
 
 ---
 

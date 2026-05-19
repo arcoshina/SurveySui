@@ -5,6 +5,9 @@ import { Transaction } from '@mysten/sui/transactions'
 /** Mirrors `amm_pool::BONDING_DECAY` (1e12 MIST = 1000 SUI). */
 export const BONDING_DECAY = 1_000_000_000_000n
 
+/** Mirrors `amm_pool::INITIAL_SSSR_PER_SUI` (1 MIST → 1000 sSSR base at total=0). */
+export const INITIAL_SSSR_PER_SUI = 1000n
+
 /** Vault fee in basis points (mirrors `survey_vault::VAULT_FEE_BPS`). */
 export const VAULT_FEE_BPS = 30n
 
@@ -36,8 +39,8 @@ export interface EstimateFundCostResult {
 /**
  * Estimate funding cost for a survey vault.
  *
- * Bonding curve: `sssr_out = sui_in * DECAY / (DECAY + total_sui_invested)`.
- * Inverse:       `sui_in   = ceil(sssr_out * (DECAY + total) / DECAY)`.
+ * Bonding curve: `sssr_out = sui_in * INITIAL_SSSR_PER_SUI * DECAY / (DECAY + total_sui_invested)`.
+ * Inverse:       `sui_in   = ceil(sssr_out * (DECAY + total) / (DECAY * INITIAL_SSSR_PER_SUI))`.
  *
  * Vault charges 30 bps on deposit → mint enough gross sSSR so that after
  * the fee the vault still holds at least `perResponse * maxResponses` sSSR.
@@ -49,8 +52,8 @@ export function estimateFundCost(p: EstimateFundCostParams): EstimateFundCostRes
   const grossSssrBase = (netSssrBase * 10_000n + 9_970n - 1n) / 9_970n
   const vaultFeeBase = (grossSssrBase * VAULT_FEE_BPS) / 10_000n
 
-  // suiToInvest = ceil(gross * (DECAY + total) / DECAY)
-  const denom = BONDING_DECAY
+  // suiToInvest = ceil(gross * (DECAY + total) / (DECAY * INITIAL_SSSR_PER_SUI))
+  const denom = BONDING_DECAY * INITIAL_SSSR_PER_SUI
   const numer = grossSssrBase * (BONDING_DECAY + p.totalSuiInvested)
   const suiToInvest = (numer + denom - 1n) / denom
 

@@ -90,6 +90,7 @@ describe('T3.6 — 問卷填答頁', () => {
       data: {
         content: {
           dataType: 'moveObject',
+          type: '0xpkg::survey_registry::Survey',
           fields: {
             vault_id: '0xvault',
             status: 0,
@@ -205,6 +206,7 @@ describe('T3.6 — 問卷填答頁', () => {
       data: {
         content: {
           dataType: 'moveObject',
+          type: '0xpkg::survey_registry::Survey',
           fields: {
             vault_id: '0xvault',
             status: 0,

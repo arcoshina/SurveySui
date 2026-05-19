@@ -84,10 +84,13 @@ export async function dryRunAndSponsorTx(params: {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'unknown', message: 'Sponsorship request failed' }))
-    if (res.status === 422) {
-      throw new Error(`DRY_RUN_REJECTED: ${err.message || 'Simulation aborted'}`)
+    const msg = err.message || `Sponsorship failed with status ${res.status}`
+    // Treat any 422 or server-reported dry-run/move-abort failure as a
+    // pre-flight rejection — the user has not paid gas in this branch.
+    if (res.status === 422 || /dry\s*run|MoveAbort/i.test(msg)) {
+      throw new Error(`DRY_RUN_REJECTED: ${msg}`)
     }
-    throw new Error(err.message || `Sponsorship failed with status ${res.status}`)
+    throw new Error(msg)
   }
 
   const result = await res.json() as SponsoredTxResult

@@ -23,31 +23,31 @@
 
 下表把 [專案目標.md](專案目標.md) §2-4 的三段 Flow 與驗收軸，對應到本檔的架構模組與 [Tasks.md](Tasks.md) 的里程碑。讀架構章節時可回頭對照這張表。
 
-| [專案目標.md](專案目標.md) 章節 | 服務的 Flow | 落在哪個架構模組 | 對應 [Tasks.md](Tasks.md) 里程碑 |
-|---|---|---|---|
-| §2 Flow A：發起者建「問卷＋獎勵」 | A | Frontend `/create`、`/fund/:id`；Move `amm_pool::invest_and_mint`、`survey_vault::create`、`survey_registry::register` | M1（合約）、M4（前端）、M6（E2E） |
-| §3 Flow B：受訪者填答 & 拿質押憑證 | B | Frontend `/s/:id`、`/redeem`；Gas Station（Sponsored TX）；Move `survey_pass::verify`、`survey_vault::claim`、`staked_survey_reward::mint` | M1、M2（Sponsored TX）、M3（加密答案）、M4 |
-| §4 Flow C：活動結束 & 收尾 | C | Frontend `/dashboard`；BFF stats 聚合；Move `survey_vault::close`、`amm_pool::admin_withdraw_sui` | M1、M4、M5（BFF）、M6 |
-| §MVP 要證明什麼 #1 零門檻 | B | Gas Station + Dry Run 整條路徑 | M2 |
-| §MVP 要證明什麼 #2 防女巫 | B | `survey_pass` + 合約純鏈上驗證 | M1 |
-| §MVP 要證明什麼 #3 代幣經濟 | A+B+C | `amm_pool` + `staked_survey_reward` + `survey_sui_reward` 全鏈路 | M1 + M6 |
-| §MVP 要證明什麼 #4 Markdown 問卷 | A | Frontend Markdown editor + YAML parse | M4 |
+| [專案目標.md](專案目標.md) 章節    | 服務的 Flow | 落在哪個架構模組                                                                                                                           | 對應 [Tasks.md](Tasks.md) 里程碑           |
+| ---------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| §2 Flow A：發起者建「問卷＋獎勵」  | A           | Frontend `/create`、`/fund/:id`；Move `amm_pool::invest_and_mint`、`survey_vault::create`、`survey_registry::register`                     | M1（合約）、M4（前端）、M6（E2E）          |
+| §3 Flow B：受訪者填答 & 拿質押憑證 | B           | Frontend `/s/:id`、`/redeem`；Gas Station（Sponsored TX）；Move `survey_pass::verify`、`survey_vault::claim`、`staked_survey_reward::mint` | M1、M2（Sponsored TX）、M3（加密答案）、M4 |
+| §4 Flow C：活動結束 & 收尾         | C           | Frontend `/dashboard`；BFF stats 聚合；Move `survey_vault::close`、`amm_pool::admin_withdraw_sui`                                          | M1、M4、M5（BFF）、M6                      |
+| §MVP 要證明什麼 #1 零門檻          | B           | Gas Station + Dry Run 整條路徑                                                                                                             | M2                                         |
+| §MVP 要證明什麼 #2 防女巫          | B           | `survey_pass` + 合約純鏈上驗證                                                                                                             | M1                                         |
+| §MVP 要證明什麼 #3 代幣經濟        | A+B+C       | `amm_pool` + `staked_survey_reward` + `survey_sui_reward` 全鏈路                                                                           | M1 + M6                                    |
+| §MVP 要證明什麼 #4 Markdown 問卷   | A           | Frontend Markdown editor + YAML parse                                                                                                      | M4                                         |
 
 ---
 
 ## 已對齊的設計決策
 
-| 議題 | 決策 | 理由 |
-|---|---|---|
-| 網路 | **Devnet only**（合約參數化以便未來上 mainnet） | 2026-05-17 pivot：MVP 部署目標為 Devnet；跨網路橋接成本太高 |
-| 受訪者 UX | **Sponsored Transactions（Gas Station 代付）** + 合約 Dry Run 防惡意消耗 | [專案目標.md §MVP 要證明什麼 #1](專案目標.md)；受訪者 0 餘額也能填 |
-| 女巫防護 | **`SurveyPass` 物件 + 純驗證不消耗** | [專案目標.md §MVP 要證明什麼 #2](專案目標.md)；同一通行證可用於多份問卷，合約只檢查持有與資格、不銷毀物件 |
-| 獎勵代幣 | **`SurveySuiReward`（fungible coin）+ `stakedSurveySuiReward`（質押憑證物件）** | [專案目標.md §MVP 要證明什麼 #3](專案目標.md)；憑證模型把「填答」與「兌換」解耦，方便未來做空投/批次發放 |
-| AMM 池機制 | **單向 mint pool**：發起者投 SUI → 池依價 mint 增發 `SurveySuiReward` → 池中 SUI 累積；admin-only 提領 SUI；手續費入 admin treasury（可賣或燒） | [專案目標.md §MVP 要證明什麼 #3](專案目標.md)；bonding-curve 式 — 池子越大代幣越貴；不對稱設計避開 CPMM 套利風險 |
-| 問卷結果上鏈 | **加密上鏈**（鏈下解密讀取，[專案目標.md §4 step 4](專案目標.md)） | 取代舊版「只上 hash」；加密方案 M3 開工前確認（Seal vs 對稱加密 + 鏈下分發） |
-| 問卷格式 | **Markdown + YAML frontmatter** → 前端 parse → 加密後上鏈 | [專案目標.md §MVP 要證明什麼 #4](專案目標.md) |
-| 後端角色 | **無狀態 BFF**：合約是真理來源；BFF 只做統計聚合 / OG meta / RPC 快取；**不持 admin key、不簽交易、不存業務資料** | [專案目標.md §MVP 要證明什麼 #2](專案目標.md) 要求「去除中心化後端依賴」；BFF 掛掉只影響顯示速度，不影響資產與資格驗證 |
-| 登入 | 連 Sui Wallet（含 zkLogin 錢包）；MVP 不自建 zkLogin verifier，沿用錢包 SDK 內建支援 | 配合「移除中心化後端依賴」原則 |
+| 議題         | 決策                                                                                                                                            | 理由                                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 網路         | **Devnet only**（合約參數化以便未來上 mainnet）                                                                                                 | 2026-05-17 pivot：MVP 部署目標為 Devnet；跨網路橋接成本太高                                                            |
+| 受訪者 UX    | **Sponsored Transactions（Gas Station 代付）** + 合約 Dry Run 防惡意消耗                                                                        | [專案目標.md §MVP 要證明什麼 #1](專案目標.md)；受訪者 0 餘額也能填                                                     |
+| 女巫防護     | **`SurveyPass` 物件 + 純驗證不消耗**                                                                                                            | [專案目標.md §MVP 要證明什麼 #2](專案目標.md)；同一通行證可用於多份問卷，合約只檢查持有與資格、不銷毀物件              |
+| 獎勵代幣     | **`SurveySuiReward`（fungible coin）+ `stakedSurveySuiReward`（質押憑證物件）**                                                                 | [專案目標.md §MVP 要證明什麼 #3](專案目標.md)；憑證模型把「填答」與「兌換」解耦，方便未來做空投/批次發放               |
+| AMM 池機制   | **單向 mint pool**：發起者投 SUI → 池依價 mint 增發 `SurveySuiReward` → 池中 SUI 累積；admin-only 提領 SUI；手續費入 admin treasury（可賣或燒） | [專案目標.md §MVP 要證明什麼 #3](專案目標.md)；bonding-curve 式 — 池子越大代幣越貴；不對稱設計避開 CPMM 套利風險       |
+| 問卷結果上鏈 | **加密上鏈**（鏈下解密讀取，[專案目標.md §4 step 4](專案目標.md)）                                                                              | 取代舊版「只上 hash」；加密方案 M3 開工前確認（Seal vs 對稱加密 + 鏈下分發）                                           |
+| 問卷格式     | **Markdown + YAML frontmatter** → 前端 parse → 加密後上鏈                                                                                       | [專案目標.md §MVP 要證明什麼 #4](專案目標.md)                                                                          |
+| 後端角色     | **無狀態 BFF**：合約是真理來源；BFF 只做統計聚合 / OG meta / RPC 快取；**不持 admin key、不簽交易、不存業務資料**                               | [專案目標.md §MVP 要證明什麼 #2](專案目標.md) 要求「去除中心化後端依賴」；BFF 掛掉只影響顯示速度，不影響資產與資格驗證 |
+| 登入         | 連 Sui Wallet（含 zkLogin 錢包）；MVP 不自建 zkLogin verifier，沿用錢包 SDK 內建支援                                                            | 配合「移除中心化後端依賴」原則                                                                                         |
 
 ---
 
@@ -135,28 +135,28 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
 
 ## Move 模組規格
 
-| 模組 | 職責 | 關鍵函式 |
-|---|---|---|
-| `survey_sui_reward` | `Coin<SurveySuiReward>` 定義；TreasuryCap 僅 `amm_pool` 可呼叫 mint | `init_treasury` / `mint_for_pool` |
-| `staked_survey_reward` | 質押憑證物件（含 amount、issued_at、source vault id）；可被 pool 銷毀換 `SurveySuiReward` | `mint` / `burn_for_redeem` |
-| `survey_pass` | 通行證 NFT（不可轉移：no `store`）；admin issue/revoke；合約純驗證 `is_valid` | `issue` / `revoke` / `is_valid` |
-| `survey_vault` | 問卷預算 + 領取狀態；`claim` 驗證 `survey_pass` + 未填答 + 名額 | `create` / `claim` / `close` |
-| `amm_pool` | 單向 mint 池：SUI in → mint SSR；admin-only `withdraw_sui`；redeem 質押憑證 | `invest_and_mint` / `redeem` / `admin_withdraw_sui` |
-| `survey_registry` | 註冊問卷 metadata + 加密內容 hash；活動結束事件 | `register` / `mark_closed` |
+| 模組                   | 職責                                                                                      | 關鍵函式                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `survey_sui_reward`    | `Coin<SurveySuiReward>` 定義；TreasuryCap 僅 `amm_pool` 可呼叫 mint                       | `init_treasury` / `mint_for_pool`                   |
+| `staked_survey_reward` | 質押憑證物件（含 amount、issued_at、source vault id）；可被 pool 銷毀換 `SurveySuiReward` | `mint` / `burn_for_redeem`                          |
+| `survey_pass`          | 通行證 NFT（不可轉移：no `store`）；admin issue/revoke；合約純驗證 `is_valid`             | `issue` / `revoke` / `is_valid`                     |
+| `survey_vault`         | 問卷預算 + 領取狀態；`claim` 驗證 `survey_pass` + 未填答 + 名額                           | `create` / `claim` / `close`                        |
+| `amm_pool`             | 單向 mint 池：SUI in → mint SSR；admin-only `withdraw_sui`；redeem 質押憑證               | `invest_and_mint` / `redeem` / `admin_withdraw_sui` |
+| `survey_registry`      | 註冊問卷 metadata + 加密內容 hash；活動結束事件                                           | `register` / `mark_closed`                          |
 
 ---
 
 ## TDD 策略
 
-| 層級 | 工具 | 跑在哪 |
-|---|---|---|
-| Move 單元 | `sui move test` | CI + 本機 |
-| Move 整合 | `sui move test (test_scenario)` 全 Flow A→B→C atomic | CI + 本機 |
-| Sponsored TX 整合 | Vitest + Gas Station Devnet sandbox（dry-run reject 路徑） | 手動 / nightly |
-| 加密答案 | Vitest 對稱加密 round-trip；鏈下解密一致性 | CI |
-| Frontend unit | Vitest + React Testing Library | CI |
-| BFF unit | Vitest（無 admin key 啟動檢查、stats 聚合純函式） | CI |
-| E2E（真合約） | Playwright + Devnet + 真 Gas Station | 手動 / pre-demo |
+| 層級              | 工具                                                       | 跑在哪          |
+| ----------------- | ---------------------------------------------------------- | --------------- |
+| Move 單元         | `sui move test`                                            | CI + 本機       |
+| Move 整合         | `sui move test (test_scenario)` 全 Flow A→B→C atomic       | CI + 本機       |
+| Sponsored TX 整合 | Vitest + Gas Station Devnet sandbox（dry-run reject 路徑） | 手動 / nightly  |
+| 加密答案          | Vitest 對稱加密 round-trip；鏈下解密一致性                 | CI              |
+| Frontend unit     | Vitest + React Testing Library                             | CI              |
+| BFF unit          | Vitest（無 admin key 啟動檢查、stats 聚合純函式）          | CI              |
+| E2E（真合約）     | Playwright + Devnet + 真 Gas Station                       | 手動 / pre-demo |
 
 **TDD 原則**：每個 task 先在 PR 提交「失敗的測試」，再提交「實作 + 測試通過」。
 
@@ -167,19 +167,6 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
 - **防重複填答**：相同 (vault, sub_hash) 第二次 claim 必失敗
 - **Gas Station 防破產**：無效 PTB 在 dry-run 階段被拒，sponsor key 不簽名
 - **BFF 無權限**：BFF 啟動時不需要也不接受 admin key；任何寫操作都會被合約拒絕
-
----
-
-## 已知 Limitations（v2 roadmap，明確排除於 MVP）
-
-- ❌ Devnet ↔ Mainnet 跨網路橋
-- ❌ 多階段獎勵（前 100 名 10 token，101–1000 名 1 token...）
-- ❌ AI 輔助 Markdown 編輯 / RAG 建議
-- ❌ 進階參與條件（國籍、年齡、UID、邀請碼、白名單）
-- ❌ 匿名化投票（[專案目標.md](專案目標.md) §MVP 方向 #5，與 SurveyPass 防女巫衝突，需更深 zk 設計）
-- ❌ `SurveySuiReward` → SUI 反向 swap（MVP 池為單向 mint，僅 admin 提領 SUI；反向需另一條 CPMM 路徑）
-- ❌ 追加金額／更新活動條件
-- ❌ 鏈下 indexer / 子圖（MVP 以 BFF 直接 query RPC 為主）
 
 ---
 

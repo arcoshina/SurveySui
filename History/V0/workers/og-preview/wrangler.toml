@@ -1,7 +1,0 @@
-name = "surveysui-og-preview"
-main = "src/index.ts"
-compatibility_date = "2025-01-01"
-
-[vars]
-SITE_URL = "https://surveysui.xyz"
-# BACKEND_URL 在 Cloudflare Dashboard 設定（避免寫死到版本控制）

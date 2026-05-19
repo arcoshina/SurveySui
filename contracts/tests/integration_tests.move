@@ -67,9 +67,9 @@ fun test_full_lifecycle_a_to_c() {
             &mut pool, &mut ssr_treasury, &mut sssr_treasury, sui_in, sc.ctx(),
         );
         let sssr_received = coin::value(&sssr);
-        assert!(sssr_received == SUI_INVEST); // 1:1 at total=0
+        assert!(sssr_received == SUI_INVEST * 1000); // 1 MIST → 1000 sSSR base at total=0
 
-        // pool absorbed the SUI and minted 1:1 SSR backing
+        // pool absorbed the SUI and minted sssr_received SSR backing
         assert!(amm_pool::sui_reserve(&pool) == SUI_INVEST);
         assert!(amm_pool::ssr_reserve(&pool) == sssr_received);
 

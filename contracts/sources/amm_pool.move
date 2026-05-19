@@ -18,10 +18,13 @@ const EInsufficientLiquidity: u64 = 3;
 /// Redemption fee: 0.3% in basis points.
 const REDEEM_FEE_BPS: u64 = 30;
 
-/// Bonding curve: sssr_base = sui_mist * DECAY / (DECAY + total_sui_mist)
-/// Initial ratio: 1 MIST → 1 sSSR base (1 SUI → 1 sSSR with matching 9 decimals).
-/// Price halves after DECAY MIST (1_000_000_000_000 = 1000 SUI) has been invested.
+/// Bonding curve: sssr_base = sui_mist * INITIAL_SSSR_PER_SUI * DECAY / (DECAY + total_sui_mist)
+/// Initial ratio: 1 SUI → 1000 sSSR (price halves after DECAY MIST = 1000 SUI invested).
 const BONDING_DECAY: u128 = 1_000_000_000_000;
+
+/// Initial sSSR base units minted per MIST of SUI at total_invested = 0.
+/// 1 MIST → 1000 sSSR base; 1 SUI (1e9 MIST) → 1e12 sSSR base = 1000 sSSR units.
+const INITIAL_SSSR_PER_SUI: u128 = 1000;
 
 // ── structs ───────────────────────────────────────────────────────────────────
 
@@ -130,13 +133,14 @@ public fun admin(pool: &Pool): address             { pool.admin }
 
 // ── internal helpers ──────────────────────────────────────────────────────────
 
-/// Bonding curve: sssr_base = sui_mist * DECAY / (DECAY + total_sui_mist)
+/// Bonding curve: sssr_base = sui_mist * INITIAL_SSSR_PER_SUI * DECAY / (DECAY + total_sui_mist)
 /// Uses u256 intermediates to prevent overflow with large reserves.
 fun compute_sssr_amount(sui_mist: u64, total_invested_mist: u128): u64 {
     let si   = sui_mist as u256;
     let decay = BONDING_DECAY as u256;
     let total = total_invested_mist as u256;
-    let num = si * decay;
+    let mult = INITIAL_SSSR_PER_SUI as u256;
+    let num = si * mult * decay;
     let den = decay + total;
     (num / den) as u64
 }

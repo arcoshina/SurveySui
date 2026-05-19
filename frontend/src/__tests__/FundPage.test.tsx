@@ -14,6 +14,7 @@ import FundPage from '../pages/FundPage'
 
 vi.mock('@mysten/dapp-kit', () => ({
   useCurrentAccount: vi.fn(),
+  useSuiClient: vi.fn(),
   useSignAndExecuteTransaction: vi.fn(),
   useSignPersonalMessage: vi.fn(),
   useSuiClientQuery: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock('../lib/crypto', () => ({
 
 import {
   useCurrentAccount,
+  useSuiClient,
   useSignAndExecuteTransaction,
   useSignPersonalMessage,
   useSuiClientQuery,
@@ -193,10 +195,10 @@ describe('ptb lib — T4.3', () => {
   })
 
   describe('estimateFundCost', () => {
-    it('bonding curve 初始狀態（total_invested = 0）：mint sSSR 1:1 對應 SUI', () => {
+    it('bonding curve 初始狀態（total_invested = 0）：1 SUI → 1000 sSSR', () => {
       // perResponse=2, max=5 → 需 vault 內持有 10 sSSR（base units 含 9 decimals）
       // 因 vault 抽 0.3% 費用，須先 mint 約 10 / 0.997 = 10.0301 sSSR
-      // total_invested=0 時 ratio=1:1，故 SUI ≈ 10.0301
+      // total_invested=0 時 1 SUI = 1000 sSSR，故 SUI ≈ 0.01003 SUI
       const result = estimateFundCost({
         perResponse: 2n,
         maxResponses: 5,
@@ -206,8 +208,9 @@ describe('ptb lib — T4.3', () => {
       // grossSssr = ceil(1e10 * 10000 / 9970) = ceil(10_030_090_270.81...) = 10_030_090_271
       expect(result.grossSssrBase).toBe(10_030_090_271n)
       expect(result.vaultFeeBase).toBe(30_090_270n) // 0.3% of grossSssr
-      // 初始狀態 SUI = grossSssr（1:1）
-      expect(result.suiToInvest).toBe(10_030_090_271n)
+      // 初始狀態 SUI = ceil(grossSssr / 1000) MIST
+      // 10_030_090_271 / 1000 = 10_030_090.271 → ceil = 10_030_091 MIST ≈ 0.01003 SUI
+      expect(result.suiToInvest).toBe(10_030_091n)
     })
 
     it('total_invested 增加後，相同 sSSR 需要更多 SUI', () => {
@@ -231,6 +234,30 @@ describe('ptb lib — T4.3', () => {
 describe('FundPage — T4.3 注資頁', () => {
   beforeEach(() => {
     window.localStorage.clear()
+
+    vi.mocked(useSuiClient).mockReturnValue({
+      getTransactionBlock: vi.fn().mockResolvedValue({
+        events: [
+          {
+            type: '0xpkg::survey_registry::SurveyRegistered',
+            parsedJson: { vault_id: VAULT_ID, survey_id: SURVEY_ID },
+          },
+        ],
+        objectChanges: [
+          {
+            type: 'created',
+            objectId: VAULT_ID,
+            objectType: `${import.meta.env.VITE_PACKAGE_ID ?? ''}::survey_vault::SurveyVault`,
+          },
+          {
+            type: 'created',
+            objectId: SURVEY_ID,
+            objectType: `${import.meta.env.VITE_PACKAGE_ID ?? ''}::survey_registry::Survey`,
+          },
+        ],
+        effects: { status: { status: 'success' } },
+      }),
+    } as unknown as ReturnType<typeof useSuiClient>)
 
     vi.mocked(useSuiClientQuery).mockReturnValue({
       data: {

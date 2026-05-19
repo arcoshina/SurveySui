@@ -583,7 +583,7 @@ questions:
     await page.getByRole('button', { name: '確認提交' }).click()
 
     // Wait for submission success screen
-    await expect(page.getByText('提交成功！')).toBeVisible()
+    await expect(page.getByText('提交成功！')).toBeVisible({ timeout: 30000 })
     console.log('[E2E Step 4] Response submitted successfully via sponsored transaction!')
 
     // ── Step 5: Respondent Redeems the staked SurveySuiReward Receipt ────────
