@@ -99,7 +99,17 @@
       "Bash(node --input-type=commonjs)",
       "Bash(pnpm --filter @surveysui/frontend test --reporter=verbose)",
       "Bash(pnpm --filter @surveysui/bff test)",
-      "Bash(pnpm --filter @surveysui/frontend test)"
+      "Bash(pnpm --filter @surveysui/frontend test)",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\frontend\" -Recurse -Directory | Select-Object -ExpandProperty FullName | ForEach-Object { $_.Replace\\(\"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\\", \"\"\\) } | Sort-Object)",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\bff\" -Recurse -Directory | Select-Object -ExpandProperty FullName | ForEach-Object { $_.Replace\\(\"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\\", \"\"\\) } | Sort-Object)",
+      "Bash(grep -E \"\\\\.ts$|\\\\.tsx$\")",
+      "Bash(pnpm -F frontend test DashboardPage --reporter=verbose)",
+      "Bash(pnpm -F frontend test --reporter=verbose)",
+      "PowerShell($files = @\\('crypto.ts', 'format.ts', 'ptb.ts', 'dashboardDecrypt.ts', 'answerCodec.ts', 'markdown.ts', 'frontmatter.ts', 'sponsoredTx.ts'\\); foreach \\($f in $files\\) { Write-Host \"=== $f ===\" -ForegroundColor Cyan; Select-String -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\frontend\\\\src\\\\lib\\\\$f\" -Pattern '^export\\\\s+\\(function|interface|type|const|class\\)' | ForEach-Object { $_.Line.Trim\\(\\) } })",
+      "PowerShell(Select-String -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\frontend\\\\src\\\\lib\\\\dashboardDecrypt.ts\" -Pattern '^export' | ForEach-Object { $_.Line })",
+      "Bash(pnpm -F frontend test DashboardPage --run)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ],
     "additionalDirectories": [
       "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui"

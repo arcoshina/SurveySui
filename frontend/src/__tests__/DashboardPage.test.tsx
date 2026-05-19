@@ -67,6 +67,9 @@ const PACKAGE_ID = '0x' + 'aa'.repeat(32)
 const VAULT_ID = '0x' + 'bb'.repeat(32)
 const CREATOR = '0x' + 'cc'.repeat(32)
 const OTHER = '0x' + 'dd'.repeat(32)
+const SURVEY_ID = '0x' + 'ee'.repeat(32)
+const CREATOR_2 = '0x' + 'ff'.repeat(32)
+const VAULT_ID_2 = '0x' + '11'.repeat(32)
 
 vi.stubEnv('VITE_PACKAGE_ID', PACKAGE_ID)
 
@@ -97,6 +100,13 @@ function mockVaultObject(overrides: Partial<{
     },
     refetch: vi.fn(),
   }
+}
+
+function mockSuiClientWithEvents(events: { parsedJson: Record<string, string> }[]) {
+  vi.mocked(useSuiClient).mockReturnValue({
+    queryEvents: vi.fn().mockResolvedValue({ data: events }),
+    getObject: vi.fn().mockResolvedValue({ data: null }),
+  } as unknown as ReturnType<typeof useSuiClient>)
 }
 
 function renderDashboard(vaultId = VAULT_ID, hash = '') {
@@ -193,7 +203,7 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
       expect(btn).not.toBeDisabled()
     })
 
-    it('當前錢包非 creator 時，結束活動按鈕 disabled', async () => {
+    it('當前錢包非 creator 時，結束活動按鈕不在 DOM', async () => {
       vi.mocked(useCurrentAccount).mockReturnValue(
         { address: OTHER } as ReturnType<typeof useCurrentAccount>,
       )
@@ -201,17 +211,16 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
       renderDashboard()
 
       await screen.findByLabelText('response-count')
-      const btn = screen.getByRole('button', { name: /結束活動/ })
-      expect(btn).toBeDisabled()
+      expect(screen.queryByRole('button', { name: /結束活動/ })).not.toBeInTheDocument()
     })
 
-    it('未連線錢包時結束活動按鈕 disabled', async () => {
+    it('未連線錢包時結束活動按鈕不在 DOM', async () => {
       vi.mocked(useCurrentAccount).mockReturnValue(null)
 
       renderDashboard()
 
       await screen.findByLabelText('response-count')
-      expect(screen.getByRole('button', { name: /結束活動/ })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: /結束活動/ })).not.toBeInTheDocument()
     })
 
     it('vault 已 CLOSED 時即便是 creator 也 disabled', async () => {
@@ -248,6 +257,173 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
           vaultId: VAULT_ID,
         })
         expect(mutate).toHaveBeenCalled()
+      })
+    })
+  })
+
+  // ── S3.3：三個 TDD 規格測試 ───────────────────────────────────────────────
+
+  describe('test_close_button_visible_for_creator', () => {
+    it('creator 連線且 vault ACTIVE 時按鈕可見', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
+      )
+
+      renderDashboard()
+
+      await screen.findByLabelText('response-count')
+      expect(screen.getByRole('button', { name: /結束活動/ })).toBeInTheDocument()
+    })
+  })
+
+  describe('test_close_button_hidden_for_non_creator', () => {
+    it('非 creator 時按鈕完全不在 DOM', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: OTHER } as ReturnType<typeof useCurrentAccount>,
+      )
+
+      renderDashboard()
+
+      await screen.findByLabelText('response-count')
+      expect(screen.queryByRole('button', { name: /結束活動/ })).not.toBeInTheDocument()
+    })
+  })
+
+  describe('test_close_button_hidden_when_wallet_disconnected', () => {
+    it('未連錢包時按鈕完全不在 DOM', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(null)
+
+      renderDashboard()
+
+      await screen.findByLabelText('response-count')
+      expect(screen.queryByRole('button', { name: /結束活動/ })).not.toBeInTheDocument()
+    })
+  })
+
+  // ── S3.4：分享連結、問卷列表、回覆進度格式 ───────────────────────────────────
+
+  describe('test_dashboard_shows_share_link', () => {
+    it('surveyId 解析後顯示分享連結與複製按鈕', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
+      )
+      mockSuiClientWithEvents([
+        { parsedJson: { vault_id: VAULT_ID, survey_id: SURVEY_ID, creator: CREATOR } },
+      ])
+
+      renderDashboard()
+
+      await waitFor(() => {
+        const link = screen.getByRole('link', { name: /填答連結|分享/ })
+        expect(link).toHaveAttribute('href', `/s/${SURVEY_ID}`)
+      })
+      expect(screen.getByRole('button', { name: /複製/ })).toBeInTheDocument()
+    })
+  })
+
+  describe('test_dashboard_copy_share_link', () => {
+    it('點擊複製按鈕後 clipboard 收到含 survey_id 的 URL', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        writable: true,
+        configurable: true,
+      })
+
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
+      )
+      mockSuiClientWithEvents([
+        { parsedJson: { vault_id: VAULT_ID, survey_id: SURVEY_ID, creator: CREATOR } },
+      ])
+
+      renderDashboard()
+
+      const copyBtn = await screen.findByRole('button', { name: /複製/ })
+      fireEvent.click(copyBtn)
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(expect.stringContaining(`/s/${SURVEY_ID}`))
+      })
+    })
+  })
+
+  describe('test_dashboard_lists_all_creator_surveys', () => {
+    it('mock RPC 回 3 份 creator 名下 vault → render 顯示 3 列', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
+      )
+      mockSuiClientWithEvents([
+        { parsedJson: { vault_id: '0x' + 'a1'.repeat(32), survey_id: '0x01', creator: CREATOR } },
+        { parsedJson: { vault_id: '0x' + 'a2'.repeat(32), survey_id: '0x02', creator: CREATOR } },
+        { parsedJson: { vault_id: '0x' + 'a3'.repeat(32), survey_id: '0x03', creator: CREATOR } },
+      ])
+
+      renderDashboard()
+
+      await waitFor(() => {
+        expect(screen.getAllByRole('row')).toHaveLength(3)
+      })
+    })
+  })
+
+  describe('test_dashboard_filters_by_wallet_address', () => {
+    it('切換錢包地址後列表跟著更新', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
+      )
+      mockSuiClientWithEvents([
+        { parsedJson: { vault_id: VAULT_ID, survey_id: SURVEY_ID, creator: CREATOR } },
+        { parsedJson: { vault_id: VAULT_ID_2, survey_id: '0x02', creator: CREATOR_2 } },
+      ])
+
+      const { rerender } = render(
+        <MemoryRouter initialEntries={[`/dashboard/${VAULT_ID}`]}>
+          <Routes>
+            <Route path="/dashboard/:vaultId" element={<DashboardPage />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+
+      await waitFor(() => {
+        expect(screen.getAllByRole('row')).toHaveLength(1)
+      })
+
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR_2 } as ReturnType<typeof useCurrentAccount>,
+      )
+      rerender(
+        <MemoryRouter initialEntries={[`/dashboard/${VAULT_ID}`]}>
+          <Routes>
+            <Route path="/dashboard/:vaultId" element={<DashboardPage />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+
+      await waitFor(() => {
+        expect(screen.getAllByRole('row')).toHaveLength(1)
+      })
+    })
+  })
+
+  describe('test_dashboard_received_over_max_display', () => {
+    it('vault received=3, max=10 → 顯示 "3 / 10"', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
+      )
+      vi.mocked(fetchClaimedEvents).mockResolvedValue([
+        { vault_id: VAULT_ID, sub_hash: [1], respondent: '0x1', encrypted_answers: [1], claimed_at_ms: 0 },
+        { vault_id: VAULT_ID, sub_hash: [2], respondent: '0x2', encrypted_answers: [2], claimed_at_ms: 0 },
+        { vault_id: VAULT_ID, sub_hash: [3], respondent: '0x3', encrypted_answers: [3], claimed_at_ms: 0 },
+      ])
+      vi.mocked(useSuiClientQuery).mockReturnValue(
+        mockVaultObject({ max_responses: '10' }) as unknown as ReturnType<typeof useSuiClientQuery>,
+      )
+
+      renderDashboard()
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('received-over-max')).toHaveTextContent('3 / 10')
       })
     })
   })

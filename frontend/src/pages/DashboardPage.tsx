@@ -120,6 +120,9 @@ export default function DashboardPage() {
   const [surveyData, setSurveyData] = useState<any>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [schemaHashStr, setSchemaHashStr] = useState<string>('')
+  const [creatorSurveys, setCreatorSurveys] = useState<
+    Array<{ vault_id: string; survey_id: string }>
+  >([])
 
   useEffect(() => {
     if (!vaultId) return
@@ -158,6 +161,34 @@ export default function DashboardPage() {
     void resolveSurvey()
     return () => { cancelled = true }
   }, [vaultId, suiClient])
+
+  useEffect(() => {
+    if (!account?.address || !getPackageId()) return
+    if (!suiClient || typeof (suiClient as unknown as SuiClient).queryEvents !== 'function') return
+    let cancelled = false
+    async function loadCreatorSurveys() {
+      try {
+        const result = await (suiClient as unknown as SuiClient).queryEvents({
+          query: {
+            MoveEventType: `${getPackageId()}::survey_registry::SurveyRegistered`,
+          },
+          limit: 50,
+          order: 'descending',
+        })
+        const mine = (result.data as any[])
+          .filter((e: any) => e.parsedJson?.creator === account?.address)
+          .map((e: any) => ({
+            vault_id: e.parsedJson.vault_id as string,
+            survey_id: e.parsedJson.survey_id as string,
+          }))
+        if (!cancelled) setCreatorSurveys(mine)
+      } catch (err) {
+        console.error('[DashboardPage] Failed to load creator surveys:', err)
+      }
+    }
+    void loadCreatorSurveys()
+    return () => { cancelled = true }
+  }, [account?.address, suiClient])
 
   useEffect(() => {
     if (!surveyData) return
@@ -254,7 +285,6 @@ export default function DashboardPage() {
   const [closeError, setCloseError] = useState<string | null>(null)
 
   const canClose =
-    isCreator &&
     isActive &&
     closeStatus !== 'signing' &&
     closeStatus !== 'success'
@@ -316,6 +346,27 @@ export default function DashboardPage() {
         <ConnectButton />
       </div>
 
+      {surveyId && (
+        <section className="mb-6 bg-blue-50 border border-blue-200 rounded p-4">
+          <p className="text-sm text-gray-600 mb-2">問卷填答連結</p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <a
+              href={`/s/${surveyId}`}
+              className="font-mono text-sm text-blue-600 break-all hover:underline"
+            >
+              填答連結
+            </a>
+            <button
+              type="button"
+              onClick={() => void navigator.clipboard.writeText(`${window.location.origin}/s/${surveyId}`)}
+              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+            >
+              複製
+            </button>
+          </div>
+        </section>
+      )}
+
       {eventsState.kind === 'error' && (
         <p role="alert" className="text-red-600 mb-4 text-sm">
           {eventsState.error}
@@ -330,9 +381,9 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="bg-gray-50 border rounded p-4">
-          <p className="text-sm text-gray-500">名額上限</p>
-          <p className="text-2xl font-bold" aria-label="max-responses">
-            {vault ? vault.max_responses : '—'}
+          <p className="text-sm text-gray-500">回覆進度</p>
+          <p className="text-2xl font-bold" aria-label="received-over-max">
+            {responseCount} / {vault ? vault.max_responses : '—'}
           </p>
         </div>
         <div className="bg-gray-50 border rounded p-4">
@@ -396,6 +447,29 @@ export default function DashboardPage() {
         </section>
       )}
 
+      {/* ── 我的問卷列表 ──────────────────────────────────────────────────── */}
+      {creatorSurveys.length > 0 && (
+        <section className="mt-8 border-t pt-6">
+          <h2 className="text-lg font-semibold mb-4">我的問卷</h2>
+          <table className="w-full text-sm">
+            <tbody>
+              {creatorSurveys.map((s) => (
+                <tr key={s.vault_id} className="border-b last:border-0">
+                  <td className="py-2 font-mono text-xs text-gray-500 break-all">
+                    {s.vault_id}
+                  </td>
+                  <td className="py-2 pl-4">
+                    <a href={`/dashboard/${s.vault_id}`} className="text-blue-600 hover:underline text-xs">
+                      查看
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
       {/* ── 結束活動 ─────────────────────────────────────────────────────── */}
       <div className="mt-6 border-t pt-6">
         <p className="text-sm text-gray-500 mb-3">
@@ -422,17 +496,15 @@ export default function DashboardPage() {
           </p>
         )}
 
-        <button
-          type="button"
-          onClick={handleClose}
-          disabled={!canClose}
-          className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
-        >
-          {closeStatus === 'signing' ? '結束中…' : '結束活動'}
-        </button>
-
-        {vault && !isCreator && (
-          <p className="text-xs text-gray-400 mt-2">僅限問卷建立者可結束活動。</p>
+        {isCreator && (
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={!canClose}
+            className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
+          >
+            {closeStatus === 'signing' ? '結束中…' : '結束活動'}
+          </button>
         )}
       </div>
     </main>
