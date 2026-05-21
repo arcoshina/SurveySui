@@ -1,5 +1,6 @@
 module surveysui::survey_vault;
 
+use std::bcs;
 use std::vector;
 use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
@@ -89,7 +90,6 @@ public fun fund(vault: &mut SurveyVault, sssr_coin: Coin<STACKED_SURVEY_REWARD>,
 public fun claim(
     vault: &mut SurveyVault,
     pass: &SurveyPass,
-    sub_hash: vector<u8>,
     encrypted_answers: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
@@ -98,16 +98,18 @@ public fun claim(
     assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
     assert!(vault.claimed_count < vault.max_responses, ENoQuota);
     assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
-    assert!(survey_pass::sub_hash(pass) == sub_hash, EInvalidPass);
+    assert!(survey_pass::owner(pass) == ctx.sender(), EInvalidPass);
     assert!(!vector::is_empty(&encrypted_answers), EEmptyAnswers);
-    assert!(!table::contains(&vault.claimed_subs, sub_hash), EAlreadyClaimed);
 
-    table::add(&mut vault.claimed_subs, sub_hash, true);
+    let key = bcs::to_bytes(&ctx.sender());
+    assert!(!table::contains(&vault.claimed_subs, key), EAlreadyClaimed);
+
+    table::add(&mut vault.claimed_subs, key, true);
     vault.claimed_count = vault.claimed_count + 1;
 
     event::emit(SurveyClaimed {
         vault_id: object::id(vault),
-        sub_hash,
+        sub_hash: key,
         respondent: ctx.sender(),
         encrypted_answers,
         claimed_at_ms: clock::timestamp_ms(clock),
@@ -197,8 +199,9 @@ public fun balance_value(vault: &SurveyVault): u64 { balance::value(&vault.balan
 public fun status(vault: &SurveyVault): u8         { vault.status }
 public fun creator(vault: &SurveyVault): address   { vault.creator }
 public fun admin_treasury(vault: &SurveyVault): address { vault.admin_treasury }
-public fun has_claimed(vault: &SurveyVault, sub_hash: vector<u8>): bool {
-    table::contains(&vault.claimed_subs, sub_hash)
+public fun has_claimed(vault: &SurveyVault, respondent: address): bool {
+    let key = bcs::to_bytes(&respondent);
+    table::contains(&vault.claimed_subs, key)
 }
 
 public fun fee_bps(): u64 { VAULT_FEE_BPS }

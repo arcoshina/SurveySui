@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { encryptSurveyContent, bytesToBase64url } from '../lib/crypto'
+import { useSuiClientQuery } from '@mysten/dapp-kit'
 
 const mockGetObject = vi.fn()
 
@@ -15,12 +16,39 @@ vi.mock('@mysten/dapp-kit', () => ({
   useSignTransaction: vi.fn().mockReturnValue({
     mutateAsync: vi.fn().mockResolvedValue({ signature: 'mock_user_sig' }),
   }),
+  useSignAndExecuteTransaction: vi.fn().mockReturnValue({
+    mutateAsync: vi.fn().mockResolvedValue({ digest: '0xdeadbeef' }),
+  }),
+  useSuiClientQuery: vi.fn().mockImplementation((...args) => {
+    // Simple mock that returns a SurveyPass owned by the user
+    return {
+      data: [
+        {
+          data: {
+            objectId: '0xpass',
+            content: {
+              dataType: 'moveObject',
+              fields: {
+                owner: '0xuser',
+                effective_tier: 1,
+                expires_at: 0,
+                status: 0,
+              },
+            },
+          },
+        },
+      ],
+      isLoading: false,
+      refetch: vi.fn(),
+    } as any;
+  }),
 }))
 
 // Mock sponsoredTx library
 vi.mock('../lib/sponsoredTx', () => ({
   buildClaimPtb: vi.fn().mockReturnValue({}),
-  dryRunAndSponsorTx: vi.fn().mockResolvedValue({
+  executeTxWithFallback: vi.fn().mockResolvedValue({
+    mode: 'sponsored',
     sponsoredTxBytes: 'mock_bytes',
     sponsorSignature: 'mock_sponsor_sig',
   }),
@@ -243,5 +271,123 @@ describe('T3.6 — 問卷填答頁', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('tx-hash')).toHaveTextContent('0xdeadbeef')
     })
+  })
+})
+
+// ── S6.2 ────────────────────────────────────────────────────────────────────
+
+describe('S6.2 — SurveyPass 首次連錢包檢查', () => {
+  let defaultEncryptedBlob: Uint8Array
+  const creatorPubKey = new Uint8Array(32).fill(1)
+
+  const noPassMock = { data: [], isLoading: false, refetch: vi.fn() }
+  const validPassMock = {
+    data: [{
+      data: {
+        objectId: '0xpass',
+        content: {
+          dataType: 'moveObject',
+          fields: { owner: '0xuser', effective_tier: 1, expires_at: 0, status: 0 },
+        },
+      },
+    }],
+    isLoading: false,
+    refetch: vi.fn(),
+  }
+
+  beforeEach(async () => {
+    sessionStorage.setItem('survey_pass_id', '0xpass')
+    vi.spyOn(Transaction, 'from').mockReturnValue({} as any)
+
+    const enc = await encryptSurveyContent(MOCK_MD, creatorPubKey)
+    defaultEncryptedBlob = enc.encryptedBlob
+    window.location.hash = bytesToBase64url(enc.contentKey)
+
+    mockGetObject.mockResolvedValue({
+      data: {
+        content: {
+          dataType: 'moveObject',
+          type: '0xpkg::survey_registry::Survey',
+          fields: { vault_id: '0xvault', status: 0, encrypted_content: Array.from(defaultEncryptedBlob) },
+        },
+      },
+    })
+
+    vi.mocked(useSuiClientQuery).mockReturnValue(validPassMock as any)
+  })
+
+  afterEach(() => {
+    sessionStorage.clear()
+    vi.clearAllMocks()
+    vi.unstubAllGlobals()
+    window.location.hash = ''
+  })
+
+  it('test_survey_page_queries_pass_on_wallet_connect', async () => {
+    renderSurveyPage()
+    await screen.findByText('您偏好哪種顏色？')
+    expect(useSuiClientQuery).toHaveBeenCalledWith(
+      'getOwnedObjects',
+      expect.objectContaining({
+        filter: { StructType: expect.stringContaining('::survey_pass::SurveyPass') },
+      }),
+      expect.any(Object),
+    )
+  })
+
+  it('test_survey_page_does_not_block_content_without_pass', async () => {
+    vi.mocked(useSuiClientQuery).mockReturnValue(noPassMock as any)
+    renderSurveyPage()
+    expect(await screen.findByText('您偏好哪種顏色？')).toBeInTheDocument()
+    const btn = screen.getByRole('button', { name: /需要身分驗證才能填答/ })
+    expect(btn).toBeInTheDocument()
+    expect(btn).not.toBeDisabled()
+  })
+
+  it('test_survey_page_shows_pass_tier_badge', async () => {
+    renderSurveyPage()
+    await screen.findByText('您偏好哪種顏色？')
+    expect(screen.getByTestId('tier-badge')).toBeInTheDocument()
+  })
+
+  it('test_survey_page_submit_disabled_for_gated_survey_no_pass', async () => {
+    vi.mocked(useSuiClientQuery).mockReturnValue(noPassMock as any)
+    mockGetObject.mockResolvedValue({
+      data: {
+        content: {
+          dataType: 'moveObject',
+          type: '0xpkg::survey_registry::Survey',
+          fields: {
+            vault_id: '0xvault',
+            status: 0,
+            encrypted_content: Array.from(defaultEncryptedBlob),
+            min_tier: 1,
+          },
+        },
+      },
+    })
+    renderSurveyPage()
+    await screen.findByText('您偏好哪種顏色？')
+    expect(screen.getByRole('button', { name: /需要身分驗證才能填答/ })).toBeDisabled()
+  })
+
+  it('test_survey_page_submit_enabled_with_sufficient_tier', async () => {
+    mockGetObject.mockResolvedValue({
+      data: {
+        content: {
+          dataType: 'moveObject',
+          type: '0xpkg::survey_registry::Survey',
+          fields: {
+            vault_id: '0xvault',
+            status: 0,
+            encrypted_content: Array.from(defaultEncryptedBlob),
+            min_tier: 1,
+          },
+        },
+      },
+    })
+    renderSurveyPage()
+    await screen.findByText('您偏好哪種顏色？')
+    expect(screen.getByRole('button', { name: /預覽答案/ })).not.toBeDisabled()
   })
 })

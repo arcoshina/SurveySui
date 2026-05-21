@@ -24,11 +24,11 @@
 | 層級 | 工具 | 檔案落點（新增 / 修改） | 跑在哪 |
 | --- | --- | --- | --- |
 | Move 單元 | `sui move test` | `contracts/tests/amm_pool_tests.move`、`survey_registry_tests.move`、`survey_vault_tests.move` | CI + 本機 |
-| Move 整合（test_scenario） | `sui move test` | `contracts/tests/ptb_seven_steps_tests.move`（新增） | CI + 本機 |
-| Frontend unit | Vitest + RTL | `frontend/src/lib/__tests__/ptb.v2.test.ts`、`markdown.test.ts`、`pages/__tests__/*.test.tsx` | CI |
+| Move 整合（test_scenario） | `sui move test` | `contracts/tests/ptb_seven_steps_tests.move`、`surveypass_tests.move`（新增） | CI + 本機 |
+| Frontend unit | Vitest + RTL | `frontend/src/lib/__tests__/ptb.v2.test.ts`、`markdown.test.ts`、`frontend/src/__tests__/*.test.tsx` | CI |
 | Frontend e2e | Vitest（happy-dom + 真 BFF + 真合約 fixture） | `frontend/src/__tests__/e2e.v2.test.ts` | 手動 / pre-demo |
 | Sponsored TX 整合 | Vitest + Devnet sandbox | `frontend/src/lib/__tests__/sponsoredTx.fallback.test.ts` | nightly |
-| BFF unit | Vitest | `bff/src/__tests__/stats.v2.test.ts`、`security.test.ts` | CI |
+| BFF unit | Vitest | `bff/src/__tests__/stats.v2.test.ts`、`security.test.ts`、`surveypass.test.ts` | CI |
 | E2E（真合約 + 真錢包） | Playwright + Devnet | `scripts/e2e/*.spec.ts` | 手動 / pre-demo |
 | 開發腳本驗證 | Vitest（純邏輯） | `scripts/__tests__/devAccounts.test.ts` | CI |
 
@@ -45,6 +45,8 @@
 | INV-5 | **問卷雜湊唯一**：同一 `content_hash` 第二次 register 必 abort `EDuplicateSurvey` | Move 單元 |
 | INV-6 | **SurveyPass 不消耗**：同一 pass 完成多份問卷後仍 `exists(pass.id) && is_valid` | Move test_scenario（保留 V1 測試） |
 | INV-7 | **BFF 無 admin TX key**：BFF 啟動時 `process.env.SUI_ADMIN_PRIVATE_KEY` 未設或為空；若有 ticket 簽發金鑰，啟動 log 標明「ticket-only, cannot sign TX」 | BFF unit |
+| INV-8 | **NullifierRegistry 唯一性**：同一 `nullifier_hash` 只能對應一個 pass owner；第二次 mint 必 abort `EDuplicateNullifier`，NullifierRegistry 不變 | Move test_scenario |
+| INV-9 | **SurveyPass Soulbound**：SurveyPass 型別宣告 `has key`（無 `store`）；任何 transfer 路徑在 Move type system 層拒絕，不需 entry 層防護 | Move 型別宣告審查 |
 
 ---
 
@@ -186,13 +188,13 @@
 
 ## S4：UX 改善
 
-### S4.1 單次簽名衍生加密金鑰（Frontend）
+### S4.1 兩步驟簽名發起流程（Frontend — FundPage）
 
-- **`test_single_signature_derives_keypair`** — call `deriveKeypairFromWallet()` 兩次 → 只觸發一次 wallet sign request；同一 wallet 衍生相同 keypair（deterministic）。
-- **`test_keypair_reused_across_responses`** — 同一 session 內多次填答 → 不再觸發 sign。
-- **`test_keypair_cleared_on_disconnect`** — 切換錢包 → 舊 keypair 不可重用。
+- **`test_key_setup_button_derives_keypair`** — FundPage render → 點擊「設定加密金鑰」按鈕 → `signPersonalMessage` mock 被呼叫一次 → keypair 存入 component state → 「發布問卷」按鈕從 disabled 變 enabled。
+- **`test_publish_button_disabled_before_key_setup`** — 初始 render 時「發布問卷」按鈕為 disabled；步驟一完成前不可點擊。
+- **`test_keypair_cleared_on_wallet_change`** — 步驟一完成後模擬切換錢包（`account.address` 改變）→ component state keypair 清除 → 「發布問卷」按鈕回到 disabled。
 
-### S4.2 發起人加密公鑰存放策略（Frontend + Move）
+### ~~ S4.2 發起人加密公鑰存放策略（Frontend + Move）~~ 修改方向更動，這項跳過不執行
 
 > 「公鑰寫入 SurveyPass」屬 S6.3，本 milestone 只做「存為發起者擁有的物件」這條路徑。
 
@@ -214,51 +216,108 @@
 
 ## S5：設計交付（無測試，只列 Done Criteria）
 
-### S5.1 SurveyPass 認證簽發設計拍板（pending → done by doc）
+### S5.1 SurveyPass 認證簽發設計拍板（done by doc）
 
-> 對應 [V2_改版目標.md §SurveyPass 認證簽發](V2_改版目標.md)。
+> 對應 [V2_改版目標.md §SurveyPass 認證簽發](V2_改版目標.md)。  
+> 完整架構見 [docs/專案 KYC方案.md](專案%20KYC方案.md)。
+
+**MVP 設計決策（已拍板）**
+
+| 問題 | MVP 決策 |
+|------|---------|
+| Q1：zkLogin / Google OAuth 定位 | MVP 不使用 zkLogin。驗證源為 **Email OTP**（`SRC_EMAIL`）；Social OAuth / zkLogin 留 V3 評估。 |
+| Q2：驗證階段是否要求連錢包 | **是**。IssuanceTicket 綁定 `owner: address`，用戶需先連錢包才能啟動驗證流程。 |
+| Q3：真人驗證訊號組合 | **Email OTP only**；nullifier = `hash("email" \|\| email_address)`；一個 email 只能對應一張有效 Pass（INV-8）。 |
+| Q4：BFF 角色 | **ticket-only**（INV-7）。BFF 負責：① 發 OTP 信、② 驗 OTP、③ 算 nullifier_hash、④ 簽 Ed25519 IssuanceTicket、⑤ 回傳 ticket JSON。不送 TX，不持 admin key。 |
 
 Done Criteria（全部完成才算綠燈）：
 
-- [ ] 問題 1（zkLogin / Google OAuth 機制定位）拍板，寫入 V2_改版目標 §設計決策表
-- [ ] 問題 2（驗證階段是否要求連錢包）拍板
-- [ ] 問題 3（真人驗證訊號組合）拍板
-- [ ] 問題 4（BFF 角色）拍板
-- [ ] V2_改版目標.md §SurveyPass 認證簽發章節從「待規劃」改為「定稿版」
-- [ ] V2_TDD.md S6.1 / S6.2 / S6.3 子項的 pending 狀態移除、寫入具體 `test_*` 名稱
+- [x] 問題 1 拍板：Email OTP only，zkLogin / OAuth 留 V3
+- [x] 問題 2 拍板：驗證前必須連錢包
+- [x] 問題 3 拍板：Email OTP，nullifier = hash("email"||email_address)
+- [x] 問題 4 拍板：BFF ticket-only，符合 INV-7
+- [x] V2_改版目標.md §SurveyPass 認證簽發章節從「待規劃」改為「定稿版」（另行更新）
+- [x] V2_TDD.md S6.1 / S6.2 / S6.3 具體 `test_*` 名稱已回填
 
-### S5.2 匿名投票初步方案設計交付（pending → done by doc）
+### S5.2 匿名投票初步方案設計交付（done by doc）
 
-> 對應 [V2_改版目標.md §匿名投票](V2_改版目標.md)。
+> 對應 [V2_改版目標.md §匿名投票](V2_改版目標.md)。  
+> 完整設計見 [docs/V2_AnonymousVoting_Sketch.md](V2_AnonymousVoting_Sketch.md)。
 
 Done Criteria：
 
-- [ ] `docs/V2_AnonymousVoting_Sketch.md` 成形，必涵蓋：威脅模型、nullifier 結構草稿、與 SurveyPass 防女巫的衝突解法、預估工作量、下一版啟動條件
-- [ ] V2_改版目標.md §匿名投票章節從「初步方案」改為「設計交付完成」
+- [x] `docs/V2_AnonymousVoting_Sketch.md` 成形，涵蓋：威脅模型（CoE/愛沙尼亞標準對照）、Semaphore-style ZKP nullifier 結構、與 SurveyPass 雙 nullifier 衝突解法、三期工作量預估、V3 啟動條件清單
+- [x] V2_改版目標.md §匿名投票章節從「初步方案」改為「設計交付完成」
 
 ---
 
-## S6：SurveyPass 實作（pending，等 S5.1）
+## S6：SurveyPass 實作（MVP：Email OTP，前置：S5.1）
 
-> S5.1 拍板前**整個 S6 不開工**。S5.1 完成後，本章節對應子段會回填具體 `test_*` 名稱。在那之前，所有測試只列「類型 placeholder」。
+> 完整資料結構設計見 [docs/專案 KYC方案.md](專案%20KYC方案.md)。  
+> MVP 驗證源僅 Email OTP（`SRC_EMAIL = 2`）；tier 值依 KYC方案.md 信任層級表。  
+> INV-8（nullifier 唯一）/ INV-9（Soulbound）貫穿本節所有整合測試。
 
-### S6.1 SurveyPass 簽發合約 / BFF / FE（pending）
+### S6.1 SurveyPass 簽發合約 / BFF / FE
 
-- Placeholder：
-  - `test_surveypass_issue_*`（簽發路徑：admin / email OTP / KYC / zkLogin，依 S5.1 結果取捨）
-  - `test_surveypass_anti_sybil_*`（不重複真人驗證）
-  - `test_surveypass_not_consumed_after_multi_use`（保留 INV-6）
+#### Move 合約（`contracts/tests/surveypass_tests.move`）
 
-### S6.2 SurveyPass 首次連錢包檢查（pending）
+- **`test_surveypass_mint_happy_path`** — given 合法 BFF 簽名 IssuanceTicket（`source=SRC_EMAIL, owner=alice, expires_at=now+365days`），when alice 呼叫 `mint_pass`，then：SurveyPass 物件存在且 `owner==alice, status==STATUS_ACTIVE`；`NullifierRegistry` 已收錄該 nullifier_hash；INV-6（Pass 不消耗）守住。
+- **`test_surveypass_mint_rejects_duplicate_nullifier`** — given NullifierRegistry 已有相同 nullifier_hash，when 第二次 mint，then abort `EDuplicateNullifier`（INV-8）。
+- **`test_surveypass_mint_rejects_invalid_bff_sig`** — given ticket `bff_sig` 被竄改，then abort `EInvalidTicketSig`。
+- **`test_surveypass_mint_rejects_wrong_owner`** — given `ticket.owner=alice`，when bob 呼叫 mint_pass，then abort `EOwnerMismatch`。
+- **`test_surveypass_mint_rejects_expired_ticket`** — given `ticket.expires_at < current_epoch`，then abort `ETicketExpired`。
+- **`test_surveypass_not_consumed_after_multi_survey`** — （INV-6）Pass 完成 3 份問卷後 `exists(pass.id) && status==STATUS_ACTIVE`，物件未被消耗。
+- **`test_surveypass_soulbound_no_store`** — （INV-9）SurveyPass 型別宣告 `has key`（無 `store`）；test_scenario 中嘗試呼叫 `transfer::public_transfer` 在 Move type system 層拒絕（編譯期或 test abort）。
+- **`test_surveypass_revoke_sets_revoked_status`** — admin 呼叫 `revoke_pass(pass)` → `pass.status == STATUS_REVOKED`；已撤銷 Pass 用於問卷時 abort `EPassRevoked`。
+- **`test_surveypass_delete_after_revoke`** — given Revoked pass（無 dynamic fields），呼叫 `delete_pass` → `object::delete()` 執行，pass_id 從 Sui global storage 移除。
 
-- Placeholder：
-  - `test_survey_page_checks_pass_on_first_connect` — 「提示 vs 強制」行為待 S5.1 結果
-  - `test_survey_page_does_not_block_browsing_without_pass`
+#### BFF（`bff/src/__tests__/surveypass.test.ts`）
 
-### S6.3 公鑰寫入 SurveyPass（條件性，pending）
+- **`test_bff_email_otp_send_creates_pending_otp`** — POST `/auth/email-otp/send` `{ email }` → 200；BFF 暫存 OTP（TTL 10 min；同 email 重送覆蓋舊 OTP）。
+- **`test_bff_email_otp_verify_issues_ticket`** — POST `/auth/email-otp/verify` `{ email, otp, wallet_address }` → 200，回傳 `{ ticket }` 含 `owner, source, nullifier_hash, commitment, expires_at, bff_sig` 欄位。
+- **`test_bff_email_otp_rejects_wrong_code`** — 錯誤 OTP → 400 `{ error: "INVALID_OTP" }`；ticket 不發出。
+- **`test_bff_email_otp_rejects_expired_code`** — OTP 超過 10 min → 400 `{ error: "OTP_EXPIRED" }`。
+- **`test_bff_ticket_sig_verifiable_with_issuer_pubkey`** — `ticket.bff_sig` 以 `SURVEY_PASS_ISSUER_PRIV` 對應 Ed25519 pubkey 驗章為 true。
+- **`test_bff_nullifier_hash_deterministic`** — 同一 email 兩次呼叫 verify → `nullifier_hash` 相同 = `hash("email" || email_address)`（INV-8 前置）。
 
-- Placeholder：
-  - `test_creator_pubkey_writable_to_surveypass` — 若 S5.1 決議寫入則回填，否則本項標 `wontfix` 並刪除測試。
+#### Frontend（`frontend/src/__tests__/AuthPage.test.tsx`）
+
+- **`test_auth_page_wallet_prompt_when_disconnected`** — 未連錢包 → 顯示「請先連接錢包」提示；email form 不在 DOM。
+- **`test_auth_page_email_form_when_no_pass`** — 錢包已連 + 鏈上無有效 Pass → email 輸入欄可見。
+- **`test_auth_page_shows_pass_info_when_valid`** — 有效 Pass 存在 → 顯示 tier badge + 到期日；email form 不在 DOM。
+- **`test_auth_page_send_otp_calls_bff_send`** — 輸入 email + 點「發送驗證碼」→ BFF `/auth/email-otp/send` 被呼叫一次。
+- **`test_auth_page_verify_otp_mints_pass`** — 輸入正確 OTP + 確認 → BFF `/auth/email-otp/verify` 被呼叫 → 拿到 ticket → `signAndExecuteTransaction` mock 被呼叫（`mint_pass` entry）。
+- **`test_auth_page_shows_error_on_invalid_otp`** — BFF 回 400 `INVALID_OTP` → 顯示錯誤訊息；不呼叫 mint。
+
+---
+
+### S6.2 SurveyPass 首次連錢包檢查
+
+> 行為：**提示不強制**。瀏覽問卷不擋；提交時若問卷設定 `min_tier > 0` 且 Pass 不足，則 disable submit。
+
+Frontend（`frontend/src/__tests__/SurveyPage.test.tsx` 新增群組）：
+
+- **`test_survey_page_queries_pass_on_wallet_connect`** — 錢包連線後觸發一次 RPC query（查用戶 SurveyPass by owner）；結果儲存元件狀態。
+- **`test_survey_page_does_not_block_content_without_pass`** — 無 Pass → 問卷題目可見；submit 按鈕 CTA 文字為「需要身分驗證才能填答」（不是靜默 disabled 無說明）。
+- **`test_survey_page_shows_pass_tier_badge`** — valid Pass → render tier badge（例：「✓ Email 驗證」）。
+- **`test_survey_page_submit_disabled_for_gated_survey_no_pass`** — 問卷 `min_tier > 0` + 無 Pass → submit button `disabled`。
+- **`test_survey_page_submit_enabled_with_sufficient_tier`** — valid Pass tier ≥ survey `min_tier` → submit enabled。
+
+---
+
+### S6.3 公鑰寫入 SurveyPass（條件性）
+
+> S5.1 決議寫入。發起者完成 S4.1 金鑰設定後，可（選擇性）將 pubkey 同步至 Pass；無 Pass 時略過（不報錯）。
+
+Move（`contracts/tests/surveypass_tests.move` 追加）：
+
+- **`test_surveypass_update_encryption_pubkey`** — Pass owner 呼叫 `update_encryption_pubkey(pass, new_key)` → `pass.encryption_pubkey == option::some(new_key)`。
+- **`test_surveypass_clear_encryption_pubkey`** — 呼叫 `clear_encryption_pubkey(pass)` → `pass.encryption_pubkey == option::none()`。
+
+Frontend（`frontend/src/__tests__/FundPage.test.tsx` 追加）：
+
+- **`test_fund_page_syncs_pubkey_to_pass_when_exists`** — FundPage 完成 S4.1 金鑰設定 + 用戶有有效 Pass → PTB 中附加 `update_encryption_pubkey` call；spy 被呼叫一次。
+- **`test_fund_page_skips_pubkey_sync_without_pass`** — 無 Pass → PTB 不含 `update_encryption_pubkey` call（不報錯）。
 
 ---
 
@@ -313,7 +372,10 @@ pnpm -r test && pnpm move test
 | S3.1 / S3.2 / S3.3 / S3.4 | 各群組所有 test 綠 |
 | S4.1 / S4.2 / S4.3 | 各群組所有 test 綠 |
 | S4.4 首頁 | 手動驗收勾選 |
-| S5.1 / S5.2 | Done Criteria checklist 全勾 |
-| S6.1 / S6.2 / S6.3 | **pending**，待 S5.1 拍板回填 |
+| S5.1 SurveyPass 設計拍板 | 4 項決策全勾 + S6 test_* 已回填（V2_改版目標.md 更新待補） |
+| S5.2 匿名投票設計 | AnonymousVoting_Sketch.md 成形 + 改版目標章節更新；V3 啟動條件 T1–T4 / D1–D4 / P1–P3 全部評估完成 |
+| S6.1 SurveyPass 簽發 | Move 9 條 + BFF 6 條 + FE 6 條全綠；INV-6 / INV-8 / INV-9 守住 |
+| S6.2 首次連錢包檢查 | FE 5 條全綠 |
+| S6.3 公鑰寫入 Pass | Move 2 條 + FE 2 條全綠 |
 
-> **S7 總驗收**：上述所有非 pending milestone 全綠 + INV-1～INV-7 全守住 + [V2_改版目標.md §驗收方向](V2_改版目標.md) 的 demo 動作 5 分鐘內手動跑完無 regression。
+> **S7 總驗收**：上述所有非 pending milestone 全綠 + INV-1～INV-9 全守住 + [V2_改版目標.md §驗收方向](V2_改版目標.md) 的 demo 動作 5 分鐘內手動跑完無 regression。

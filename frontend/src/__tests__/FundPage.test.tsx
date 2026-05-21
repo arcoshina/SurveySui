@@ -342,7 +342,8 @@ describe('FundPage — T4.3 注資頁', () => {
     vi.mocked(useCurrentAccount).mockReturnValue(null)
 
     renderFundPage('draft-ok')
-    expect(screen.getByRole('button', { name: /一鍵注資/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /步驟一：設定加密金鑰/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).toBeDisabled()
   })
 
   it('錢包 reject 簽名時顯示錯誤訊息', async () => {
@@ -363,7 +364,12 @@ describe('FundPage — T4.3 注資頁', () => {
     } as unknown as ReturnType<typeof useSignAndExecuteTransaction>)
 
     renderFundPage('draft-ok')
-    fireEvent.click(screen.getByRole('button', { name: /一鍵注資/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: /步驟一：設定加密金鑰/ }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /步驟二：發布問卷/ }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /User rejected the request/,
@@ -410,7 +416,12 @@ describe('FundPage — T4.3 注資頁', () => {
     } as unknown as ReturnType<typeof useSignAndExecuteTransaction>)
 
     renderFundPage('draft-ok')
-    fireEvent.click(screen.getByRole('button', { name: /一鍵注資/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: /步驟一：設定加密金鑰/ }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /步驟二：發布問卷/ }))
 
     await waitFor(() => {
       expect(screen.getByTestId('page-dashboard')).toBeInTheDocument()
@@ -449,8 +460,11 @@ describe('FundPage — T4.3 注資頁', () => {
 
     renderFundPage('draft-ok')
 
-    const btn = screen.getByRole('button', { name: /一鍵注資/ })
-    fireEvent.click(btn)
+    fireEvent.click(screen.getByRole('button', { name: /步驟一：設定加密金鑰/ }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /步驟二：發布問卷/ }))
 
     await waitFor(() => {
       expect(mockPtb).toHaveBeenCalled()
@@ -460,6 +474,71 @@ describe('FundPage — T4.3 注資頁', () => {
       expect(args).toHaveProperty('questions')
       expect(args).toHaveProperty('offsetIn')
       expect(args).toHaveProperty('creatorSssrCoins')
+    })
+  })
+
+  // ── S4.1 兩步驟簽名發起流程 ──────────────────────────────────────────────────
+
+  describe('S4.1 兩步驟簽名發起流程', () => {
+    it('test_key_setup_button_derives_keypair — 點擊步驟一 → signPersonalMessage 呼叫一次 → 步驟二 enabled', async () => {
+      writeDraft('draft-ok', validDraftMd())
+      vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xtest' } as any)
+
+      const mockSignMsg = vi.fn().mockResolvedValue({ signature: 'AAAAAA' + 'A'.repeat(80) })
+      vi.mocked(useSignPersonalMessage).mockReturnValue({
+        mutateAsync: mockSignMsg,
+      } as any)
+
+      renderFundPage('draft-ok')
+
+      expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).toBeDisabled()
+
+      fireEvent.click(screen.getByRole('button', { name: /步驟一：設定加密金鑰/ }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).not.toBeDisabled()
+      })
+
+      expect(mockSignMsg).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole('button', { name: /✓ 加密金鑰已設定/ })).toBeInTheDocument()
+    })
+
+    it('test_publish_button_disabled_before_key_setup — 步驟一完成前步驟二按鈕為 disabled', () => {
+      writeDraft('draft-ok', validDraftMd())
+      vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xtest' } as any)
+
+      renderFundPage('draft-ok')
+
+      expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).toBeDisabled()
+    })
+
+    it('test_keypair_cleared_on_wallet_change — 步驟一後切換錢包 → 步驟二回到 disabled', async () => {
+      writeDraft('draft-ok', validDraftMd())
+      vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xwallet_a' } as any)
+
+      const { rerender } = render(
+        <MemoryRouter initialEntries={['/fund/draft-ok']}>
+          <Routes>
+            <Route path="/fund/:id" element={<FundPage />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /步驟一：設定加密金鑰/ }))
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).not.toBeDisabled()
+      })
+
+      vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xwallet_b' } as any)
+      rerender(
+        <MemoryRouter initialEntries={['/fund/draft-ok']}>
+          <Routes>
+            <Route path="/fund/:id" element={<FundPage />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).toBeDisabled()
     })
   })
 
@@ -493,9 +572,12 @@ describe('FundPage — T4.3 注資頁', () => {
     expect(screen.getByText(/分拆手續費 \(fee\): 1.1111 sSSR/i)).toBeInTheDocument()
     expect(screen.getByText(/0.0011 SUI/i)).toBeInTheDocument()
 
-    // Click submit
-    const btn = screen.getByRole('button', { name: /一鍵注資/ })
-    fireEvent.click(btn)
+    // Step 1: setup key, then step 2: fund
+    fireEvent.click(screen.getByRole('button', { name: /步驟一：設定加密金鑰/ }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /步驟二：發布問卷/ })).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /步驟二：發布問卷/ }))
 
     await waitFor(() => {
       expect(mockPtb).toHaveBeenCalled()

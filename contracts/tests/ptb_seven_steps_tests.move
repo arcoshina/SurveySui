@@ -6,7 +6,7 @@ use sui::coin::{Self, Coin};
 use sui::test_scenario as ts;
 use surveysui::amm_pool::{Self, Pool, FeeConfig};
 use surveysui::stacked_survey_reward::{Self, SssrTreasury, STACKED_SURVEY_REWARD};
-use surveysui::survey_pass::{Self, PassRegistry, SurveyPass};
+use surveysui::survey_pass;
 use surveysui::survey_registry::{Self, SurveyRegistry};
 use surveysui::survey_sui_reward::{Self, SsrTreasury, SURVEY_SUI_REWARD};
 use surveysui::survey_vault::{Self, SurveyVault};
@@ -82,6 +82,7 @@ fun test_ptb_seven_steps_happy_path_no_offset() {
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
+            b"test_pubkey",
             questions,
             &clk,
             sc.ctx()
@@ -163,6 +164,7 @@ fun test_ptb_seven_steps_happy_path_with_offset() {
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
+            b"test_pubkey",
             questions,
             &clk,
             sc.ctx()
@@ -239,6 +241,7 @@ fun test_ptb_seven_steps_happy_path_overfund_offset() {
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
+            b"test_pubkey",
             questions,
             &clk,
             sc.ctx()
@@ -351,6 +354,7 @@ fun test_ptb_step7_duplicate_content_abort() {
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
+            b"test_pubkey",
             questions,
             &clk,
             sc.ctx()
@@ -390,6 +394,7 @@ fun test_ptb_step7_duplicate_content_abort() {
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
+            b"test_pubkey",
             questions,
             &clk,
             sc.ctx()
@@ -439,6 +444,7 @@ fun test_ptb_step7_invalid_schema_abort() {
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
+            b"test_pubkey",
             questions,
             &clk,
             sc.ctx()

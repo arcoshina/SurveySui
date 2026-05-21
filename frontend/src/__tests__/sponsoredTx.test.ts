@@ -21,7 +21,6 @@ describe('Sponsored Transactions Utility — T2.2', () => {
         packageId: pkgId,
         vaultId: vaultId,
         passId: passId,
-        subHash: 'aabbcc',
         encryptedAnswers: '112233',
       })
 

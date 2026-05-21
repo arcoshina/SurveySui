@@ -32,23 +32,32 @@
 
 ## S4：UX 改善
 
-- [ ] S4.1 單次簽名衍生加密金鑰（前置：S2.2）
-- [ ] S4.2 發起人加密公鑰存放策略（前置：S4.1）
-- [ ] S4.3 Gas Station fallback（前置：S0.2）
-- [ ] S4.4 首頁文案 / 視覺
-- [ ] S4 回歸閘
+- [x] S4.1 兩步驟簽名發起流程（前置：S2.2）
+- [S] S4.2 發起人加密公鑰存放策略（先跳過）
+- [x] S4.3 Gas Station fallback（前置：S0.2）
+- [x] S4.4 首頁文案 / 視覺
+- [x] S4 回歸閘
 
 ## S5：設計交付
 
-- [ ] S5.1 SurveyPass 認證簽發設計拍板
-- [ ] S5.2 匿名投票初步方案設計交付
+- [x] S5.1 SurveyPass 認證簽發設計拍板
+- [x] S5.2 匿名投票初步方案設計交付
 
 ## S6：SurveyPass 實作（pending，等 S5.1）
 
-- [ ] S6.1 SurveyPass 簽發合約 / BFF / FE
-- [ ] S6.2 SurveyPass 首次連錢包檢查
-- [ ] S6.3 公鑰寫入 SurveyPass（條件性）
+- [x] S6.1 SurveyPass 簽發合約 / BFF / FE
+- [x] S6.2 SurveyPass 首次連錢包檢查
+- [S] S6.3 公鑰寫入 SurveyPass（取消，改存入 Survey 物件）
 
 ## S7：總驗收
 
-- [ ] 全部測試綠 + INV-1 ~ INV-7 守住 + demo 序列跑通
+- [x] 全部測試綠 + INV-1 ~ INV-9 守住 + demo 序列跑通
+
+
+## 手動驗收
+
+有後端
+後端 BFF 可控關閉
+    正常模式：BFF 開啟 → 填答 → 走 sponsored 路徑（無 banner）
+    Fallback 模式：關閉 BFF → 填答 → 顯示「自付 gas 模式」banner → 交易完成
+    合約拒絕：用已領取的 pass 重填 → 顯示 MoveAbort 錯誤 → 無 fallback

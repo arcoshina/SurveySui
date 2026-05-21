@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ConnectButton,
@@ -23,6 +23,7 @@ import {
   bytesToBase64url,
   deriveCreatorKeyPair,
   encryptSurveyContent,
+  type CreatorKeyPair,
 } from '../lib/crypto'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
@@ -140,10 +141,21 @@ export default function FundPage() {
 
   const suiToSpend = cost ? (cost.suiToInvest * SLIPPAGE_NUMER) / SLIPPAGE_DENOM : null
 
-  const [status, setStatus] = useState<'idle' | 'signing' | 'submitting' | 'success' | 'error'>(
+  const [keypair, setKeypair] = useState<CreatorKeyPair | null>(null)
+  const [status, setStatus] = useState<'idle' | 'key-signing' | 'key-ready' | 'tx-signing' | 'submitting' | 'success' | 'error'>(
     'idle',
   )
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // 切換錢包時清除 keypair
+  const prevAddressRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (prevAddressRef.current && prevAddressRef.current !== account?.address) {
+      setKeypair(null)
+      setStatus('idle')
+    }
+    prevAddressRef.current = account?.address
+  }, [account?.address])
 
   if (!draftId || !draft) {
     return (
@@ -166,20 +178,31 @@ export default function FundPage() {
   const params = frontmatter.data
   const totalSssr = params.perResponse * params.maxResponses
 
-  async function handleFund() {
-    if (!account || !cost || !suiToSpend || !draft) return
-    setStatus('signing')
+  async function handleSetupKey() {
+    if (!account) return
+    setStatus('key-signing')
     setErrorMsg(null)
-
-    let creatorPublicKeyBytes: Uint8Array
-    let contentKey: Uint8Array
-    let encryptedBlob: Uint8Array
     try {
       const message = new TextEncoder().encode(KEY_DERIVE_MSG)
       const { signature } = await signPersonalMessageAsync({ message })
-      const sigBytes = base64ToBytes(signature)
-      const kp = await deriveCreatorKeyPair(sigBytes)
-      creatorPublicKeyBytes = kp.publicKeyBytes
+      const kp = await deriveCreatorKeyPair(base64ToBytes(signature))
+      setKeypair(kp)
+      setStatus('key-ready')
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : '金鑰設定失敗')
+      setStatus('error')
+    }
+  }
+
+  async function handleFund() {
+    if (!account || !cost || !suiToSpend || !draft || !keypair) return
+    setStatus('tx-signing')
+    setErrorMsg(null)
+
+    const creatorPublicKeyBytes = keypair.publicKeyBytes
+    let contentKey: Uint8Array
+    let encryptedBlob: Uint8Array
+    try {
 
       const shouldEncrypt = draft.encrypt !== false
       if (shouldEncrypt) {
@@ -194,8 +217,8 @@ export default function FundPage() {
         contentKey = new Uint8Array(0)
       }
     } catch (err) {
-      console.error('E2E Debug: handleFund signature/encryption catch:', err)
-      setErrorMsg(err instanceof Error ? err.message : '簽名或加密失敗')
+      console.error('E2E Debug: handleFund encryption catch:', err)
+      setErrorMsg(err instanceof Error ? err.message : '加密失敗')
       setStatus('error')
       return
     }
@@ -242,6 +265,7 @@ export default function FundPage() {
         suiToSpend,
         contentHash,
         schemaHash,
+        creatorPubKey: creatorPublicKeyBytes,
         questions: fullSurvey.data.questions,
         offsetIn: cost.offsetIn,
         creatorSssrCoins: sssrCoins,
@@ -450,15 +474,26 @@ export default function FundPage() {
 
       <button
         type="button"
+        onClick={handleSetupKey}
+        disabled={!account || !!keypair || status === 'key-signing'}
+        className="bg-gray-700 text-white px-6 py-2 rounded hover:bg-gray-800 disabled:opacity-50 transition-colors w-full mb-2"
+      >
+        {status === 'key-signing'
+          ? '設定加密金鑰中…'
+          : keypair
+            ? '✓ 加密金鑰已設定'
+            : '步驟一：設定加密金鑰'}
+      </button>
+
+      <button
+        type="button"
         onClick={handleFund}
-        disabled={!account || !suiToSpend || status === 'signing' || status === 'submitting' || status === 'success'}
+        disabled={!keypair || !suiToSpend || status === 'tx-signing' || status === 'submitting' || status === 'success'}
         className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50 transition-colors w-full"
       >
-        {status === 'signing'
-          ? '簽名中…'
-          : status === 'submitting'
-            ? '送出中…'
-            : '一鍵注資'}
+        {status === 'tx-signing' || status === 'submitting'
+          ? '發布中…'
+          : '步驟二：發布問卷'}
       </button>
     </main>
   )

@@ -1,11 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useCurrentAccount, useSignTransaction, useSuiClient } from '@mysten/dapp-kit'
+import {
+  useCurrentAccount,
+  useSignTransaction,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+  useSuiClientQuery,
+} from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
-import { buildClaimPtb, dryRunAndSponsorTx, executeSponsoredTx } from '../lib/sponsoredTx'
+import { buildClaimPtb, executeSponsoredTx, executeTxWithFallback } from '../lib/sponsoredTx'
 import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
 import { parseFullSurveyMarkdown } from '../lib/frontmatter'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
+import { buildMintPassPtb } from '../lib/ptb'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 
@@ -49,18 +56,57 @@ export default function SurveyPage() {
   const [txHash, setTxHash] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [creatorPubKey, setCreatorPubKey] = useState<Uint8Array | null>(null)
+  const [surveyMinTier, setSurveyMinTier] = useState(0)
 
   // Wallet & Client integration
   const account = useCurrentAccount()
   const suiClient = useSuiClient()
   const { mutateAsync: signTransaction } = useSignTransaction()
+  const { mutateAsync: signAndExecuteWallet } = useSignAndExecuteTransaction()
+  const [selfPaidMode, setSelfPaidMode] = useState(false)
 
-  // SurveyPass SBT State
+  // SurveyPass SBT & Verification States
+  const registryId = import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
+  const configId = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
+
   const [email, setEmail] = useState('')
-  const [passObjectId, setPassObjectId] = useState(() => sessionStorage.getItem('survey_pass_id') || '')
-  const [subHash, setSubHash] = useState(() => sessionStorage.getItem('survey_sub_hash') || '')
+  const [otpCode, setOtpCode] = useState('')
+  const [otpStep, setOtpStep] = useState<'input' | 'verify'>('input')
+  const [debugOtp, setDebugOtp] = useState<string | null>(null)
   const [issuingPass, setIssuingPass] = useState(false)
   const [issuingError, setIssuingError] = useState<string | null>(null)
+
+  // Fetch owned SurveyPass objects
+  const { data: passObjects, isLoading: isPassLoading, refetch: refetchPass } = useSuiClientQuery(
+    'getOwnedObjects',
+    {
+      owner: account?.address ?? '',
+      filter: {
+        StructType: `${PACKAGE_ID}::survey_pass::SurveyPass`,
+      },
+      options: {
+        showContent: true,
+      },
+    },
+    { enabled: !!account && !!PACKAGE_ID },
+  )
+
+  // Parse the active SurveyPass from owned objects
+  const activePass = useMemo(() => {
+    if (!passObjects || passObjects.length === 0) return null
+    const obj = passObjects[0]
+    if (obj?.data?.content?.dataType === 'moveObject') {
+      const fields = (obj.data.content as { fields: Record<string, any> }).fields
+      return {
+        objectId: obj.data.objectId,
+        owner: fields.owner,
+        effectiveTier: Number(fields.effective_tier),
+        expiresAt: Number(fields.expires_at),
+        status: Number(fields.status), // 0: Active, 3: Revoked
+      }
+    }
+    return null
+  }, [passObjects])
 
   useEffect(() => {
     if (!id) return
@@ -190,6 +236,7 @@ export default function SurveyPage() {
           schemaHash: schemaHashHex,
         })
         setCreatorPubKey(creatorPublicKeyBytes)
+        setSurveyMinTier(Number(fields.min_tier ?? 0))
         setPhase('filling')
       } catch (err: any) {
         console.error('Failed to load survey:', err)
@@ -201,35 +248,96 @@ export default function SurveyPage() {
     loadSurvey()
   }, [id, suiClient])
 
-  async function handleIssuePass() {
-    if (!account) {
-      setIssuingError('請先連接您的錢包！')
-      return
-    }
+  async function handleRequestOtp(e: React.FormEvent) {
+    e.preventDefault()
     if (!email || !email.includes('@')) {
-      setIssuingError('請輸入有效的 Email 格式！')
+      setIssuingError('請輸入有效的電子郵件地址')
       return
     }
+
     setIssuingPass(true)
     setIssuingError(null)
+    setDebugOtp(null)
+
     try {
-      const res = await fetch('/api/pass/issue', {
+      const res = await fetch('/auth/email/otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userAddress: account.address, email }),
+        body: JSON.stringify({ email }),
       })
-      if (!res.ok) {
-        const errText = await res.text()
-        throw new Error(errText || '發行 SurveyPass 失敗')
-      }
+
       const data = await res.json()
-      setPassObjectId(data.passObjectId)
-      setSubHash(data.subHash)
-      sessionStorage.setItem('survey_pass_id', data.passObjectId)
-      sessionStorage.setItem('survey_sub_hash', data.subHash)
-      setPhase('filling')
+      if (!res.ok) {
+        throw new Error(data.error || '發送 OTP 失敗')
+      }
+
+      setOtpStep('verify')
+      if (data.code) {
+        setDebugOtp(data.code)
+      }
     } catch (err: any) {
-      setIssuingError(err.message || '發行 SurveyPass 失敗，請重試')
+      setIssuingError(err.message || '發送請求時出錯')
+    } finally {
+      setIssuingPass(false)
+    }
+  }
+
+  async function handleVerifyAndMint(e: React.FormEvent) {
+    e.preventDefault()
+    if (!otpCode || otpCode.length !== 6) {
+      setIssuingError('請輸入 6 位數驗證碼')
+      return
+    }
+    if (!account) return
+
+    setIssuingPass(true)
+    setIssuingError(null)
+
+    try {
+      const res = await fetch('/auth/email/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          code: otpCode,
+          owner: account.address,
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || '驗證失敗')
+      }
+
+      const nullifierHash = new Uint8Array(Buffer.from(data.nullifier_hash, 'hex'))
+      const commitment = new Uint8Array(0)
+      const bffSig = new Uint8Array(Buffer.from(data.bff_sig, 'hex'))
+
+      const tx = buildMintPassPtb({
+        packageId: PACKAGE_ID,
+        registryId,
+        configId,
+        owner: account.address,
+        source: data.source,
+        nullifierHash,
+        commitment,
+        expiresAt: data.expires_at,
+        bffSig,
+      })
+
+      const result = await signAndExecuteWallet({ transaction: tx as any })
+      if (!result.digest) {
+        throw new Error('交易執行失敗')
+      }
+
+      await refetchPass()
+      setPhase('filling')
+      setOtpStep('input')
+      setDebugOtp(null)
+      setOtpCode('')
+      setEmail('')
+    } catch (err: any) {
+      setIssuingError(err.message || '認證或交易發送失敗')
     } finally {
       setIssuingPass(false)
     }
@@ -257,9 +365,13 @@ export default function SurveyPage() {
     }
     setValidationError(null)
 
-    // Check if SurveyPass exists; if not, go to need_pass
-    if (!passObjectId || !subHash) {
+    // Check if SurveyPass exists
+    if (!activePass) {
       setPhase('need_pass')
+    } else if (activePass.status === 3) {
+      setValidationError('您的 SurveyPass 已被吊銷 (Revoked)，無法填寫問卷。請先前往真人認證重新發行。')
+    } else if (activePass.expiresAt > 0 && activePass.expiresAt < Date.now()) {
+      setValidationError('您的 SurveyPass 已過期，請先前往真人認證更新驗證。')
     } else {
       setPhase('review')
     }
@@ -271,8 +383,16 @@ export default function SurveyPage() {
       setSubmitError('請連接錢包以進行簽名！')
       return
     }
-    if (!passObjectId || !subHash) {
+    if (!activePass) {
       setPhase('need_pass')
+      return
+    }
+    if (activePass.status === 3) {
+      setSubmitError('您的 SurveyPass 已被吊銷 (Revoked)')
+      return
+    }
+    if (activePass.expiresAt > 0 && activePass.expiresAt < Date.now()) {
+      setSubmitError('您的 SurveyPass 已過期')
       return
     }
 
@@ -292,36 +412,43 @@ export default function SurveyPage() {
 
       // 2. Build Claim PTB
       const tx = buildClaimPtb({
-        packageId: import.meta.env.VITE_PACKAGE_ID ?? '0x0ea99e456f8bd47d42dbf1b2d4a27cbfc559deab28255974d0266906bb053787',
+        packageId: PACKAGE_ID,
         vaultId: survey.vaultObjectId,
-        passId: passObjectId,
-        subHash,
+        passId: activePass.objectId,
         encryptedAnswers: encryptedAnswersHex,
       })
 
-      // 3. Request Gas Sponsorship from backend proxy (dry-run pre-flight runs inside)
-      const { sponsoredTxBytes, sponsorSignature } = await dryRunAndSponsorTx({
+      // 3. Try sponsored path; auto-fallback to self-paid if BFF unreachable
+      const fallbackResult = await executeTxWithFallback({
         tx,
         senderAddress: account.address,
         client: suiClient as any,
-        backendUrl: '',
+        signAndExecute: async (t) => {
+          const res = await signAndExecuteWallet({ transaction: t as any })
+          return { digest: res.digest }
+        },
       })
 
-      // 4. Prompt user to sign the sponsored transaction block
-      const sponsoredTx = Transaction.from(sponsoredTxBytes)
-      const { signature: userSignature } = await signTransaction({
-        transaction: sponsoredTx as any,
-      })
-
-      // 5. Broadcast to Sui Network
-      const txResult = await executeSponsoredTx({
-        client: suiClient as any,
-        sponsoredTxBytes,
-        userSignature,
-        sponsorSignature,
-      })
-
-      const digest = txResult.digest
+      let digest: string
+      if (fallbackResult.mode === 'sponsored') {
+        // 4. User signs the sponsored TX block
+        const sponsoredTx = Transaction.from(fallbackResult.sponsoredTxBytes)
+        const { signature: userSignature } = await signTransaction({
+          transaction: sponsoredTx as any,
+        })
+        // 5. Broadcast double-signed TX
+        const txResult = await executeSponsoredTx({
+          client: suiClient as any,
+          sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
+          userSignature,
+          sponsorSignature: fallbackResult.sponsorSignature,
+        })
+        digest = txResult.digest
+      } else {
+        // self_paid — already executed inside executeTxWithFallback
+        digest = fallbackResult.digest
+        setSelfPaidMode(true)
+      }
 
       setTxHash(digest)
       setPhase('success')
@@ -379,53 +506,104 @@ export default function SurveyPage() {
   if (phase === 'need_pass') {
     return (
       <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
-        <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-lg space-y-6">
+        <div className="bg-white border border-gray-200 rounded-3xl p-8 max-w-md w-full shadow-xl space-y-6">
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-gray-800">首次填答，請先領取通行證</h2>
-            <p className="text-sm text-gray-500 mt-2">
-              SurveyPass 是您的鏈上隱私參與憑證 (SBT)，我們已為您全額代付 Gas，只需輸入 Email 即可免費自動取得。
+            <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">📇</div>
+            <h2 className="text-2xl font-black text-gray-800 tracking-tight">首次填答，請先驗證</h2>
+            <p className="text-xs text-gray-500 mt-2">
+              本系統需要真人憑證 (SurveyPass) 以防範女巫攻擊。請輸入 Email 獲取驗證碼以鑄造您專屬的 SBT 憑證卡。
             </p>
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                輸入 Email 地址以發行
-              </label>
-              <input
-                id="email"
-                type="email"
-                placeholder="respondent@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+          {otpStep === 'input' ? (
+            <form onSubmit={handleRequestOtp} className="space-y-4">
+              <div>
+                <label htmlFor="email" className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wider">
+                  電子郵件地址
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  placeholder="respondent@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
+                  required
+                />
+              </div>
 
-            {issuingError && (
-              <p role="alert" className="text-red-500 text-xs font-medium">
-                {issuingError}
-              </p>
-            )}
+              {issuingError && (
+                <p role="alert" className="text-rose-500 text-xs font-semibold">
+                  ⚠️ {issuingError}
+                </p>
+              )}
 
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setPhase('filling')}
-                className="w-1/3 border py-2 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
-              >
-                返回
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleIssuePass()}
-                disabled={issuingPass}
-                className="w-2/3 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 text-sm"
-              >
-                {issuingPass ? '自動代簽領取中...' : '確認免費領取'}
-              </button>
-            </div>
-          </div>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPhase('filling')}
+                  className="w-1/3 border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-colors text-xs font-bold text-gray-600"
+                >
+                  返回修改
+                </button>
+                <button
+                  type="submit"
+                  disabled={issuingPass}
+                  className="w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-2.5 rounded-xl transition-all disabled:opacity-50 text-xs hover:shadow-sm"
+                >
+                  {issuingPass ? '正在發送...' : '獲取驗證碼 →'}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleVerifyAndMint} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wider">
+                  請輸入 6 位數驗證碼
+                </label>
+                <input
+                  type="text"
+                  placeholder="123456"
+                  maxLength={6}
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-center font-mono font-bold tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  required
+                />
+                {debugOtp && (
+                  <p className="text-[10px] text-blue-600 mt-2 bg-blue-50/50 p-2 rounded-lg border border-blue-100">
+                    ⚙️ 開發者提示：輸入 <span className="font-bold font-mono">{debugOtp}</span> 即可。
+                  </p>
+                )}
+              </div>
+
+              {issuingError && (
+                <p role="alert" className="text-rose-500 text-xs font-semibold">
+                  ⚠️ {issuingError}
+                </p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOtpStep('input')
+                    setDebugOtp(null)
+                  }}
+                  className="w-1/3 border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-colors text-xs font-bold text-gray-600"
+                >
+                  返回修改
+                </button>
+                <button
+                  type="submit"
+                  disabled={issuingPass}
+                  className="w-2/3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold py-2.5 rounded-xl transition-all disabled:opacity-50 text-xs hover:shadow-sm"
+                >
+                  {issuingPass ? '正在驗證鑄造...' : '驗證並鑄造憑證'}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </main>
     )
@@ -442,6 +620,11 @@ export default function SurveyPage() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-gray-800">提交成功！</h1>
+          {selfPaidMode && (
+            <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+              本次以自付 gas 模式完成（Gas Station 暫時不可用）
+            </p>
+          )}
           <p className="text-gray-600 text-sm">
             感謝您的熱心參與，填答完成驗證已在鏈上通過，RWD 獎勵已發放至您的錢包！
           </p>
@@ -509,12 +692,30 @@ export default function SurveyPage() {
   }
 
   // ── filling ───────────────────────────────────────────────────────────────
+  const isPassValid = !!activePass
+    && activePass.status !== 3
+    && (activePass.expiresAt === 0 || activePass.expiresAt > Date.now())
+
+  const submitDisabled = phase === 'submitting'
+    || (surveyMinTier > 0 && !isPassValid)
+    || (isPassValid && activePass!.effectiveTier < surveyMinTier)
+
+  const submitLabel = isPassValid ? '預覽答案' : '需要身分驗證才能填答'
+
   return (
     <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
       <h1 className="text-2xl font-bold mb-2 text-gray-800">{survey.title}</h1>
       <p className="text-sm text-gray-500 mb-6">
         截止日期：{new Date(survey.deadline).toLocaleDateString('zh-TW')}
       </p>
+
+      {isPassValid && (
+        <span data-testid="tier-badge" className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-3 py-1 mb-4">
+          ✓ {activePass!.effectiveTier === 0 ? 'Email 驗證'
+              : activePass!.effectiveTier === 1 ? '社交帳號驗證'
+              : '高階驗證'}
+        </span>
+      )}
 
       {validationError && (
         <p role="alert" className="text-red-500 mb-4 text-sm font-semibold">
@@ -615,9 +816,10 @@ export default function SurveyPage() {
 
         <button
           type="submit"
-          className="bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold shadow-sm w-full sm:w-auto"
+          disabled={submitDisabled}
+          className="bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold shadow-sm w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          預覽答案
+          {submitLabel}
         </button>
       </form>
     </main>

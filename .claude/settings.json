@@ -109,10 +109,31 @@
       "PowerShell(Select-String -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\frontend\\\\src\\\\lib\\\\dashboardDecrypt.ts\" -Pattern '^export' | ForEach-Object { $_.Line })",
       "Bash(pnpm -F frontend test DashboardPage --run)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(npx tsc *)",
+      "Bash(find \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\" -name \"*sponsoredTx*test*\" -o -name \"*test*sponsored*\" 2>nul)",
+      "Bash(xargs grep -l \"sponsor\")",
+      "Bash(find \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\" -name \"*fallback*\" -type f 2>nul)",
+      "Bash(find \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\frontend\\\\src\\\\__tests__\" -type f -name \"*.ts\" -o -name \"*.tsx\" 2>nul)",
+      "Bash(pnpm -F frontend test sponsoredTx.fallback --reporter=verbose)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\frontend\\\\src\" -Recurse -Filter \"App.tsx\" -o)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm -F frontend test --run)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(ls -la \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\\" 2>&1 | head -30)",
+      "Read(//d/Users/Arco_asus/Documents/GitHub/**)",
+      "Bash(dir /b)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(pnpm move *)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\contracts\\\\sources\\\\\" -Filter \"*.move\" | Select-Object Name)",
+      "Bash(cd /d \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\contracts\\\\sources\")",
+      "Bash(Get-Content survey_pass.move -TotalCount 50)"
     ],
     "additionalDirectories": [
-      "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui"
+      "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui",
+      "d:\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui"
     ]
   }
 }

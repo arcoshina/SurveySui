@@ -38,6 +38,7 @@ public struct Survey has key {
     content_hash: vector<u8>,
     encrypted_content: vector<u8>,
     schema_hash: vector<u8>,
+    creator_pub_key: vector<u8>,
     status: u8,
     registered_at_ms: u64,
 }
@@ -99,6 +100,7 @@ public fun register(
     content_hash: vector<u8>,
     encrypted_content: vector<u8>,
     schema_hash: vector<u8>,
+    pub_key: vector<u8>,
     questions: vector<Question>,
     clock: &Clock,
     ctx: &mut TxContext,
@@ -149,6 +151,7 @@ public fun register(
         content_hash,
         encrypted_content,
         schema_hash,
+        creator_pub_key: pub_key,
         status: STATUS_ACTIVE,
         registered_at_ms: now_ms,
     };
@@ -188,6 +191,7 @@ public fun creator(survey: &Survey): address         { survey.creator }
 public fun content_hash(survey: &Survey): vector<u8> { survey.content_hash }
 public fun encrypted_content(survey: &Survey): vector<u8> { survey.encrypted_content }
 public fun schema_hash(survey: &Survey): vector<u8> { survey.schema_hash }
+public fun creator_pub_key(survey: &Survey): vector<u8> { survey.creator_pub_key }
 public fun status(survey: &Survey): u8              { survey.status }
 public fun registered_at_ms(survey: &Survey): u64   { survey.registered_at_ms }
 public fun total_count(registry: &SurveyRegistry): u64 { registry.total_count }

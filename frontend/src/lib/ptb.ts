@@ -162,6 +162,7 @@ export interface BuildCreateSurveyPtbParams {
   // V2 specific parameters (optional for backward compatibility in tests)
   contentHash?: Uint8Array
   schemaHash?: Uint8Array
+  creatorPubKey?: Uint8Array
   questions?: Array<{
     id: string
     type: string
@@ -188,6 +189,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
 
   const contentHash = p.contentHash || new Uint8Array(32)
   const schemaHash = p.schemaHash || new Uint8Array(32)
+  const creatorPubKey = p.creatorPubKey || new Uint8Array(0)
   const questions = p.questions || []
   const offsetIn = p.offsetIn || 0n
   const creatorSssrCoins = p.creatorSssrCoins || []
@@ -318,6 +320,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.vector('u8', Array.from(contentHash)),
       tx.pure.vector('u8', Array.from(p.encryptedContent)),
       tx.pure.vector('u8', Array.from(schemaHash)),
+      tx.pure.vector('u8', Array.from(creatorPubKey)),
       questionsVec,
       tx.object('0x6'), // Clock
     ],
@@ -424,3 +427,91 @@ export function extractSurveyIdFromEffects(
 ): string | null {
   return findCreatedBySuffix(objectChanges, '::survey_registry::Survey')
 }
+
+// ── SurveyPass PTB helpers ───────────────────────────────────────────────────
+
+export interface BuildMintPassPtbParams {
+  packageId: string
+  registryId: string
+  configId: string
+  owner: string
+  source: number
+  nullifierHash: Uint8Array
+  commitment: Uint8Array
+  expiresAt: bigint | string
+  bffSig: Uint8Array
+}
+
+/**
+ * Builds a PTB to mint a new SurveyPass.
+ */
+export function buildMintPassPtb(p: BuildMintPassPtbParams): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${p.packageId}::survey_pass::mint_pass`,
+    arguments: [
+      tx.object(p.registryId),
+      tx.object(p.configId),
+      tx.pure.address(p.owner),
+      tx.pure.u8(p.source),
+      tx.pure.vector('u8', Array.from(p.nullifierHash)),
+      tx.pure.vector('u8', Array.from(p.commitment)),
+      tx.pure.u64(BigInt(p.expiresAt).toString()),
+      tx.pure.vector('u8', Array.from(p.bffSig)),
+      tx.object('0x6'), // Clock
+    ],
+  })
+  return tx
+}
+
+export interface BuildUpdatePassCredentialPtbParams {
+  packageId: string
+  passId: string
+  registryId: string
+  configId: string
+  source: number
+  nullifierHash: Uint8Array
+  commitment: Uint8Array
+  expiresAt: bigint | string
+  bffSig: Uint8Array
+}
+
+/**
+ * Builds a PTB to update credentials on an existing SurveyPass.
+ */
+export function buildUpdatePassCredentialPtb(p: BuildUpdatePassCredentialPtbParams): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${p.packageId}::survey_pass::update_pass_credential`,
+    arguments: [
+      tx.object(p.passId),
+      tx.object(p.registryId),
+      tx.object(p.configId),
+      tx.pure.u8(p.source),
+      tx.pure.vector('u8', Array.from(p.nullifierHash)),
+      tx.pure.vector('u8', Array.from(p.commitment)),
+      tx.pure.u64(BigInt(p.expiresAt).toString()),
+      tx.pure.vector('u8', Array.from(p.bffSig)),
+      tx.object('0x6'), // Clock
+    ],
+  })
+  return tx
+}
+
+export interface BuildDeletePassPtbParams {
+  packageId: string
+  passId: string
+}
+
+/**
+ * Builds a PTB to permanently delete a revoked SurveyPass.
+ */
+export function buildDeletePassPtb(p: BuildDeletePassPtbParams): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${p.packageId}::survey_pass::delete_pass`,
+    arguments: [tx.object(p.passId)],
+  })
+  return tx
+}
+

@@ -6,29 +6,35 @@ use sui::coin::{Self, Coin};
 use sui::test_scenario as ts;
 use surveysui::amm_pool::{Self, Pool};
 use surveysui::stacked_survey_reward::{Self, SssrTreasury, STACKED_SURVEY_REWARD};
-use surveysui::survey_pass::{Self, PassRegistry, SurveyPass};
+use surveysui::survey_pass::{Self, NullifierRegistry, IssuerConfig, SurveyPass};
 use surveysui::survey_registry::{Self, SurveyRegistry};
 use surveysui::survey_sui_reward::{Self, SsrTreasury, SURVEY_SUI_REWARD};
 use surveysui::survey_vault::{Self, SurveyVault};
 
 const ADMIN: address      = @0xA11CE;
 const CREATOR: address    = @0xC0FFEE;
-const RESPONDENT: address = @0xA71CE;
+const RESPONDENT: address = @0xa11ce00000000000000000000000000000000000000000000000000000000000;
 
 const TTL_180D: u64      = 180 * 24 * 60 * 60 * 1000;
 const T0: u64            = 1_000_000_000; // ms
 const SUI_INVEST: u64    = 100_000;       // MIST
-// At total=0: sSSR_received = 100_000 (1:1 with MIST)
 const PER_RESPONSE: u64  = 1_000;
 const MAX_RESPONSES: u64 = 50;
-// vault_fee = 100_000 × 30 / 10_000 = 300
-// vault_balance_after = 99_700 ≥ 50 × 1_000 = 50_000 ✓
+const EXPIRES_AT: u64 = 99999999999999;
 
-/// Full A→C lifecycle:
-///   A. ADMIN deploys modules, issues SurveyPass, creates AMM pool
-///   B. CREATOR invests SUI → sSSR, deposits sSSR into vault (fee deducted), registers survey
-///   C. RESPONDENT claims sSSR from vault, redeems sSSR → SSR via AMM
-///   Epilogue: CREATOR closes vault, ADMIN withdraws SUI
+// Test vectors
+fun bff_pubkey(): vector<u8> {
+    vector[138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92]
+}
+
+fun alice_nullifier(): vector<u8> {
+    vector[2, 163, 245, 73, 111, 74, 136, 247, 122, 23, 182, 137, 34, 98, 157, 105, 176, 61, 226, 8, 176, 54, 246, 25, 252, 11, 246, 36, 69, 242, 212, 102]
+}
+
+fun alice_valid_sig(): vector<u8> {
+    vector[217, 202, 151, 37, 251, 106, 24, 105, 129, 152, 219, 202, 66, 91, 132, 32, 23, 93, 16, 126, 194, 142, 232, 29, 19, 53, 115, 116, 25, 230, 43, 159, 217, 249, 13, 132, 53, 136, 248, 227, 73, 255, 171, 228, 255, 118, 116, 175, 244, 107, 131, 219, 91, 195, 171, 127, 225, 94, 27, 212, 36, 48, 155, 2]
+}
+
 #[test]
 fun test_full_lifecycle_a_to_c() {
     // ── A. Deploy ─────────────────────────────────────────────────────────────
@@ -46,11 +52,32 @@ fun test_full_lifecycle_a_to_c() {
     sc.next_tx(ADMIN);
     amm_pool::init_pool(ADMIN, sc.ctx());
 
-    // ADMIN issues SurveyPass for RESPONDENT
+    // ADMIN sets BFF public key
     sc.next_tx(ADMIN);
     {
-        let mut registry = ts::take_shared<PassRegistry>(&sc);
-        survey_pass::issue(&mut registry, b"alice_sub", TTL_180D, &clk, sc.ctx());
+        let mut config = ts::take_shared<IssuerConfig>(&sc);
+        survey_pass::set_issuer_pubkey(&mut config, bff_pubkey(), sc.ctx());
+        ts::return_shared(config);
+    };
+
+    // RESPONDENT mints SurveyPass
+    sc.next_tx(RESPONDENT);
+    {
+        let mut registry = ts::take_shared<NullifierRegistry>(&sc);
+        let config = ts::take_shared<IssuerConfig>(&sc);
+        survey_pass::mint_pass(
+            &mut registry,
+            &config,
+            RESPONDENT,
+            2,
+            alice_nullifier(),
+            vector[],
+            EXPIRES_AT,
+            alice_valid_sig(),
+            &clk,
+            sc.ctx()
+        );
+        ts::return_shared(config);
         ts::return_shared(registry);
     };
 
@@ -61,19 +88,16 @@ fun test_full_lifecycle_a_to_c() {
         let mut ssr_treasury  = ts::take_shared<SsrTreasury>(&sc);
         let mut sssr_treasury = ts::take_shared<SssrTreasury>(&sc);
 
-        // invest SUI → sSSR (no fee here)
         let sui_in  = coin::mint_for_testing<sui::sui::SUI>(SUI_INVEST, sc.ctx());
         let sssr    = amm_pool::invest_and_mint(
             &mut pool, &mut ssr_treasury, &mut sssr_treasury, sui_in, sc.ctx(),
         );
         let sssr_received = coin::value(&sssr);
-        assert!(sssr_received == SUI_INVEST * 1000); // 1 MIST → 1000 sSSR base at total=0
+        assert!(sssr_received == SUI_INVEST * 1000);
 
-        // pool absorbed the SUI and minted sssr_received SSR backing
         assert!(amm_pool::sui_reserve(&pool) == SUI_INVEST);
         assert!(amm_pool::ssr_reserve(&pool) == sssr_received);
 
-        // deposit sSSR into vault (no fee deducted here in V2)
         let vault_balance_expected = sssr_received;
         let vault = survey_vault::create(
             sssr, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
@@ -82,7 +106,6 @@ fun test_full_lifecycle_a_to_c() {
         let vault_id = object::id(&vault);
         survey_vault::share_vault(vault);
 
-        // register survey
         let mut survey_reg = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
             survey_registry::new_question(
@@ -99,6 +122,7 @@ fun test_full_lifecycle_a_to_c() {
             b"survey_hash",
             b"encrypted_content",
             b"schema_hash",
+            b"test_pubkey",
             questions,
             &clk,
             sc.ctx(),
@@ -117,10 +141,9 @@ fun test_full_lifecycle_a_to_c() {
         let mut vault = ts::take_shared<SurveyVault>(&sc);
         let pass      = ts::take_shared<SurveyPass>(&sc);
 
-        // claim sSSR reward from vault
-        survey_vault::claim(&mut vault, &pass, b"alice_sub", b"encrypted_response", &clk, sc.ctx());
+        survey_vault::claim(&mut vault, &pass, b"encrypted_response", &clk, sc.ctx());
         assert!(survey_vault::claimed_count(&vault) == 1);
-        assert!(survey_vault::has_claimed(&vault, b"alice_sub"));
+        assert!(survey_vault::has_claimed(&vault, RESPONDENT));
 
         ts::return_shared(pass);
         ts::return_shared(vault);
@@ -139,7 +162,6 @@ fun test_full_lifecycle_a_to_c() {
         let fee     = PER_RESPONSE * 30 / 10_000;
         assert!(coin::value(&ssr_out) == PER_RESPONSE - fee);
 
-        // Return SSR to sender (or burn in test)
         let mut ssr_treasury = ts::take_shared<SsrTreasury>(&sc);
         survey_sui_reward::burn(&mut ssr_treasury, ssr_out);
         ts::return_shared(ssr_treasury);
@@ -152,7 +174,7 @@ fun test_full_lifecycle_a_to_c() {
     {
         let mut vault = ts::take_shared<SurveyVault>(&sc);
         survey_vault::close(&mut vault, sc.ctx());
-        assert!(survey_vault::status(&vault)        == 1); // STATUS_CLOSED
+        assert!(survey_vault::status(&vault)        == 1);
         assert!(survey_vault::balance_value(&vault) == 0);
         ts::return_shared(vault);
     };

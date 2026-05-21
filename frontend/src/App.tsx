@@ -5,6 +5,7 @@ import FundPage from './pages/FundPage'
 import LandingPage from './pages/LandingPage'
 import RedeemPage from './pages/RedeemPage'
 import SurveyPage from './pages/SurveyPage'
+import AuthPage from './pages/AuthPage'
 
 export function AppRoutes() {
   return (
@@ -15,6 +16,7 @@ export function AppRoutes() {
       <Route path="/s/:id" element={<SurveyPage />} />
       <Route path="/redeem" element={<RedeemPage />} />
       <Route path="/dashboard/:vaultId" element={<DashboardPage />} />
+      <Route path="/auth" element={<AuthPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

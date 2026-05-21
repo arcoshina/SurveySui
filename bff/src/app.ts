@@ -5,6 +5,7 @@ import type { LRUCache } from 'lru-cache'
 import type { StatsResponse } from './types.js'
 import { registerStatsRoutes } from './stats/handler.js'
 import { registerOgRoutes } from './og/handler.js'
+import { registerAuthRoutes } from './auth/handler.js'
 
 export interface BffAppDeps {
   suiClient: SuiClient
@@ -20,5 +21,6 @@ export async function buildApp(deps: BffAppDeps): Promise<FastifyInstance> {
   app.get('/health', async () => ({ status: 'ok' }))
   registerStatsRoutes(app, deps)
   registerOgRoutes(app, { frontendUrl: deps.frontendUrl ?? 'http://localhost:5173' })
+  registerAuthRoutes(app)
   return app
 }
