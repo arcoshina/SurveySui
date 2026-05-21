@@ -13,7 +13,7 @@ import {
 
 /** Fake wallet sign: deterministic — SHA-256 of the message bytes. */
 async function fakeSign(message: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', message))
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', message as any))
 }
 
 /**

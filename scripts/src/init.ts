@@ -10,6 +10,28 @@ import { requireEnv } from './env.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const CONTRACTS_PATH = resolve(__dirname, '../../contracts')
 
+// Manually load root .env file
+try {
+  const rootEnvPath = resolve(__dirname, '../../.env')
+  if (existsSync(rootEnvPath)) {
+    const envLines = readFileSync(rootEnvPath, 'utf8').split('\n')
+    for (const line of envLines) {
+      const match = line.match(/^\s*([^#=]+)\s*=\s*(.*)\s*$/)
+      if (match) {
+        const key = match[1].trim()
+        let val = match[2].trim()
+        if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1)
+        if (val.startsWith("'") && val.endsWith("'")) val = val.slice(1, -1)
+        if (!process.env[key]) {
+          process.env[key] = val
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Failed to load root .env file:', e)
+}
+
 // ── types ─────────────────────────────────────────────────────────────────────
 
 export interface DeployResult {
@@ -17,6 +39,8 @@ export interface DeployResult {
   ssrTreasuryId: string
   sssrTreasuryId: string
   surveyRegistryId: string
+  nullifierRegistryId: string
+  issuerConfigId: string
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -84,12 +108,14 @@ export async function deployPackage(
     signer: keypair,
     options: { showObjectChanges: true, showEffects: true },
   })
-  await client.waitForTransaction({ digest: result.digest })
+  await client.waitForTransaction({ digest: result.digest, timeout: 120_000 })
 
   let packageId = ''
   let ssrTreasuryId = ''
   let sssrTreasuryId = ''
   let surveyRegistryId = ''
+  let nullifierRegistryId = ''
+  let issuerConfigId = ''
 
   for (const change of result.objectChanges ?? []) {
     if (change.type === 'published') {
@@ -102,21 +128,28 @@ export async function deployPackage(
         sssrTreasuryId = change.objectId
       if (change.objectType.includes('::survey_registry::SurveyRegistry'))
         surveyRegistryId = change.objectId
+      if (change.objectType.includes('::survey_pass::NullifierRegistry'))
+        nullifierRegistryId = change.objectId
+      if (change.objectType.includes('::survey_pass::IssuerConfig'))
+        issuerConfigId = change.objectId
     }
   }
 
-  if (!packageId || !ssrTreasuryId || !sssrTreasuryId || !surveyRegistryId) {
+  if (!packageId || !ssrTreasuryId || !sssrTreasuryId || !surveyRegistryId || !nullifierRegistryId || !issuerConfigId) {
     throw new Error(
       `Deploy incomplete. packageId="${packageId}" ssrTreasuryId="${ssrTreasuryId}" ` +
-        `sssrTreasuryId="${sssrTreasuryId}" surveyRegistryId="${surveyRegistryId}"`,
+        `sssrTreasuryId="${sssrTreasuryId}" surveyRegistryId="${surveyRegistryId}" ` +
+        `nullifierRegistryId="${nullifierRegistryId}" issuerConfigId="${issuerConfigId}"`,
     )
   }
 
-  console.log(`  packageId:         ${packageId}`)
-  console.log(`  ssrTreasuryId:     ${ssrTreasuryId}`)
-  console.log(`  sssrTreasuryId:    ${sssrTreasuryId}`)
-  console.log(`  surveyRegistryId:  ${surveyRegistryId}`)
-  return { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId }
+  console.log(`  packageId:            ${packageId}`)
+  console.log(`  ssrTreasuryId:        ${ssrTreasuryId}`)
+  console.log(`  sssrTreasuryId:       ${sssrTreasuryId}`)
+  console.log(`  surveyRegistryId:     ${surveyRegistryId}`)
+  console.log(`  nullifierRegistryId:  ${nullifierRegistryId}`)
+  console.log(`  issuerConfigId:       ${issuerConfigId}`)
+  return { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId }
 }
 
 /**
@@ -142,7 +175,7 @@ export async function initAmmPool(
     signer: keypair,
     options: { showObjectChanges: true, showEffects: true },
   })
-  await client.waitForTransaction({ digest: result.digest })
+  await client.waitForTransaction({ digest: result.digest, timeout: 120_000 })
 
   for (const change of result.objectChanges ?? []) {
     if (change.type === 'created' && change.objectType.includes('amm_pool::Pool')) {
@@ -197,26 +230,88 @@ async function main() {
     : Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
   const client = new SuiClient({ url: getFullnodeUrl(network) })
 
-  // 1. Deploy (creates SsrTreasury, SssrTreasury, SurveyRegistry automatically)
-  const { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId } = await deployPackage(
-    client,
-    keypair,
-    adminAddress,
-  )
+  // 1. Deploy (creates SsrTreasury, SssrTreasury, SurveyRegistry, NullifierRegistry, IssuerConfig)
+  const { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId } =
+    await deployPackage(client, keypair, adminAddress)
 
   // 2. Init AMM pool (empty bonding-curve pool; no initial liquidity required)
   const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
 
-  // 3. Persist IDs
+  // 3. Set Issuer Pubkey in IssuerConfig
+  let issuerPrivHex = process.env.SURVEY_PASS_ISSUER_PRIV
+  if (!issuerPrivHex) {
+    const bffEnvPath = resolve(__dirname, '../../bff/.env')
+    if (existsSync(bffEnvPath)) {
+      const bffEnv = readFileSync(bffEnvPath, 'utf8')
+      const match = bffEnv.match(/SURVEY_PASS_ISSUER_PRIV\s*=\s*([a-fA-F0-9xX]+)/)
+      if (match) {
+        issuerPrivHex = match[1]
+      }
+    }
+  }
+  if (!issuerPrivHex) {
+    issuerPrivHex = '0101010101010101010101010101010101010101010101010101010101010101'
+  }
+  const issuerPrivClean = issuerPrivHex.startsWith('0x') ? issuerPrivHex.slice(2) : issuerPrivHex
+  const issuerKeypairBytes = new Uint8Array(Buffer.from(issuerPrivClean, 'hex')).slice(0, 32)
+  const issuerKeypair = Ed25519Keypair.fromSecretKey(issuerKeypairBytes)
+  const issuerPubkeyBytes = issuerKeypair.getPublicKey().toRawBytes()
+
+  console.log('Setting issuer public key on-chain…')
+  const setPubkeyTx = new Transaction()
+  setPubkeyTx.moveCall({
+    target: `${packageId}::survey_pass::set_issuer_pubkey`,
+    arguments: [
+      setPubkeyTx.object(issuerConfigId),
+      setPubkeyTx.pure.vector('u8', Array.from(issuerPubkeyBytes)),
+    ],
+  })
+  const setPubkeyResult = await client.signAndExecuteTransaction({
+    transaction: setPubkeyTx,
+    signer: keypair,
+  })
+  await client.waitForTransaction({ digest: setPubkeyResult.digest })
+  console.log('  Issuer public key set successfully!')
+
+  // 4. Persist IDs into root .env and .env.shared
   writeEnvShared({
     SUI_PACKAGE_ID: packageId,
     SSR_TREASURY_ID: ssrTreasuryId,
     SSSR_TREASURY_ID: sssrTreasuryId,
     AMM_POOL_ID: poolId,
     SURVEY_REGISTRY_ID: surveyRegistryId,
+    PASS_REGISTRY_ID: nullifierRegistryId,
+    ISSUER_CONFIG_ID: issuerConfigId,
   })
 
-  // 4. Verify pool is live
+  // 4. Write VITE_* variables to frontend/.env
+  const frontendEnvPath = resolve(__dirname, '../../frontend/.env')
+  mergeEnvFile(frontendEnvPath, {
+    VITE_PACKAGE_ID: packageId,
+    VITE_SSR_TREASURY_ID: ssrTreasuryId,
+    VITE_SSSR_TREASURY_ID: sssrTreasuryId,
+    VITE_AMM_POOL_ID: poolId,
+    VITE_SURVEY_REGISTRY_ID: surveyRegistryId,
+    VITE_PASS_REGISTRY_ID: nullifierRegistryId,
+    VITE_NULLIFIER_REGISTRY_ID: nullifierRegistryId,
+    VITE_ISSUER_CONFIG_ID: issuerConfigId,
+    VITE_ADMIN_ADDRESS: adminAddress,
+    VITE_BFF_URL: 'http://localhost:3100',
+  })
+  console.log(`\nWritten VITE_* variables to frontend/.env`)
+
+  // 5. Write variables to bff/.env
+  const bffEnvPath = resolve(__dirname, '../../bff/.env')
+  if (existsSync(bffEnvPath)) {
+    mergeEnvFile(bffEnvPath, {
+      SUI_PACKAGE_ID: packageId,
+      PASS_REGISTRY_ID: nullifierRegistryId,
+      ISSUER_CONFIG_ID: issuerConfigId,
+    })
+    console.log(`Written variables to bff/.env`)
+  }
+
+  // 5. Verify pool is live
   const state = await queryPoolState(client, poolId)
   console.log(`\nPool verified (empty at start):`)
   console.log(`  sui_reserve:        ${state.suiReserve}`)

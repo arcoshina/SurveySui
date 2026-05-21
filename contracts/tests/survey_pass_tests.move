@@ -421,8 +421,10 @@ fun test_surveypass_delete_after_revoke() {
 
     sc.next_tx(ALICE);
     {
+        let mut registry = ts::take_shared<NullifierRegistry>(&sc);
         let pass = ts::take_shared<SurveyPass>(&sc);
-        survey_pass::delete_pass(pass, sc.ctx());
+        survey_pass::delete_pass(&mut registry, pass, sc.ctx());
+        ts::return_shared(registry);
     };
 
     clock::destroy_for_testing(clk);

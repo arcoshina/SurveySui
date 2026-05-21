@@ -129,7 +129,14 @@
       "Bash(pnpm move *)",
       "Bash(Get-ChildItem -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\contracts\\\\sources\\\\\" -Filter \"*.move\" | Select-Object Name)",
       "Bash(cd /d \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\\\\contracts\\\\sources\")",
-      "Bash(Get-Content survey_pass.move -TotalCount 50)"
+      "Bash(Get-Content survey_pass.move -TotalCount 50)",
+      "Bash(pnpm tsx *)",
+      "Bash(node --env-file .env --import tsx/esm scripts/src/devAccounts.ts)",
+      "Bash(node --env-file ../.env --import tsx/esm src/devAccounts.ts)",
+      "Bash(node --env-file ../.env --import tsx/esm src/init.ts)",
+      "Bash(curl -s -X POST https://fullnode.devnet.sui.io:443 -H \"Content-Type: application/json\" -d \"{\\\\\"jsonrpc\\\\\":\\\\\"2.0\\\\\",\\\\\"id\\\\\":1,\\\\\"method\\\\\":\\\\\"sui_getLatestCheckpointSequenceNumber\\\\\",\\\\\"params\\\\\":[]}\")",
+      "Bash(Get-ChildItem -Path \"D:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\" -Recurse -Filter \"package.json\")",
+      "Bash(git stash *)"
     ],
     "additionalDirectories": [
       "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui",

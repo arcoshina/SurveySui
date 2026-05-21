@@ -172,15 +172,11 @@ describe.skipIf(!E2E_ENABLED)('S0.2 e2e harness（需 E2E_ENABLED=1）', () => {
         createTx.pure.address(adminAddress),
       ],
     })
-    const [vaultIdValue] = createTx.moveCall({
-      target: `${PACKAGE_ID}::survey_vault::id_of`,
-      arguments: [vault],
-    })
     createTx.moveCall({
       target: `${PACKAGE_ID}::survey_registry::register`,
       arguments: [
         createTx.object(SURVEY_REGISTRY_ID),
-        vaultIdValue,
+        vault,
         createTx.pure.vector('u8', Array.from(contentBytes)),
         createTx.object('0x6'),
       ],

@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom'
-import { ConnectButton } from '@mysten/dapp-kit'
 
 const steps = [
   {
@@ -58,18 +57,6 @@ const faqs = [
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-white text-gray-900">
-      {/* Header */}
-      <header className="mx-auto max-w-5xl px-6 py-5 flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <Link to="/" className="text-2xl font-semibold tracking-tight text-neutral-900">SurveySui</Link>
-          <nav className="hidden sm:flex items-center gap-4 text-sm font-medium text-neutral-500">
-            <Link to="/auth" className="hover:text-neutral-900 transition-colors">真人認證 SurveyPass</Link>
-            <Link to="/redeem" className="hover:text-neutral-900 transition-colors">兌換獎勵</Link>
-          </nav>
-        </div>
-        <ConnectButton />
-      </header>
-
       {/* Hero */}
       <section className="mx-auto max-w-5xl px-6 py-20 text-center">
         <h1 className="text-4xl sm:text-5xl font-bold leading-tight mb-6">

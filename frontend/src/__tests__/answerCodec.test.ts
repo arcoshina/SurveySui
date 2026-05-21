@@ -79,4 +79,18 @@ describe('S2.3 — answerCodec tests', () => {
 
     consoleWarnSpy.mockRestore()
   })
+
+  it('test_answer_decode_v1_legacy_format — should decode V1 legacy JSON payload format', () => {
+    const legacyPayloadStr = JSON.stringify({
+      q1: '紅色',
+      q2: ['手機', '平板'],
+    })
+
+    const decoded = decodeAnswers(legacyPayloadStr, mockQuestions, schemaHashHex)
+
+    expect(decoded).toEqual({
+      q1: '紅色',
+      q2: ['手機', '平板'],
+    })
+  })
 })

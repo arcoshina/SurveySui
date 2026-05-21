@@ -25,6 +25,7 @@ import {
   encryptSurveyContent,
   type CreatorKeyPair,
 } from '../lib/crypto'
+import { translateMoveAbort } from '../lib/moveAbort'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 const POOL_ID = import.meta.env.VITE_AMM_POOL_ID ?? ''
@@ -249,9 +250,8 @@ export default function FundPage() {
       return
     }
 
-    let tx
-    try {
-      tx = buildCreateSurveyPtb({
+    const buildTx = () => {
+      return buildCreateSurveyPtb({
         packageId: PACKAGE_ID,
         poolId: POOL_ID,
         ssrTreasuryId: SSR_TREASURY_ID,
@@ -270,48 +270,61 @@ export default function FundPage() {
         offsetIn: cost.offsetIn,
         creatorSssrCoins: sssrCoins,
       })
+    }
+
+    // Dry-run pre-flight (best-effort)：抓到合約 abort 就攔在錢包簽名前；
+    // 但 build / RPC 自己出錯時降級放行，讓後續 signAndExecute 的 onError 處理。
+    try {
+      const dryRunTx = buildTx()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(dryRunTx as any).setSender(account.address)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dryRunBytes = await (dryRunTx as any).build({ client: suiClient })
+      const dryRunResult = await suiClient.dryRunTransactionBlock({
+        transactionBlock: dryRunBytes,
+      })
+      if (dryRunResult.effects.status.status === 'failure') {
+        const rawErr = dryRunResult.effects.status.error ?? '未知錯誤'
+        const friendly = translateMoveAbort(rawErr)
+        setErrorMsg(friendly ?? `預檢失敗：${rawErr}`)
+        setStatus('error')
+        return
+      }
     } catch (err) {
-      console.error('E2E Debug: handleFund build PTB catch:', err)
-      setErrorMsg(err instanceof Error ? err.message : 'PTB 建構失敗')
-      setStatus('error')
-      return
+      console.warn('[FundPage] dry-run pre-flight skipped:', err)
     }
 
     setStatus('submitting')
+    const actualTx = buildTx()
     signAndExecute(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       {
-        transaction: tx as any,
-        options: {
-          showObjectChanges: true,
-          showEffects: true,
-        },
+        transaction: actualTx as any,
       },
       {
         onSuccess: async (result) => {
           console.log('E2E Debug: signAndExecute onSuccess result:', JSON.stringify(result))
           try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             let txResult = (window as any).mockLastExecutedTransactionResult
             if (!txResult) {
-              for (let attempt = 0; attempt < 5; attempt++) {
-                try {
-                  const res = await suiClient.getTransactionBlock({
-                    digest: result.digest,
-                    options: {
-                      showObjectChanges: true,
-                      showEffects: true,
-                      showEvents: true,
-                    },
-                  })
-                  if (res && ((res.events && res.events.length > 0) || (res.objectChanges && res.objectChanges.length > 0))) {
-                    txResult = res
-                    break
-                  }
-                } catch (e) {
-                  console.warn(`[FundPage] Attempt ${attempt} to fetch tx block failed, retrying...`, e)
-                }
-                await new Promise((resolve) => setTimeout(resolve, 1000))
+              try {
+                await suiClient.waitForTransaction({
+                  digest: result.digest,
+                  timeout: 30_000,
+                  pollInterval: 1_000,
+                })
+              } catch (e) {
+                console.warn('[FundPage] waitForTransaction timed out, falling back to getTransactionBlock', e)
               }
+              txResult = await suiClient.getTransactionBlock({
+                digest: result.digest,
+                options: {
+                  showObjectChanges: true,
+                  showEffects: true,
+                  showEvents: true,
+                },
+              })
             }
 
             if (!txResult) {
@@ -319,7 +332,9 @@ export default function FundPage() {
             }
 
             if (txResult.effects && txResult.effects.status && txResult.effects.status.status === 'failure') {
-              throw new Error(`交易鏈上執行失敗: ${txResult.effects.status.error || '未知 Move 錯誤'}`)
+              const rawErr = txResult.effects.status.error || '未知 Move 錯誤'
+              const friendly = translateMoveAbort(rawErr)
+              throw new Error(friendly ?? `交易鏈上執行失敗：${rawErr}`)
             }
 
             let vaultId = null
@@ -376,7 +391,8 @@ export default function FundPage() {
         },
         onError: (err) => {
           console.error('E2E Debug: handleFund signAndExecute onError:', err)
-          setErrorMsg(err.message)
+          const friendly = translateMoveAbort(err.message)
+          setErrorMsg(friendly ?? err.message)
           setStatus('error')
         },
       },

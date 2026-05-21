@@ -6,6 +6,7 @@ import type { StatsResponse } from './types.js'
 import { registerStatsRoutes } from './stats/handler.js'
 import { registerOgRoutes } from './og/handler.js'
 import { registerAuthRoutes } from './auth/handler.js'
+import { registerGasRoutes } from './gas/handler.js'
 
 export interface BffAppDeps {
   suiClient: SuiClient
@@ -22,5 +23,6 @@ export async function buildApp(deps: BffAppDeps): Promise<FastifyInstance> {
   registerStatsRoutes(app, deps)
   registerOgRoutes(app, { frontendUrl: deps.frontendUrl ?? 'http://localhost:5173' })
   registerAuthRoutes(app)
+  registerGasRoutes(app, deps)
   return app
 }

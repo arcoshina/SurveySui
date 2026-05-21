@@ -3,6 +3,7 @@ module surveysui::survey_registry;
 use sui::clock::{Self, Clock};
 use sui::event;
 use sui::table::{Self, Table};
+use surveysui::survey_vault::SurveyVault;
 
 // ── status constants ──────────────────────────────────────────────────────────
 
@@ -96,7 +97,7 @@ public fun new_question(
 /// The survey is shared immediately so anyone can read it.
 public fun register(
     registry: &mut SurveyRegistry,
-    vault_id: ID,
+    vault: &SurveyVault,
     content_hash: vector<u8>,
     encrypted_content: vector<u8>,
     schema_hash: vector<u8>,
@@ -105,6 +106,7 @@ public fun register(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    let vault_id = object::id(vault);
     // 1. Duplicate check (INV-5)
     assert!(!table::contains(&registry.registered_hashes, content_hash), EDuplicateSurvey);
     table::add(&mut registry.registered_hashes, content_hash, ctx.sender());

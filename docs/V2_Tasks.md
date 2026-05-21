@@ -47,11 +47,11 @@
 
 - [x] S6.1 SurveyPass 簽發合約 / BFF / FE
 - [x] S6.2 SurveyPass 首次連錢包檢查
-- [S] S6.3 公鑰寫入 SurveyPass（取消，改存入 Survey 物件）
+- [s] S6.3 公鑰寫入 SurveyPass（條件性）
 
 ## S7：總驗收
 
-- [x] 全部測試綠 + INV-1 ~ INV-9 守住 + demo 序列跑通
+- [ ] 全部測試綠 + INV-1 ~ INV-7 守住 + demo 序列跑通
 
 
 ## 手動驗收

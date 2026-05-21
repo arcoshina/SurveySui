@@ -2,9 +2,14 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { encryptSurveyContent, bytesToBase64url } from '../lib/crypto'
-import { useSuiClientQuery } from '@mysten/dapp-kit'
+import { fetchActivePass } from '../lib/surveyPass'
 
 const mockGetObject = vi.fn()
+
+// Mock surveyPass helper
+vi.mock('../lib/surveyPass', () => ({
+  fetchActivePass: vi.fn(),
+}))
 
 // Mock dapp-kit hooks
 vi.mock('@mysten/dapp-kit', () => ({
@@ -12,35 +17,19 @@ vi.mock('@mysten/dapp-kit', () => ({
   useSuiClient: vi.fn().mockReturnValue({
     executeTransactionBlock: vi.fn().mockResolvedValue({ digest: '0xdeadbeef' }),
     getObject: (...args: any[]) => mockGetObject(...args),
+    waitForTransaction: vi.fn().mockResolvedValue({
+      effects: {
+        status: {
+          status: 'success',
+        },
+      },
+    }),
   }),
   useSignTransaction: vi.fn().mockReturnValue({
     mutateAsync: vi.fn().mockResolvedValue({ signature: 'mock_user_sig' }),
   }),
   useSignAndExecuteTransaction: vi.fn().mockReturnValue({
     mutateAsync: vi.fn().mockResolvedValue({ digest: '0xdeadbeef' }),
-  }),
-  useSuiClientQuery: vi.fn().mockImplementation((...args) => {
-    // Simple mock that returns a SurveyPass owned by the user
-    return {
-      data: [
-        {
-          data: {
-            objectId: '0xpass',
-            content: {
-              dataType: 'moveObject',
-              fields: {
-                owner: '0xuser',
-                effective_tier: 1,
-                expires_at: 0,
-                status: 0,
-              },
-            },
-          },
-        },
-      ],
-      isLoading: false,
-      refetch: vi.fn(),
-    } as any;
   }),
 }))
 
@@ -103,6 +92,15 @@ describe('T3.6 — 問卷填答頁', () => {
   const creatorPubKey = new Uint8Array(32).fill(1)
 
   beforeEach(async () => {
+    vi.mocked(fetchActivePass).mockResolvedValue({
+      objectId: '0xpass',
+      owner: '0xuser',
+      effectiveTier: 1,
+      expiresAt: 0,
+      status: 0,
+      credentialSources: [2],
+      createdAt: 0,
+    })
     sessionStorage.setItem('survey_pass_id', '0xpass')
     sessionStorage.setItem('survey_sub_hash', '0xsubhash')
     vi.spyOn(Transaction, 'from').mockReturnValue({} as any)
@@ -280,22 +278,16 @@ describe('S6.2 — SurveyPass 首次連錢包檢查', () => {
   let defaultEncryptedBlob: Uint8Array
   const creatorPubKey = new Uint8Array(32).fill(1)
 
-  const noPassMock = { data: [], isLoading: false, refetch: vi.fn() }
-  const validPassMock = {
-    data: [{
-      data: {
-        objectId: '0xpass',
-        content: {
-          dataType: 'moveObject',
-          fields: { owner: '0xuser', effective_tier: 1, expires_at: 0, status: 0 },
-        },
-      },
-    }],
-    isLoading: false,
-    refetch: vi.fn(),
-  }
-
   beforeEach(async () => {
+    vi.mocked(fetchActivePass).mockResolvedValue({
+      objectId: '0xpass',
+      owner: '0xuser',
+      effectiveTier: 1,
+      expiresAt: 0,
+      status: 0,
+      credentialSources: [2],
+      createdAt: 0,
+    })
     sessionStorage.setItem('survey_pass_id', '0xpass')
     vi.spyOn(Transaction, 'from').mockReturnValue({} as any)
 
@@ -312,8 +304,6 @@ describe('S6.2 — SurveyPass 首次連錢包檢查', () => {
         },
       },
     })
-
-    vi.mocked(useSuiClientQuery).mockReturnValue(validPassMock as any)
   })
 
   afterEach(() => {
@@ -326,17 +316,11 @@ describe('S6.2 — SurveyPass 首次連錢包檢查', () => {
   it('test_survey_page_queries_pass_on_wallet_connect', async () => {
     renderSurveyPage()
     await screen.findByText('您偏好哪種顏色？')
-    expect(useSuiClientQuery).toHaveBeenCalledWith(
-      'getOwnedObjects',
-      expect.objectContaining({
-        filter: { StructType: expect.stringContaining('::survey_pass::SurveyPass') },
-      }),
-      expect.any(Object),
-    )
+    expect(fetchActivePass).toHaveBeenCalled()
   })
 
   it('test_survey_page_does_not_block_content_without_pass', async () => {
-    vi.mocked(useSuiClientQuery).mockReturnValue(noPassMock as any)
+    vi.mocked(fetchActivePass).mockResolvedValue(null)
     renderSurveyPage()
     expect(await screen.findByText('您偏好哪種顏色？')).toBeInTheDocument()
     const btn = screen.getByRole('button', { name: /需要身分驗證才能填答/ })
@@ -351,7 +335,7 @@ describe('S6.2 — SurveyPass 首次連錢包檢查', () => {
   })
 
   it('test_survey_page_submit_disabled_for_gated_survey_no_pass', async () => {
-    vi.mocked(useSuiClientQuery).mockReturnValue(noPassMock as any)
+    vi.mocked(fetchActivePass).mockResolvedValue(null)
     mockGetObject.mockResolvedValue({
       data: {
         content: {

@@ -9,7 +9,7 @@ use sui::event;
 use sui::table::{Self, Table};
 use surveysui::stacked_survey_reward::{Self, STACKED_SURVEY_REWARD};
 use surveysui::survey_pass::{Self, SurveyPass};
-use surveysui::amm_pool::{Self, FeeConfig};
+use surveysui::amm_pool::{Self, Pool};
 
 const STATUS_OPEN: u8   = 0;
 const STATUS_CLOSED: u8 = 1;
@@ -174,11 +174,11 @@ public fun merge_balances(
 
 public fun split_fee_to_treasury(
     vault: &mut SurveyVault,
-    fee_config: &FeeConfig,
+    pool: &Pool,
     ctx: &mut TxContext,
 ) {
     let total = balance::value(&vault.balance);
-    let effective_fee_bps = amm_pool::effective(fee_config);
+    let effective_fee_bps = amm_pool::effective(amm_pool::fee_config(pool));
     let fee = total * (effective_fee_bps as u64) / 10_000;
     if (fee > 0) {
         let fee_coin = coin::from_balance(

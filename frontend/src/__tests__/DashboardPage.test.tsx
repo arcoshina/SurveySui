@@ -49,6 +49,9 @@ vi.mock('../lib/crypto', () => ({
     privateKey: {} as CryptoKey,
   }),
   base64urlToBytes: vi.fn(() => new Uint8Array(32)),
+  decryptSurveyContent: vi.fn().mockResolvedValue({
+    markdown: '---\ntitle: "測試問卷"\nperResponse: 1\nmaxResponses: 100\ndeadline: "2030-01-01T00:00:00Z"\nquestions:\n  - id: "q1"\n    type: "text"\n    prompt: "選擇題"\n    required: true\n---'
+  }),
 }))
 
 import {
@@ -106,6 +109,23 @@ function mockSuiClientWithEvents(events: { parsedJson: Record<string, string> }[
   vi.mocked(useSuiClient).mockReturnValue({
     queryEvents: vi.fn().mockResolvedValue({ data: events }),
     getObject: vi.fn().mockResolvedValue({ data: null }),
+    multiGetObjects: vi.fn().mockImplementation(({ ids }) => {
+      return Promise.resolve(
+        ids.map((id: string) => ({
+          data: {
+            content: {
+              dataType: 'moveObject',
+              fields: {
+                status: 0,
+                encrypted_content: Array.from(new Uint8Array(64)),
+                claimed_count: '0',
+                max_responses: '100',
+              }
+            }
+          }
+        }))
+      )
+    })
   } as unknown as ReturnType<typeof useSuiClient>)
 }
 
@@ -124,7 +144,27 @@ function renderDashboard(vaultId = VAULT_ID, hash = '') {
 
 describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
   beforeEach(() => {
-    vi.mocked(useSuiClient).mockReturnValue({} as ReturnType<typeof useSuiClient>)
+    vi.mocked(useSuiClient).mockReturnValue({
+      queryEvents: vi.fn().mockResolvedValue({ data: [] }),
+      getObject: vi.fn().mockResolvedValue({ data: null }),
+      multiGetObjects: vi.fn().mockImplementation(({ ids }) => {
+        return Promise.resolve(
+          ids.map((id: string) => ({
+            data: {
+              content: {
+                dataType: 'moveObject',
+                fields: {
+                  status: 0,
+                  encrypted_content: Array.from(new Uint8Array(64)),
+                  claimed_count: '0',
+                  max_responses: '100',
+                }
+              }
+            }
+          }))
+        )
+      })
+    } as unknown as ReturnType<typeof useSuiClient>)
     vi.mocked(useSuiClientQuery).mockReturnValue(
       mockVaultObject() as unknown as ReturnType<typeof useSuiClientQuery>,
     )
@@ -303,7 +343,7 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
   // ── S3.4：分享連結、問卷列表、回覆進度格式 ───────────────────────────────────
 
   describe('test_dashboard_shows_share_link', () => {
-    it('surveyId 解析後顯示分享連結與複製按鈕', async () => {
+    it('surveyId 解析後顯示分享連結', async () => {
       vi.mocked(useCurrentAccount).mockReturnValue(
         { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
       )
@@ -344,6 +384,33 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
 
       await waitFor(() => {
         expect(writeText).toHaveBeenCalledWith(expect.stringContaining(`/s/${SURVEY_ID}`))
+      })
+      expect(screen.getByRole('button', { name: /已複製/ })).toBeInTheDocument()
+    })
+  })
+
+  describe('test_dashboard_shows_qrcode_modal', () => {
+    it('點擊 QR Code 按鈕後彈出 Modal 視窗並可關閉', async () => {
+      vi.mocked(useCurrentAccount).mockReturnValue(
+        { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
+      )
+      mockSuiClientWithEvents([
+        { parsedJson: { vault_id: VAULT_ID, survey_id: SURVEY_ID, creator: CREATOR } },
+      ])
+
+      renderDashboard()
+
+      const qrBtn = await screen.findByRole('button', { name: /顯示二維碼/ })
+      fireEvent.click(qrBtn)
+
+      expect(screen.getByText('問卷填答 QR Code')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下載 PNG' })).toBeInTheDocument()
+      
+      const closeBtn = screen.getByRole('button', { name: '關閉' })
+      fireEvent.click(closeBtn)
+      
+      await waitFor(() => {
+        expect(screen.queryByText('問卷填答 QR Code')).not.toBeInTheDocument()
       })
     })
   })
@@ -431,7 +498,48 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
   // ── test_decrypt_aggregates_stats（附加 sanity） ──────────────────────────
 
   describe('解密 + 統計流程', () => {
-    it('有事件時 creator 可點解密按鈕，aggregateStats 後渲染長條圖', async () => {
+    it('有事件時 creator 可點解密按鈕，並在解密後顯示答卷明文數據與下載 CSV 按鈕', async () => {
+      vi.mocked(useSuiClient).mockReturnValue({
+        queryEvents: vi.fn().mockResolvedValue({
+          data: [
+            {
+              parsedJson: {
+                vault_id: VAULT_ID,
+                survey_id: SURVEY_ID,
+                creator: CREATOR,
+              },
+            },
+          ],
+        }),
+        getObject: vi.fn().mockResolvedValue({
+          data: {
+            content: {
+              fields: {
+                schema_hash: [1, 2, 3],
+                encrypted_content: Array.from(new Uint8Array(64)),
+              },
+            },
+          },
+        }),
+        multiGetObjects: vi.fn().mockImplementation(({ ids }) => {
+          return Promise.resolve(
+            ids.map((id: string) => ({
+              data: {
+                content: {
+                  dataType: 'moveObject',
+                  fields: {
+                    status: 0,
+                    encrypted_content: Array.from(new Uint8Array(64)),
+                    claimed_count: '0',
+                    max_responses: '100',
+                  }
+                }
+              }
+            }))
+          )
+        })
+      } as unknown as ReturnType<typeof useSuiClient>)
+
       vi.mocked(useCurrentAccount).mockReturnValue(
         { address: CREATOR } as ReturnType<typeof useCurrentAccount>,
       )
@@ -444,6 +552,17 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
           claimed_at_ms: 0,
         },
       ])
+      vi.mocked(decryptAllResponses).mockResolvedValue({
+        responses: [
+          {
+            respondent: '0xrespondent',
+            sub_hash: [1, 2, 3],
+            claimed_at_ms: 1716290000000,
+            answers: { q1: '紅色' },
+          },
+        ],
+        failed: 0,
+      })
       vi.mocked(aggregateStats).mockReturnValue({
         total_responses: 1,
         decrypted_count: 1,
@@ -455,6 +574,9 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
 
       renderDashboard(VAULT_ID, 'AAAA') // 帶 contentKey hash 才啟用解密
 
+      // 先確保 surveyId 解析完成並渲染填答連結，代表 async 的 metadata 載入程序已完成
+      await screen.findByRole('link', { name: /填答連結/ })
+
       await waitFor(() => {
         expect(screen.getByLabelText('response-count')).toHaveTextContent('1')
       })
@@ -464,7 +586,8 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
       await waitFor(() => {
         expect(decryptAllResponses).toHaveBeenCalled()
         expect(aggregateStats).toHaveBeenCalled()
-        expect(screen.getByTestId('bar-chart')).toBeInTheDocument()
+        expect(screen.getByText('答卷明文數據')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /下載 CSV/ })).toBeInTheDocument()
       })
     })
   })

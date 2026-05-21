@@ -5,6 +5,7 @@ use sui::ed25519;
 use sui::clock::{Self, Clock};
 use sui::table::{Self, Table};
 use sui::dynamic_field;
+use sui::object::{Self, ID};
 
 // Source types
 const SRC_SELF_REPORT: u8 = 1;
@@ -29,6 +30,7 @@ const EPassRevoked: u64 = 6;
 public struct NullifierRegistry has key {
     id: UID,
     used: Table<vector<u8>, address>, // nullifier_hash -> owner address
+    passes: Table<address, ID>,
 }
 
 public struct IssuerConfig has key {
@@ -71,6 +73,7 @@ fun init(ctx: &mut TxContext) {
     transfer::share_object(NullifierRegistry {
         id: object::new(ctx),
         used: table::new(ctx),
+        passes: table::new(ctx),
     });
     transfer::share_object(IssuerConfig {
         id: object::new(ctx),
@@ -186,6 +189,11 @@ public fun mint_pass(
         encrypted_payload: option::none(),
     };
 
+    if (table::contains(&registry.passes, owner)) {
+        table::remove(&mut registry.passes, owner);
+    };
+    table::add(&mut registry.passes, owner, object::id(&pass));
+
     let key = CredentialKey { source };
     let slot = CredentialSlot {
         commitment,
@@ -250,12 +258,17 @@ public fun revoke_pass(
 }
 
 public fun delete_pass(
+    registry: &mut NullifierRegistry,
     mut pass: SurveyPass,
     ctx: &mut TxContext,
 ) {
     assert!(ctx.sender() == pass.owner, EOwnerMismatch);
     assert!(pass.status == STATUS_REVOKED, ENotActive);
     
+    if (table::contains(&registry.passes, pass.owner)) {
+        table::remove(&mut registry.passes, pass.owner);
+    };
+
     // 清除所有的 dynamic fields
     let sources = pass.credential_sources;
     let mut i = 0;

@@ -276,20 +276,9 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   })
 
   // 5. Split fee to treasury
-  const [feeConfig] = tx.moveCall({
-    target: `${p.packageId}::amm_pool::fee_config`,
-    arguments: [tx.object(p.poolId)],
-  })
-
   tx.moveCall({
     target: `${p.packageId}::survey_vault::split_fee_to_treasury`,
-    arguments: [vault, feeConfig],
-  })
-
-  // 6. Read vault ID value for register
-  const [vaultIdValue] = tx.moveCall({
-    target: `${p.packageId}::survey_vault::id_of`,
-    arguments: [vault],
+    arguments: [vault, tx.object(p.poolId)],
   })
 
   // Build questions vector
@@ -311,12 +300,12 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     elements: questionsArgs,
   })
 
-  // Register survey
+  // 6. Register survey
   tx.moveCall({
     target: `${p.packageId}::survey_registry::register`,
     arguments: [
       tx.object(p.registryId),
-      vaultIdValue,
+      vault,
       tx.pure.vector('u8', Array.from(contentHash)),
       tx.pure.vector('u8', Array.from(p.encryptedContent)),
       tx.pure.vector('u8', Array.from(schemaHash)),
@@ -500,6 +489,7 @@ export function buildUpdatePassCredentialPtb(p: BuildUpdatePassCredentialPtbPara
 
 export interface BuildDeletePassPtbParams {
   packageId: string
+  registryId: string
   passId: string
 }
 
@@ -510,7 +500,7 @@ export function buildDeletePassPtb(p: BuildDeletePassPtbParams): Transaction {
   const tx = new Transaction()
   tx.moveCall({
     target: `${p.packageId}::survey_pass::delete_pass`,
-    arguments: [tx.object(p.passId)],
+    arguments: [tx.object(p.registryId), tx.object(p.passId)],
   })
   return tx
 }

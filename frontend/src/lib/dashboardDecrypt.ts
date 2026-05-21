@@ -66,6 +66,8 @@ export async function fetchClaimedEvents(
 ): Promise<SurveyClaimedEvent[]> {
   const events: SurveyClaimedEvent[] = []
   let cursor: Parameters<SuiClient['queryEvents']>[0]['cursor'] = null
+  let pageCount = 0
+  const maxPages = 20 // Safety limit to avoid hanging the UI / infinite loops on bad RPC responses
 
   do {
     const page = await client.queryEvents({
@@ -82,7 +84,8 @@ export async function fetchClaimedEvents(
     }
 
     cursor = page.hasNextPage ? page.nextCursor ?? null : null
-  } while (cursor !== null)
+    pageCount++
+  } while (cursor !== null && pageCount < maxPages)
 
   return events
 }

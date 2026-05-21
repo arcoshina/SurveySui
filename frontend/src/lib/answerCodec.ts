@@ -61,11 +61,20 @@ export function decodeAnswers(
   questions: Question[],
   vaultSchemaHash: string | Uint8Array,
 ): Record<string, string | string[]> {
-  const payload = JSON.parse(payloadStr) as EncodedAnswersPayload
+  const payload = JSON.parse(payloadStr)
+
+  // 向後相容 V1 舊格式：
+  // 舊格式直接是 { q1: "...", q2: "..." }，不包含 "answers" 欄位，或者 answers 不是 Array
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.answers)) {
+    return payload as Record<string, string | string[]>
+  }
+
   const expectedHash = typeof vaultSchemaHash === 'string' ? vaultSchemaHash : bytesToHex(vaultSchemaHash)
   
   const cleanExpected = expectedHash.startsWith('0x') ? expectedHash.slice(2) : expectedHash
-  const cleanPayload = payload.schema_hash.startsWith('0x') ? payload.schema_hash.slice(2) : payload.schema_hash
+  const cleanPayload = payload.schema_hash && typeof payload.schema_hash === 'string'
+    ? (payload.schema_hash.startsWith('0x') ? payload.schema_hash.slice(2) : payload.schema_hash)
+    : ''
 
   if (cleanExpected !== cleanPayload) {
     console.warn(`Schema hash mismatch! Expected: ${cleanExpected}, Payload: ${cleanPayload}. Answers might be misaligned.`)

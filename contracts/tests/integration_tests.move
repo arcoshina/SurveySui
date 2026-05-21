@@ -103,8 +103,6 @@ fun test_full_lifecycle_a_to_c() {
             sssr, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
         );
         assert!(survey_vault::balance_value(&vault) == vault_balance_expected);
-        let vault_id = object::id(&vault);
-        survey_vault::share_vault(vault);
 
         let mut survey_reg = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
@@ -118,7 +116,7 @@ fun test_full_lifecycle_a_to_c() {
         ];
         survey_registry::register(
             &mut survey_reg,
-            vault_id,
+            &vault,
             b"survey_hash",
             b"encrypted_content",
             b"schema_hash",
@@ -129,6 +127,8 @@ fun test_full_lifecycle_a_to_c() {
         );
         assert!(survey_registry::total_count(&survey_reg) == 1);
         ts::return_shared(survey_reg);
+
+        survey_vault::share_vault(vault);
 
         ts::return_shared(sssr_treasury);
         ts::return_shared(ssr_treasury);

@@ -69,8 +69,7 @@ fun test_ptb_seven_steps_happy_path_no_offset() {
 
         survey_vault::merge_balances(&mut vault, new_sssr);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         let mut registry = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
@@ -78,7 +77,7 @@ fun test_ptb_seven_steps_happy_path_no_offset() {
         ];
         survey_registry::register(
             &mut registry,
-            survey_vault::id_of(&vault),
+            &vault,
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
@@ -151,8 +150,7 @@ fun test_ptb_seven_steps_happy_path_with_offset() {
 
         survey_vault::merge_balances(&mut vault, new_sssr);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         let mut registry = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
@@ -160,7 +158,7 @@ fun test_ptb_seven_steps_happy_path_with_offset() {
         ];
         survey_registry::register(
             &mut registry,
-            survey_vault::id_of(&vault),
+            &vault,
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
@@ -228,8 +226,7 @@ fun test_ptb_seven_steps_happy_path_overfund_offset() {
         survey_vault::merge_balances(&mut vault, zero_sssr);
 
         let pool = ts::take_shared<Pool>(&sc);
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         let mut registry = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
@@ -237,7 +234,7 @@ fun test_ptb_seven_steps_happy_path_overfund_offset() {
         ];
         survey_registry::register(
             &mut registry,
-            survey_vault::id_of(&vault),
+            &vault,
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
@@ -308,8 +305,7 @@ fun test_ptb_step5_invariant_underfund_abort() {
 
         survey_vault::merge_balances(&mut vault, new_sssr);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
         survey_vault::share_vault(vault);
         ts::return_shared(sssr_treasury);
         ts::return_shared(ssr_treasury);
@@ -341,8 +337,7 @@ fun test_ptb_step7_duplicate_content_abort() {
         let new_sssr = amm_pool::invest_and_mint(&mut pool, &mut ssr_treasury, &mut sssr_treasury, sui_in, sc.ctx());
         survey_vault::merge_balances(&mut vault, new_sssr);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         let mut registry = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
@@ -350,7 +345,7 @@ fun test_ptb_step7_duplicate_content_abort() {
         ];
         survey_registry::register(
             &mut registry,
-            survey_vault::id_of(&vault),
+            &vault,
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
@@ -381,8 +376,7 @@ fun test_ptb_step7_duplicate_content_abort() {
         let new_sssr = amm_pool::invest_and_mint(&mut pool, &mut ssr_treasury, &mut sssr_treasury, sui_in, sc.ctx());
         survey_vault::merge_balances(&mut vault, new_sssr);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         let mut registry = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
@@ -390,7 +384,7 @@ fun test_ptb_step7_duplicate_content_abort() {
         ];
         survey_registry::register(
             &mut registry,
-            survey_vault::id_of(&vault),
+            &vault,
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
@@ -431,8 +425,7 @@ fun test_ptb_step7_invalid_schema_abort() {
         let new_sssr = amm_pool::invest_and_mint(&mut pool, &mut ssr_treasury, &mut sssr_treasury, sui_in, sc.ctx());
         survey_vault::merge_balances(&mut vault, new_sssr);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         let mut registry = ts::take_shared<SurveyRegistry>(&sc);
         let questions = vector[
@@ -440,7 +433,7 @@ fun test_ptb_step7_invalid_schema_abort() {
         ];
         survey_registry::register(
             &mut registry,
-            survey_vault::id_of(&vault),
+            &vault,
             b"content_hash",
             b"encrypted_blob",
             b"schema_hash",
@@ -574,8 +567,7 @@ fun test_ptb_creator_balance_invariant() {
         let new_sssr = amm_pool::invest_and_mint(&mut pool, &mut ssr_treasury, &mut sssr_treasury, sui_in, sc.ctx());
         survey_vault::merge_balances(&mut vault, new_sssr);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         assert!(coin::value(&creator_sssr) == 60_000_000_000);
 
@@ -624,8 +616,7 @@ fun test_ptb_fee_split_accounting() {
         let total_before_split = survey_vault::balance_value(&vault);
         assert!(total_before_split == offset_in + minted);
 
-        let fee_config = amm_pool::fee_config(&pool);
-        survey_vault::split_fee_to_treasury(&mut vault, fee_config, sc.ctx());
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, sc.ctx());
 
         survey_vault::share_vault(vault);
         ts::return_shared(sssr_treasury);

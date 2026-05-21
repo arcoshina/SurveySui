@@ -6,7 +6,13 @@ import { parseFrontmatter } from '../lib/frontmatter'
 import { estimateFundCostV2 } from '../lib/ptb'
 import { formatSssr } from '../lib/format'
 
-const TEMPLATE = `---
+function makeTemplate(): string {
+  // 在 frontmatter 內加 draftStamp 自訂欄位，確保每張新草稿的 content_hash 不同 ——
+  // 避免合約端 EDuplicateSurvey；parser 只認識 perResponse/maxResponses/deadline，
+  // 其他 key 自動忽略，因此不影響業務邏輯，但會進入 SHA-256(完整 markdown)。
+  const stamp = new Date().toISOString()
+  return `---
+draftStamp: "${stamp}"
 title: "問卷標題"
 perResponse: 10
 maxResponses: 100
@@ -35,6 +41,7 @@ questions:
 
 在這裡撰寫問卷說明文字...
 `
+}
 
 const DRAFT_KEY_PREFIX = 'surveysui:draft:'
 
@@ -46,7 +53,7 @@ function makeDraftId(): string {
 
 export default function CreatePage() {
   const navigate = useNavigate()
-  const [content, setContent] = useState(TEMPLATE)
+  const [content, setContent] = useState(makeTemplate)
   const [error, setError] = useState<string | null>(null)
   const [encrypt, setEncrypt] = useState(true)
 

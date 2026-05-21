@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
+  ConnectButton,
   useCurrentAccount,
   useSignTransaction,
   useSignAndExecuteTransaction,
   useSuiClient,
-  useSuiClientQuery,
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import { buildClaimPtb, executeSponsoredTx, executeTxWithFallback } from '../lib/sponsoredTx'
@@ -13,6 +13,8 @@ import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/c
 import { parseFullSurveyMarkdown } from '../lib/frontmatter'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
 import { buildMintPassPtb } from '../lib/ptb'
+import { fetchActivePass, SurveyPassData } from '../lib/surveyPass'
+import { translateMoveAbort } from '../lib/moveAbort'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 
@@ -23,6 +25,15 @@ function normalizeSuiId(id: string): string {
     cleaned = cleaned.slice(2)
   }
   return cleaned.padStart(64, '0')
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex
+  const bytes = new Uint8Array(cleanHex.length / 2)
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    bytes[i / 2] = parseInt(cleanHex.slice(i, i + 2), 16)
+  }
+  return bytes
 }
 
 interface Question {
@@ -76,37 +87,40 @@ export default function SurveyPage() {
   const [issuingPass, setIssuingPass] = useState(false)
   const [issuingError, setIssuingError] = useState<string | null>(null)
 
-  // Fetch owned SurveyPass objects
-  const { data: passObjects, isLoading: isPassLoading, refetch: refetchPass } = useSuiClientQuery(
-    'getOwnedObjects',
-    {
-      owner: account?.address ?? '',
-      filter: {
-        StructType: `${PACKAGE_ID}::survey_pass::SurveyPass`,
-      },
-      options: {
-        showContent: true,
-      },
-    },
-    { enabled: !!account && !!PACKAGE_ID },
-  )
+  const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
+  const [isPassLoading, setIsPassLoading] = useState(false)
 
-  // Parse the active SurveyPass from owned objects
-  const activePass = useMemo(() => {
-    if (!passObjects || passObjects.length === 0) return null
-    const obj = passObjects[0]
-    if (obj?.data?.content?.dataType === 'moveObject') {
-      const fields = (obj.data.content as { fields: Record<string, any> }).fields
-      return {
-        objectId: obj.data.objectId,
-        owner: fields.owner,
-        effectiveTier: Number(fields.effective_tier),
-        expiresAt: Number(fields.expires_at),
-        status: Number(fields.status), // 0: Active, 3: Revoked
-      }
+  const fetchPass = async () => {
+    if (!account?.address || !registryId) {
+      setActivePass(null)
+      return
     }
-    return null
-  }, [passObjects])
+    setIsPassLoading(true)
+    try {
+      const pass = await fetchActivePass(suiClient, account.address, registryId)
+      setActivePass(pass)
+    } catch (err) {
+      console.error('Failed to fetch active pass:', err)
+      setActivePass(null)
+    } finally {
+      setIsPassLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchPass()
+  }, [account?.address, registryId])
+
+  // Debug output to trace variables
+  useEffect(() => {
+    console.log('[SurveyPage Debug]', {
+      PACKAGE_ID,
+      accountAddress: account?.address,
+      activePass,
+      surveyMinTier,
+      phase,
+    })
+  }, [account?.address, activePass, surveyMinTier, phase])
 
   useEffect(() => {
     if (!id) return
@@ -133,19 +147,27 @@ export default function SurveyPage() {
           (obj.data.content.type.endsWith('::survey_vault::SurveyVault') ||
             obj.data.content.type.includes('::survey_vault::SurveyVault'))
         ) {
-          console.log('[SurveyPage] Detected vaultId in URL. Querying on-chain registry events...')
-          const events = await suiClient.queryEvents({
-            query: {
-              MoveEventType: `${PACKAGE_ID}::survey_registry::SurveyRegistered`,
-            },
-            limit: 50,
-            order: 'descending',
-          })
-          const hit = events.data.find(
-            (e: any) =>
-              e.parsedJson &&
-              normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(finalSurveyId)
-          )
+          let cursor: any = null
+          let hit: any = null
+          let pageCount = 0
+          do {
+            const res = await suiClient.queryEvents({
+              query: {
+                MoveEventType: `${PACKAGE_ID}::survey_registry::SurveyRegistered`,
+              },
+              cursor,
+              limit: 50,
+              order: 'descending',
+            })
+            hit = res.data.find(
+              (e: any) =>
+                e.parsedJson &&
+                normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(finalSurveyId)
+            )
+            if (hit) break
+            cursor = res.hasNextPage ? res.nextCursor : null
+            pageCount++
+          } while (cursor && pageCount < 10)
           if (!hit) {
             throw new Error('找不到該金庫關聯的問卷登記記錄')
           }
@@ -309,9 +331,9 @@ export default function SurveyPage() {
         throw new Error(data.error || '驗證失敗')
       }
 
-      const nullifierHash = new Uint8Array(Buffer.from(data.nullifier_hash, 'hex'))
+      const nullifierHash = hexToBytes(data.nullifier_hash)
       const commitment = new Uint8Array(0)
-      const bffSig = new Uint8Array(Buffer.from(data.bff_sig, 'hex'))
+      const bffSig = hexToBytes(data.bff_sig)
 
       const tx = buildMintPassPtb({
         packageId: PACKAGE_ID,
@@ -330,14 +352,46 @@ export default function SurveyPage() {
         throw new Error('交易執行失敗')
       }
 
-      await refetchPass()
+      // 等待交易在鏈上被確認並檢查執行狀態
+      const txResult = await suiClient.waitForTransaction({
+        digest: result.digest,
+        options: {
+          showEffects: true,
+        },
+      })
+
+      if (txResult && txResult.effects && txResult.effects.status && txResult.effects.status.status === 'failure') {
+        const rawErr = txResult.effects.status.error || '未知錯誤'
+        const friendly = translateMoveAbort(rawErr)
+        throw new Error(friendly || `鏈上交易執行失敗: ${rawErr}`)
+      }
+
+      // 輪詢等待鏈上反映新鑄造的 SurveyPass 物件
+      let attempts = 0
+      let found = false
+      while (attempts < 6) {
+        const pass = await fetchActivePass(suiClient, account?.address ?? '', registryId)
+        if (pass) {
+          setActivePass(pass)
+          found = true
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        attempts++
+      }
+
+      if (!found) {
+        console.warn('[SurveyPage] SurveyPass minted on-chain but not yet found via table index.')
+      }
+
       setPhase('filling')
       setOtpStep('input')
       setDebugOtp(null)
       setOtpCode('')
       setEmail('')
     } catch (err: any) {
-      setIssuingError(err.message || '認證或交易發送失敗')
+      const friendly = translateMoveAbort(err.message)
+      setIssuingError(friendly || err.message || '認證或交易發送失敗')
     } finally {
       setIssuingPass(false)
     }
@@ -450,10 +504,24 @@ export default function SurveyPage() {
         setSelfPaidMode(true)
       }
 
+      // 等待問卷提交交易確認並檢查是否成功
+      const claimTxResult = await suiClient.waitForTransaction({
+        digest: digest,
+        options: {
+          showEffects: true,
+        },
+      })
+
+      if (claimTxResult && claimTxResult.effects && claimTxResult.effects.status && claimTxResult.effects.status.status === 'failure') {
+        const rawErr = claimTxResult.effects.status.error || '未知錯誤'
+        throw new Error(`鏈上交易執行失敗: ${rawErr}`)
+      }
+
       setTxHash(digest)
       setPhase('success')
     } catch (err: any) {
-      setSubmitError(err.message || '提交填答與領取獎勵失敗')
+      const friendly = translateMoveAbort(err.message)
+      setSubmitError(friendly || err.message || '提交填答與領取獎勵失敗')
       setPhase('review')
     }
   }
@@ -467,13 +535,16 @@ export default function SurveyPage() {
   if (!account && phase !== 'loading') {
     return (
       <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
-        <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-md text-center space-y-6">
+        <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-md text-center space-y-6 flex flex-col items-center">
           <h1 className="text-2xl font-bold text-gray-800">請連接錢包</h1>
           <p className="text-sm text-gray-600">
             本平台為確保填答真實性，需要使用您的 Sui 錢包進行零手續費交易與簽名。
           </p>
+          <div className="my-2">
+            <ConnectButton />
+          </div>
           <p className="text-xs text-gray-400">
-            請點擊右上角連接錢包，或重整頁面。
+            請點擊上方按鈕連接錢包，或重整頁面。
           </p>
         </div>
       </main>
@@ -515,7 +586,23 @@ export default function SurveyPage() {
             </p>
           </div>
 
-          {otpStep === 'input' ? (
+          {!account ? (
+            <div className="text-center space-y-4">
+              <p className="text-sm text-gray-600">
+                要獲取或鑄造您的 SurveyPass，您必須先連結您的 Sui 錢包。
+              </p>
+              <div className="flex justify-center">
+                <ConnectButton />
+              </div>
+              <button
+                type="button"
+                onClick={() => setPhase('filling')}
+                className="text-xs text-gray-400 hover:text-gray-600 transition-colors underline block mx-auto"
+              >
+                返回問卷
+              </button>
+            </div>
+          ) : otpStep === 'input' ? (
             <form onSubmit={handleRequestOtp} className="space-y-4">
               <div>
                 <label htmlFor="email" className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wider">
@@ -653,7 +740,7 @@ export default function SurveyPage() {
 
         <div className="space-y-4 mb-8">
           {survey.questions.map((q, i) => (
-            <div key={q.id} className="bg-gray-50 border rounded-lg p-4">
+            <div key={q.id} className="bg-gray-50 rounded-lg p-4">
               <p className="text-sm text-gray-500 mb-1">
                 第 {i + 1} 題{q.required ? '（必填）' : '（選填）'}
               </p>
@@ -696,7 +783,7 @@ export default function SurveyPage() {
     && activePass.status !== 3
     && (activePass.expiresAt === 0 || activePass.expiresAt > Date.now())
 
-  const submitDisabled = phase === 'submitting'
+  const submitDisabled = (phase as string) === 'submitting'
     || (surveyMinTier > 0 && !isPassValid)
     || (isPassValid && activePass!.effectiveTier < surveyMinTier)
 
@@ -708,6 +795,15 @@ export default function SurveyPage() {
       <p className="text-sm text-gray-500 mb-6">
         截止日期：{new Date(survey.deadline).toLocaleDateString('zh-TW')}
       </p>
+
+      {!account && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="text-blue-800 text-left">
+            <strong>請先連結錢包：</strong> 填寫此問卷需要連結錢包並檢測您的身分憑證 (SurveyPass)。
+          </div>
+          <ConnectButton />
+        </div>
+      )}
 
       {isPassValid && (
         <span data-testid="tier-badge" className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-3 py-1 mb-4">
@@ -813,6 +909,44 @@ export default function SurveyPage() {
             </div>
           </fieldset>
         ))}
+
+        {surveyMinTier > 0 && (
+          <div className="mt-4">
+            {!isPassValid ? (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="text-blue-800 text-left">
+                  <strong>需要 SurveyPass 憑證：</strong> 填寫此問卷要求經過身分驗證。
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOtpStep('input')
+                    setPhase('need_pass')
+                  }}
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  獲取 SurveyPass 憑證
+                </button>
+              </div>
+            ) : (activePass!.effectiveTier < surveyMinTier) && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="text-amber-800 text-left">
+                  <strong>憑證等級不足：</strong> 本問卷要求 Tier {surveyMinTier}，但您的憑證等級為 Tier {activePass!.effectiveTier}。
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOtpStep('input')
+                    setPhase('need_pass')
+                  }}
+                  className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  升級 SurveyPass 憑證
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <button
           type="submit"

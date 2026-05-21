@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import CreatePage from './pages/CreatePage'
 import DashboardPage from './pages/DashboardPage'
 import FundPage from './pages/FundPage'
@@ -6,6 +6,12 @@ import LandingPage from './pages/LandingPage'
 import RedeemPage from './pages/RedeemPage'
 import SurveyPage from './pages/SurveyPage'
 import AuthPage from './pages/AuthPage'
+import Navbar from './components/Navbar'
+
+function DashboardPageWrapper() {
+  const { vaultId } = useParams<{ vaultId: string }>()
+  return <DashboardPage key={vaultId} />
+}
 
 export function AppRoutes() {
   return (
@@ -15,7 +21,8 @@ export function AppRoutes() {
       <Route path="/fund/:id" element={<FundPage />} />
       <Route path="/s/:id" element={<SurveyPage />} />
       <Route path="/redeem" element={<RedeemPage />} />
-      <Route path="/dashboard/:vaultId" element={<DashboardPage />} />
+      <Route path="/dashboard" element={<DashboardPage key="list" />} />
+      <Route path="/dashboard/:vaultId" element={<DashboardPageWrapper />} />
       <Route path="/auth" element={<AuthPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -25,6 +32,7 @@ export function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter>
+      <Navbar />
       <AppRoutes />
     </BrowserRouter>
   )

@@ -1,9 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import {
-  ConnectButton,
   useCurrentAccount,
   useSignAndExecuteTransaction,
-  useSuiClientQuery,
+  useSuiClient,
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import {
@@ -11,10 +10,22 @@ import {
   buildUpdatePassCredentialPtb,
   buildDeletePassPtb,
 } from '../lib/ptb'
+import { fetchActivePass, SurveyPassData } from '../lib/surveyPass'
+import { translateMoveAbort } from '../lib/moveAbort'
+
+function hexToBytes(hex: string): Uint8Array {
+  const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex
+  const bytes = new Uint8Array(cleanHex.length / 2)
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    bytes[i / 2] = parseInt(cleanHex.slice(i, i + 2), 16)
+  }
+  return bytes
+}
 
 export default function AuthPage() {
   const account = useCurrentAccount()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
+  const suiClient = useSuiClient()
 
   const packageId = import.meta.env.VITE_PACKAGE_ID ?? ''
   const registryId = import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
@@ -30,39 +41,29 @@ export default function AuthPage() {
   const [debugOtp, setDebugOtp] = useState<string | null>(null)
   const [txDigest, setTxDigest] = useState<string | null>(null)
 
-  // Fetch owned SurveyPass objects
-  const { data: passObjects, isLoading: isPassLoading, refetch: refetchPass } = useSuiClientQuery(
-    'getOwnedObjects',
-    {
-      owner: account?.address ?? '',
-      filter: {
-        StructType: `${packageId}::survey_pass::SurveyPass`,
-      },
-      options: {
-        showContent: true,
-      },
-    },
-    { enabled: !!account && !!packageId },
-  )
+  const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
+  const [isPassLoading, setIsPassLoading] = useState(false)
 
-  // Parse the active SurveyPass from owned objects
-  const activePass = useMemo(() => {
-    if (!passObjects || passObjects.data.length === 0) return null
-    const obj = passObjects.data[0]
-    if (obj.data?.content?.dataType === 'moveObject') {
-      const fields = (obj.data.content as { fields: Record<string, any> }).fields
-      return {
-        objectId: obj.data.objectId,
-        owner: fields.owner,
-        effectiveTier: Number(fields.effective_tier),
-        credentialSources: fields.credential_sources || [],
-        createdAt: Number(fields.created_at),
-        expiresAt: Number(fields.expires_at),
-        status: Number(fields.status), // 0: Active, 3: Revoked
-      }
+  const fetchPass = async () => {
+    if (!account?.address || !registryId) {
+      setActivePass(null)
+      return
     }
-    return null
-  }, [passObjects])
+    setIsPassLoading(true)
+    try {
+      const pass = await fetchActivePass(suiClient, account.address, registryId)
+      setActivePass(pass)
+    } catch (err) {
+      console.error('Failed to fetch active pass:', err)
+      setActivePass(null)
+    } finally {
+      setIsPassLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchPass()
+  }, [account?.address, registryId])
 
   // Step 1: Request OTP via BFF
   async function handleRequestOtp(e: React.FormEvent) {
@@ -132,9 +133,9 @@ export default function AuthPage() {
       }
 
       // Convert hex strings from BFF back to Uint8Array
-      const nullifierHash = new Uint8Array(Buffer.from(data.nullifier_hash, 'hex'))
+      const nullifierHash = hexToBytes(data.nullifier_hash)
       const commitment = new Uint8Array(0)
-      const bffSig = new Uint8Array(Buffer.from(data.bff_sig, 'hex'))
+      const bffSig = hexToBytes(data.bff_sig)
 
       // 2. Build and sign transaction block on-chain
       let tx
@@ -167,22 +168,29 @@ export default function AuthPage() {
       signAndExecute(
         { transaction: tx as any },
         {
-          onSuccess: (result) => {
+          onSuccess: async (result) => {
             setTxDigest(result.digest)
             setSuccessMsg(activePass ? '憑證更新成功！' : 'SurveyPass 鑄造成功！')
             setEmail('')
             setOtpCode('')
             setStep('input')
             setDebugOtp(null)
-            void refetchPass()
+            try {
+              await suiClient.waitForTransaction({ digest: result.digest, options: { showEffects: true } })
+            } catch (e) {
+              console.error(e)
+            }
+            await fetchPass()
           },
           onError: (err) => {
-            setErrorMsg(err.message || '交易執行失敗')
+            const friendly = translateMoveAbort(err.message)
+            setErrorMsg(friendly || err.message || '交易執行失敗')
           },
         },
       )
     } catch (err: any) {
-      setErrorMsg(err.message || '認證或交易發送失敗')
+      const friendly = translateMoveAbort(err.message)
+      setErrorMsg(friendly || err.message || '認證或交易發送失敗')
     } finally {
       setLoading(false)
     }
@@ -203,24 +211,32 @@ export default function AuthPage() {
     try {
       const tx = buildDeletePassPtb({
         packageId,
+        registryId,
         passId: activePass.objectId,
       })
 
       signAndExecute(
         { transaction: tx as any },
         {
-          onSuccess: (result) => {
+          onSuccess: async (result) => {
             setTxDigest(result.digest)
             setSuccessMsg('SurveyPass 已成功從鏈上銷毀，個人隱私資料已完全移除！')
-            void refetchPass()
+            try {
+              await suiClient.waitForTransaction({ digest: result.digest, options: { showEffects: true } })
+            } catch (e) {
+              console.error(e)
+            }
+            await fetchPass()
           },
           onError: (err) => {
-            setErrorMsg(err.message || '銷毀失敗')
+            const friendly = translateMoveAbort(err.message)
+            setErrorMsg(friendly || err.message || '銷毀失敗')
           },
         },
       )
     } catch (err: any) {
-      setErrorMsg(err.message || 'PTB 建構失敗')
+      const friendly = translateMoveAbort(err.message)
+      setErrorMsg(friendly || err.message || 'PTB 建構失敗')
     } finally {
       setLoading(false)
     }
@@ -247,18 +263,25 @@ export default function AuthPage() {
       signAndExecute(
         { transaction: transaction as any },
         {
-          onSuccess: (result) => {
+          onSuccess: async (result) => {
             setTxDigest(result.digest)
             setSuccessMsg('SurveyPass 吊銷成功（限 Admin 發送）')
-            void refetchPass()
+            try {
+              await suiClient.waitForTransaction({ digest: result.digest, options: { showEffects: true } })
+            } catch (e) {
+              console.error(e)
+            }
+            await fetchPass()
           },
           onError: (err) => {
-            setErrorMsg(err.message || '吊銷失敗（請確認您是否使用 Admin 錢包）')
+            const friendly = translateMoveAbort(err.message)
+            setErrorMsg(friendly || err.message || '吊銷失敗（請確認您是否使用 Admin 錢包）')
           },
         },
       )
     } catch (err: any) {
-      setErrorMsg(err.message || '吊銷失敗')
+      const friendly = translateMoveAbort(err.message)
+      setErrorMsg(friendly || err.message || '吊銷失敗')
     } finally {
       setLoading(false)
     }
@@ -279,7 +302,7 @@ export default function AuthPage() {
     <main className="mx-auto max-w-4xl px-6 py-12 min-h-screen flex flex-col justify-between text-neutral-800">
       <div className="w-full">
         {/* Title Header */}
-        <div className="border-b pb-6 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="border-b pb-6 mb-8">
           <div>
             <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
               SurveyPass 真人認證
@@ -287,9 +310,6 @@ export default function AuthPage() {
             <p className="mt-2 text-lg text-neutral-500">
               透過去中心化身份驗證（KYC），取得專屬 SurveyPass。解鎖高等級問卷，防範女巫攻擊與虛假填答。
             </p>
-          </div>
-          <div className="shrink-0">
-            <ConnectButton />
           </div>
         </div>
 

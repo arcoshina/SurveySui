@@ -249,6 +249,11 @@ describe('FundPage — T4.3 注資頁', () => {
     window.localStorage.clear()
 
     vi.mocked(useSuiClient).mockReturnValue({
+      getReferenceGasPrice: vi.fn().mockResolvedValue('1000'),
+      dryRunTransactionBlock: vi.fn().mockResolvedValue({
+        effects: { status: { status: 'success' } },
+      }),
+      waitForTransaction: vi.fn().mockResolvedValue({}),
       getTransactionBlock: vi.fn().mockResolvedValue({
         events: [
           {

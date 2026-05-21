@@ -85,12 +85,12 @@ export async function deriveCreatorKeyPair(
   walletSignatureBytes: Uint8Array,
 ): Promise<CreatorKeyPair> {
   const seed = new Uint8Array(
-    await crypto.subtle.digest('SHA-256', walletSignatureBytes),
+    await crypto.subtle.digest('SHA-256', walletSignatureBytes as any),
   )
   const der = seedToX25519Pkcs8(seed)
   const privateKey = await crypto.subtle.importKey(
     'pkcs8',
-    der,
+    der as any,
     { name: 'X25519' },
     true, // extractable=true so we can export JWK to retrieve pubkey
     ['deriveBits'],
@@ -102,7 +102,7 @@ export async function deriveCreatorKeyPair(
   // Re-import private key as non-extractable for the caller
   const privateKeyFinal = await crypto.subtle.importKey(
     'pkcs8',
-    der,
+    der as any,
     { name: 'X25519' },
     false, // non-extractable
     ['deriveBits'],
@@ -178,7 +178,7 @@ export async function decryptSurveyContent(
 
   const aesKey = await crypto.subtle.importKey(
     'raw',
-    contentKey,
+    contentKey as any,
     { name: 'AES-GCM' },
     false,
     ['decrypt'],
@@ -208,26 +208,26 @@ export async function encryptAnswers(
 ): Promise<Uint8Array> {
   const creatorPub = await crypto.subtle.importKey(
     'raw',
-    creatorPublicKeyBytes,
+    creatorPublicKeyBytes as any,
     { name: 'X25519' },
     false,
     [],
   )
 
   // Ephemeral key pair
-  const ephemeral = await crypto.subtle.generateKey(
+  const ephemeral = (await crypto.subtle.generateKey(
     { name: 'X25519' },
     true,
     ['deriveBits'],
-  )
+  )) as CryptoKeyPair
   const ephemeralPubRaw = new Uint8Array(
-    await crypto.subtle.exportKey('raw', ephemeral.publicKey),
+    await crypto.subtle.exportKey('raw', ephemeral.publicKey as any),
   )
 
   // Shared secret → HKDF → AES-GCM key
   const sharedBits = await crypto.subtle.deriveBits(
     { name: 'X25519', public: creatorPub },
-    ephemeral.privateKey,
+    ephemeral.privateKey as any,
     256,
   )
   const aesKey = await _deriveAesKey(sharedBits, ['encrypt'])
@@ -264,7 +264,7 @@ export async function decryptAnswers(
 
   const ephemeralPub = await crypto.subtle.importKey(
     'raw',
-    ephemeralPubRaw,
+    ephemeralPubRaw as any,
     { name: 'X25519' },
     false,
     [],
@@ -272,7 +272,7 @@ export async function decryptAnswers(
 
   const sharedBits = await crypto.subtle.deriveBits(
     { name: 'X25519', public: ephemeralPub },
-    creatorPrivateKey,
+    creatorPrivateKey as any,
     256,
   )
   const aesKey = await _deriveAesKey(sharedBits, ['decrypt'])
