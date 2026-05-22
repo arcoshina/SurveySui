@@ -1,4 +1,4 @@
-module surveysui::survey_sui_reward;
+module surveysui::survey_reward;
 
 use sui::coin::{Self, Coin, TreasuryCap};
 
@@ -8,45 +8,45 @@ const TOTAL_SUPPLY_CAP: u64 = 1_000_000_000 * 1_000_000_000;
 const EExceedsCap: u64 = 0;
 
 /// One-time witness — uppercase of module name.
-public struct SURVEY_SUI_REWARD has drop {}
+public struct SURVEY_REWARD has drop {}
 
 /// Shared treasury — wraps TreasuryCap so the package can mint and anyone can burn.
-public struct SsrTreasury has key {
+public struct SrTreasury has key {
     id: UID,
-    cap: TreasuryCap<SURVEY_SUI_REWARD>,
+    cap: TreasuryCap<SURVEY_REWARD>,
 }
 
-fun init(witness: SURVEY_SUI_REWARD, ctx: &mut TxContext) {
+fun init(witness: SURVEY_REWARD, ctx: &mut TxContext) {
     let (cap, metadata) = coin::create_currency(
         witness,
         DECIMALS,
-        b"SSR",
-        b"SurveySui Reward",
+        b"SR",
+        b"Surveysui Reward",
         b"Survey participation reward token",
         option::none(),
         ctx,
     );
     transfer::public_freeze_object(metadata);
-    transfer::share_object(SsrTreasury { id: object::new(ctx), cap });
+    transfer::share_object(SrTreasury { id: object::new(ctx), cap });
 }
 
-/// Mint SSR. Only callable within the surveysui package (amm_pool calls this).
+/// Mint SR. Only callable within the surveysui package (amm_pool calls this).
 public(package) fun mint(
-    treasury: &mut SsrTreasury,
+    treasury: &mut SrTreasury,
     amount: u64,
     ctx: &mut TxContext,
-): Coin<SURVEY_SUI_REWARD> {
+): Coin<SURVEY_REWARD> {
     let new_supply = coin::total_supply(&treasury.cap) + amount;
     assert!(new_supply <= TOTAL_SUPPLY_CAP, EExceedsCap);
     coin::mint(&mut treasury.cap, amount, ctx)
 }
 
-/// Burn SSR. Open to any holder.
-public fun burn(treasury: &mut SsrTreasury, coin: Coin<SURVEY_SUI_REWARD>) {
+/// Burn SR. Open to any holder.
+public fun burn(treasury: &mut SrTreasury, coin: Coin<SURVEY_REWARD>) {
     coin::burn(&mut treasury.cap, coin);
 }
 
-public fun total_supply(treasury: &SsrTreasury): u64 {
+public fun total_supply(treasury: &SrTreasury): u64 {
     coin::total_supply(&treasury.cap)
 }
 
@@ -54,5 +54,5 @@ public fun supply_cap(): u64 { TOTAL_SUPPLY_CAP }
 
 #[test_only]
 public fun test_init(ctx: &mut TxContext) {
-    init(SURVEY_SUI_REWARD {}, ctx);
+    init(SURVEY_REWARD {}, ctx);
 }

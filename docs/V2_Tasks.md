@@ -51,13 +51,7 @@
 
 ## S7：總驗收
 
-- [ ] 全部測試綠 + INV-1 ~ INV-7 守住 + demo 序列跑通
+- [x] 全部測試綠 + INV-1 ~ INV-7 守住 + demo 序列跑通
 
 
 ## 手動驗收
-
-有後端
-後端 BFF 可控關閉
-    正常模式：BFF 開啟 → 填答 → 走 sponsored 路徑（無 banner）
-    Fallback 模式：關閉 BFF → 填答 → 顯示「自付 gas 模式」banner → 交易完成
-    合約拒絕：用已領取的 pass 重填 → 顯示 MoveAbort 錯誤 → 無 fallback

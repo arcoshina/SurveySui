@@ -17,8 +17,8 @@ import {
   type SurveyClaimedEvent,
   type DecryptedResponse,
 } from '../lib/dashboardDecrypt'
-import { buildClosePtb, SSSR_BASE_PER_UNIT } from '../lib/ptb'
-import { formatSssr } from '../lib/format'
+import { buildClosePtb } from '../lib/ptb'
+import { formatSsr } from '../lib/format'
 import { KEY_DERIVE_MSG, base64urlToBytes, deriveCreatorKeyPair, decryptSurveyContent } from '../lib/crypto'
 import { parseFullSurveyMarkdown, type Question } from '../lib/frontmatter'
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
@@ -78,6 +78,7 @@ interface VaultFields {
   status: number
   claimed_count: string
   max_responses: string
+  closed_at_ms?: string
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -185,6 +186,15 @@ export default function DashboardPage() {
 
   const [surveyDetails, setSurveyDetails] = useState<CreatorSurveyDetail[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
+
+  const sortedSurveyDetails = useMemo(() => {
+    return [...surveyDetails].sort((a, b) => {
+      const aActive = a.status === 0 ? 0 : 1
+      const bActive = b.status === 0 ? 0 : 1
+      if (aActive !== bActive) return aActive - bActive
+      return b.registered_at_ms - a.registered_at_ms
+    })
+  }, [surveyDetails])
 
   useEffect(() => {
     if (!vaultId) return
@@ -583,16 +593,16 @@ export default function DashboardPage() {
   }
 
   // ── 顯示 ──────────────────────────────────────────────────────────────────
-  const displayBalanceSssr = vault
-    ? formatSssr(vault.balance)
+  const displayBalanceSsr = vault
+    ? formatSsr(vault.balance)
     : null
 
 
   if (!vaultId) {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-neutral-850 dark:text-neutral-200">
-        <div className="flex justify-between items-center mb-6">
-          <div>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
+          <div className="flex-1">
             <h1 className="text-3xl font-bold tracking-tight text-neutral-900 dark:text-white">我的儀表板</h1>
             <p className="text-sm text-neutral-500 dark:text-neutral-450 mt-1">
               管理您發布的所有問卷調查。💡 <strong>點擊列表中任何問卷卡片</strong>，即可進入查看詳細數據與填答明細。
@@ -601,7 +611,7 @@ export default function DashboardPage() {
           {account && (
             <Link
               to="/create"
-              className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl transition-all shadow-sm text-sm"
+              className="self-start sm:self-auto whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl transition-all shadow-sm text-sm"
             >
               ＋ 建立問卷
             </Link>
@@ -629,7 +639,7 @@ export default function DashboardPage() {
             <div className="text-5xl mb-4">📋</div>
             <h3 className="text-lg font-bold text-neutral-800 dark:text-white mb-2">您尚未建立任何問卷</h3>
             <p className="text-neutral-500 dark:text-neutral-400 text-sm mb-6 leading-relaxed">
-              您可以使用 Markdown 輕易設計問卷內容，並存入 sSSR 獎勵注資，受訪者即可在 Sui 上進行填答。
+              您可以使用 Markdown 輕易設計問卷內容，並存入 SSR 獎勵注資，受訪者即可在 Sui 上進行填答。
             </p>
             <Link
               to="/create"
@@ -650,7 +660,7 @@ export default function DashboardPage() {
             </div>
 
             {/* 問卷卡片列表 */}
-            {surveyDetails.map((s) => (
+            {sortedSurveyDetails.map((s) => (
               <div
                 key={s.vault_id}
                 onClick={() => navigate(`/dashboard/${s.vault_id}${getSavedContentKey(s.vault_id)}`)}
@@ -735,11 +745,11 @@ export default function DashboardPage() {
       </div>
 
       <h1 className="text-3xl font-bold mb-1 text-neutral-900 dark:text-white">{surveyTitle}</h1>
-      <h2 className="text-lg font-semibold text-neutral-500 dark:text-neutral-450 mb-2">數據儀表板</h2>
+      <h2 className="text-lg font-semibold text-neutral-500 dark:text-neutral-450 mb-2">問卷儀表板</h2>
       <p className="text-sm text-neutral-500 mb-2 break-all font-mono">
         Vault: <span className="font-semibold">{vaultId}</span>
       </p>
-      <p className="text-sm text-neutral-500 mb-6">
+      <p className="text-sm text-neutral-500 mb-2">
         狀態：
         <span
           className={
@@ -751,6 +761,17 @@ export default function DashboardPage() {
           {vault ? (isActive ? '進行中' : '已結束') : '查詢中'}
         </span>
       </p>
+      {vault && !isActive && (
+        <p className="text-sm text-neutral-500 mb-6">
+          結束時間：
+          <span className="font-semibold">
+            {vault.closed_at_ms && Number(vault.closed_at_ms) > 0
+              ? formatDateTime(Number(vault.closed_at_ms))
+              : '—'}
+          </span>
+        </p>
+      )}
+      {(!vault || isActive) && <div className="mb-6" />}
 
       {surveyId && (
         <section className="mb-6 bg-blue-50 rounded p-4 flex items-center gap-3">
@@ -809,8 +830,8 @@ export default function DashboardPage() {
         <div className="bg-gray-50 rounded p-4">
           <p className="text-sm text-gray-500">Vault 餘額（鏈上）</p>
           <p className="text-2xl font-bold" aria-label="vault-balance">
-            {displayBalanceSssr !== null
-              ? `${displayBalanceSssr} sSSR`
+            {displayBalanceSsr !== null
+              ? `${displayBalanceSsr} SSR`
               : '查詢中…'}
           </p>
         </div>
@@ -920,7 +941,7 @@ export default function DashboardPage() {
         <div className="mt-6 border-t pt-6">
           {closeStatus === 'success' && (
             <p role="status" className="text-green-700 mb-3 text-sm">
-              活動已成功結束，剩餘 sSSR 已退回您的錢包。
+              活動已成功結束，剩餘 SSR 已退回您的錢包。
             </p>
           )}
           {closeStatus === 'error' && closeError && (
@@ -934,9 +955,13 @@ export default function DashboardPage() {
               type="button"
               onClick={handleClose}
               disabled={!canClose}
-              className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
+              className={
+                isActive
+                  ? 'bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 disabled:opacity-50 transition-colors'
+                  : 'bg-neutral-400 text-white px-6 py-2 rounded cursor-default'
+              }
             >
-              {closeStatus === 'signing' ? '結束中…' : '結束活動'}
+              {!isActive ? '已結束' : closeStatus === 'signing' ? '結束中…' : '結束活動'}
             </button>
           )}
         </div>
@@ -952,7 +977,7 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex flex-col gap-[3px] text-sm">
-            {surveyDetails.map((s) => (
+            {sortedSurveyDetails.map((s) => (
               <div
                 key={s.vault_id}
                 role="row"

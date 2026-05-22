@@ -30,17 +30,17 @@ import { buildRedeemPtb } from '../lib/ptb'
 // Mock environment variables
 vi.stubEnv('VITE_PACKAGE_ID', '0xpackage')
 vi.stubEnv('VITE_AMM_POOL_ID', '0xpool')
-vi.stubEnv('VITE_SSSR_TREASURY_ID', '0xsssrtreasury')
+vi.stubEnv('VITE_SSR_TREASURY_ID', '0xssrtreasury')
 
 const MOCK_COINS = {
   data: [
     {
       coinObjectId: '0xcoin1',
-      balance: '5000000000', // 5.0 sSSR
+      balance: '5000000000', // 5.0 SSR
     },
     {
       coinObjectId: '0xcoin2',
-      balance: '10000000000', // 10.0 sSSR
+      balance: '10000000000', // 10.0 SSR
     },
   ],
 }
@@ -91,7 +91,7 @@ describe('RedeemPage — T4.5 兌換頁', () => {
     expect(screen.getByText(/載入中/)).toBeInTheDocument()
   })
 
-  it('沒有持有 sSSR 憑證時顯示無憑證的友善提示', () => {
+  it('沒有持有 SSR 憑證時顯示無憑證的友善提示', () => {
     vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xuser' } as any)
     vi.mocked(useSuiClientQuery).mockReturnValue({
       data: { data: [] },
@@ -101,10 +101,10 @@ describe('RedeemPage — T4.5 兌換頁', () => {
 
     renderRedeemPage()
 
-    expect(screen.getByText(/您目前沒有可兌換的 sSSR 憑證/)).toBeInTheDocument()
+    expect(screen.getByText(/您目前沒有可兌換的 SSR 憑證/)).toBeInTheDocument()
   })
 
-  it('test_lists_user_receipts — 正確列出使用者持有的所有 sSSR 憑證', () => {
+  it('test_lists_user_receipts — 正確列出使用者持有的所有 SSR 憑證', () => {
     vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xuser' } as any)
     vi.mocked(useSuiClientQuery).mockReturnValue({
       data: MOCK_COINS,
@@ -120,7 +120,7 @@ describe('RedeemPage — T4.5 兌換頁', () => {
     expect(screen.getByText(/0xcoin2/)).toBeInTheDocument()
   })
 
-  it('test_redeem_returns_ssr — 選擇憑證點擊兌換，發送交易並顯示成功及 TX Hash', async () => {
+  it('test_redeem_returns_sr — 選擇憑證點擊兌換，發送交易並顯示成功及 TX Hash', async () => {
     vi.mocked(useCurrentAccount).mockReturnValue({ address: '0xuser' } as any)
     const mockRefetch = vi.fn()
     vi.mocked(useSuiClientQuery).mockReturnValue({
@@ -146,8 +146,8 @@ describe('RedeemPage — T4.5 兌換頁', () => {
     expect(buildRedeemPtb).toHaveBeenCalledWith({
       packageId: '0xpackage',
       poolId: '0xpool',
-      sssrTreasuryId: '0xsssrtreasury',
-      sssrCoinId: '0xcoin1',
+      ssrTreasuryId: '0xssrtreasury',
+      ssrCoinId: '0xcoin1',
       senderAddress: '0xuser',
     })
 

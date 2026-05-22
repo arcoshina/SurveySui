@@ -18,6 +18,7 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/create" element={<CreatePage />} />
+      <Route path="/create/:draftId" element={<CreatePage />} />
       <Route path="/fund/:id" element={<FundPage />} />
       <Route path="/s/:id" element={<SurveyPage />} />
       <Route path="/redeem" element={<RedeemPage />} />

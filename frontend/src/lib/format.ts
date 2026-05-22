@@ -1,8 +1,6 @@
-import { SSSR_BASE_PER_UNIT } from './ptb'
-
 /**
- * Formats a base unit amount of sSSR (with 9 decimals) into a string with 4 decimal places.
- * Uses exact BigInt math to round to the nearest multiple of 100,000 base units (10^-4 sSSR)
+ * Formats a base unit amount of SSR (with 9 decimals) into a string with 4 decimal places.
+ * Uses exact BigInt math to round to the nearest multiple of 100,000 base units (10^-4 SSR)
  * to avoid floating-point inaccuracies.
  *
  * Examples:
@@ -12,11 +10,11 @@ import { SSSR_BASE_PER_UNIT } from './ptb'
  *   50_000n        -> "0.0001"
  *   49_999n        -> "0.0000"
  */
-export function formatSssr(base: bigint | number | string): string {
+export function formatSsr(base: bigint | number | string): string {
   const val = BigInt(base)
   const decimalsToRound = 100000n
   const half = decimalsToRound / 2n
-  
+
   let rounded: bigint
   if (val >= 0n) {
     rounded = ((val + half) / decimalsToRound) * decimalsToRound

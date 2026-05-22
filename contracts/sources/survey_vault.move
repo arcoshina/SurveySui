@@ -34,7 +34,14 @@ public struct SurveyClaimed has copy, drop {
     claimed_at_ms: u64,
 }
 
-/// Survey vault holding sSSR balance for respondents.
+public struct SurveyClosed has copy, drop {
+    vault_id: ID,
+    creator: address,
+    closed_at_ms: u64,
+    remaining_balance_refunded: u64,
+}
+
+/// Survey vault holding SSR balance for respondents.
 /// Created unshared so caller can compose with register in one PTB before sharing.
 public struct SurveyVault has key {
     id: UID,
@@ -47,14 +54,15 @@ public struct SurveyVault has key {
     admin_treasury: address,
     creator: address,
     status: u8,
+    closed_at_ms: u64,
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
 
-/// Create a vault. Deducts VAULT_FEE_BPS of sSSR to admin_treasury.
+/// Create a vault. Deducts VAULT_FEE_BPS of SSR to admin_treasury.
 /// Returns vault unshared; caller must call `share_vault` at end of PTB.
 public fun create(
-    sssr_coin: Coin<STACKED_SURVEY_REWARD>,
+    ssr_coin: Coin<STACKED_SURVEY_REWARD>,
     per_response: u64,
     max_responses: u64,
     deadline_ms: u64,
@@ -63,7 +71,7 @@ public fun create(
 ): SurveyVault {
     SurveyVault {
         id: object::new(ctx),
-        balance: coin::into_balance(sssr_coin),
+        balance: coin::into_balance(ssr_coin),
         per_response,
         max_responses,
         deadline_ms,
@@ -72,6 +80,7 @@ public fun create(
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
+        closed_at_ms: 0,
     }
 }
 
@@ -80,12 +89,12 @@ public fun share_vault(vault: SurveyVault) {
     transfer::share_object(vault);
 }
 
-/// Add more sSSR to the vault. Same fee deducted.
-public fun fund(vault: &mut SurveyVault, sssr_coin: Coin<STACKED_SURVEY_REWARD>, _ctx: &mut TxContext) {
-    balance::join(&mut vault.balance, coin::into_balance(sssr_coin));
+/// Add more SSR to the vault. Same fee deducted.
+public fun fund(vault: &mut SurveyVault, ssr_coin: Coin<STACKED_SURVEY_REWARD>, _ctx: &mut TxContext) {
+    balance::join(&mut vault.balance, coin::into_balance(ssr_coin));
 }
 
-/// Respondent claims per_response sSSR from vault.
+/// Respondent claims per_response SSR from vault.
 /// Validates SurveyPass, deduplicates by sub_hash, checks quota and deadline.
 public fun claim(
     vault: &mut SurveyVault,
@@ -122,9 +131,11 @@ public fun claim(
     transfer::public_transfer(reward, ctx.sender());
 }
 
-/// Creator closes vault and recovers remaining sSSR.
-public fun close(vault: &mut SurveyVault, ctx: &mut TxContext) {
+/// Creator closes vault and recovers remaining SSR.
+/// Records `closed_at_ms` and emits `SurveyClosed`. Aborts if already closed.
+public fun close(vault: &mut SurveyVault, clock: &Clock, ctx: &mut TxContext) {
     assert!(ctx.sender() == vault.creator, ENotCreator);
+    assert!(vault.status == STATUS_OPEN, EVaultClosed);
     let amount = balance::value(&vault.balance);
     if (amount > 0) {
         let coin = coin::from_balance(
@@ -134,6 +145,14 @@ public fun close(vault: &mut SurveyVault, ctx: &mut TxContext) {
         transfer::public_transfer(coin, vault.creator);
     };
     vault.status = STATUS_CLOSED;
+    vault.closed_at_ms = clock::timestamp_ms(clock);
+
+    event::emit(SurveyClosed {
+        vault_id: object::id(vault),
+        creator: vault.creator,
+        closed_at_ms: vault.closed_at_ms,
+        remaining_balance_refunded: amount,
+    });
 }
 
 public fun create_empty(
@@ -154,21 +173,22 @@ public fun create_empty(
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
+        closed_at_ms: 0,
     }
 }
 
-public fun deposit_existing_sssr(
+public fun deposit_existing_ssr(
     vault: &mut SurveyVault,
-    sssr_coin: Coin<STACKED_SURVEY_REWARD>,
+    ssr_coin: Coin<STACKED_SURVEY_REWARD>,
 ) {
-    balance::join(&mut vault.balance, coin::into_balance(sssr_coin));
+    balance::join(&mut vault.balance, coin::into_balance(ssr_coin));
 }
 
 public fun merge_balances(
     vault: &mut SurveyVault,
-    new_sssr: Coin<STACKED_SURVEY_REWARD>,
+    new_ssr: Coin<STACKED_SURVEY_REWARD>,
 ) {
-    balance::join(&mut vault.balance, coin::into_balance(new_sssr));
+    balance::join(&mut vault.balance, coin::into_balance(new_ssr));
     assert!(balance::value(&vault.balance) >= vault.per_response * vault.max_responses, EInsufficientVaultBalance);
 }
 
@@ -197,6 +217,7 @@ public fun deadline_ms(vault: &SurveyVault): u64   { vault.deadline_ms }
 public fun claimed_count(vault: &SurveyVault): u64 { vault.claimed_count }
 public fun balance_value(vault: &SurveyVault): u64 { balance::value(&vault.balance) }
 public fun status(vault: &SurveyVault): u8         { vault.status }
+public fun closed_at_ms(vault: &SurveyVault): u64  { vault.closed_at_ms }
 public fun creator(vault: &SurveyVault): address   { vault.creator }
 public fun admin_treasury(vault: &SurveyVault): address { vault.admin_treasury }
 public fun has_claimed(vault: &SurveyVault, respondent: address): bool {

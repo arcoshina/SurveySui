@@ -2,7 +2,7 @@
 
 > **Sui Overflow 2026 — DeFi & Payments 賽道**
 >
-> 鏈上問卷獎勵平台：發起者用 SUI 注資 → 受訪者填答領 stakedSurveySuiReward 憑證 → 一鍵向池子 redeem 兌換為 SurveySuiReward (SSR) 代幣，全程透明、防女巫、自動發獎。
+> 鏈上問卷獎勵平台：發起者用 SUI 注資 → 受訪者填答領 StackedSurveysuiReward 憑證 → 一鍵向池子 redeem 兌換為 SurveysuiReward (SR) 代幣，全程透明、防女巫、自動發獎。
 
 ---
 
@@ -65,8 +65,8 @@ pnpm move:test
 | 物件 | Object ID |
 |------|-----------|
 | Package | `<SUI_PACKAGE_ID>` |
+| SR Treasury | `<SR_TREASURY_ID>` |
 | SSR Treasury | `<SSR_TREASURY_ID>` |
-| SSSR Treasury | `<SSSR_TREASURY_ID>` |
 | AMM Pool | `<AMM_POOL_ID>` |
 | Survey Registry | `<SURVEY_REGISTRY_ID>` |
 
@@ -89,7 +89,7 @@ pnpm move:test
 │  /create        建立問卷 + Markdown editor                │
 │  /fund/:id      注資 PTB（invest SUI → mint → vault）     │
 │  /s/:id         受訪者連錢包 → 填答（Sponsored TX）       │
-│  /redeem        stakedSurveySuiReward → SurveySuiReward   │
+│  /redeem        StackedSurveysuiReward → SurveysuiReward   │
 │  /dashboard     發起者儀表板 + 結束活動                   │
 └────────────────────────────────────────────────────────────┘
         ↕ Sponsored sign                ↕ 唯讀查詢 (stats / OG)
@@ -103,11 +103,11 @@ pnpm move:test
                                   └────────────────────────────┘
         ↕ @mysten/sui SDK                       ↕ Sui RPC / indexer
 ┌─ Sui Move Contracts (Devnet) ──────────────────────────────────┐
-│  survey_sui_reward      Coin<SSR> + TreasuryCap（pool-only mint）│
-│  staked_survey_reward   質押憑證物件（可向 pool burn 領 SSR）   │
+│  survey_reward      Coin<SR> + TreasuryCap（pool-only mint）│
+│  stacked_survey_reward  質押憑證物件（可向 pool burn 領 SR）   │
 │  survey_pass            通行證 NFT（不可轉、只驗證、不消耗）    │
-│  survey_vault           問卷預算池（持已 mint 的 SSR）          │
-│  amm_pool               單向 mint 池（SUI in → mint SSR）       │
+│  survey_vault           問卷預算池（持已 mint 的 SR）          │
+│  amm_pool               單向 mint 池（SUI in → mint SR）       │
 │  survey_registry        on-chain 註冊 + 加密答案存儲            │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -120,24 +120,24 @@ pnpm move:test
 發起者 SUI 錢包
    │ (1) Flow A PTB (atomic)：
    │      a. amm_pool::invest_and_mint(SUI in)
-   │         → 池中 SUI ↑，mint 增發 SurveySuiReward 至池
+   │         → 池中 SUI ↑，mint 增發 SurveysuiReward 至池
    │         → 手續費入 Treasury（admin 可賣或燒）
    │      b. survey_vault::create(reward_per_response, max, conditions)
-   │         → 從池中提撥 SSR 至 vault
+   │         → 從池中提撥 SR 至 vault
    │      c. survey_registry::register(vault_id, encrypted_content)
    │
    ▼
-SurveyVault<SurveySuiReward> (shared object, 由合約驗證後派發)
+SurveyVault<SurveysuiReward> (shared object, 由合約驗證後派發)
    │ (2) Flow B：受訪者送出問卷
    │     a. Gas Station Dry Run（合約檢查 SurveyPass + 名額 + 未填答）
    │     b. 通過 → Gas Station 簽 + 廣播
-   │     c. survey_vault::claim → mint stakedSurveySuiReward 給受訪者
+   │     c. survey_vault::claim → mint StackedSurveysuiReward 給受訪者
    ▼
-受訪者錢包 (stakedSurveySuiReward 物件)
+受訪者錢包 (StackedSurveysuiReward 物件)
    │ (3) Flow B 兌換：
-   │     amm_pool::redeem(staked_receipt) → 銷毀憑證、轉出 SurveySuiReward
+   │     amm_pool::redeem(staked_receipt) → 銷毀憑證、轉出 SurveysuiReward
    ▼
-受訪者 SurveySuiReward Coin
+受訪者 SurveysuiReward Coin
 ```
 
 ---
@@ -147,7 +147,7 @@ SurveyVault<SurveySuiReward> (shared object, 由合約驗證後派發)
 - **SurveyPass 通行證機制**：一個地址持有一張 soulbound Pass NFT (不可轉移)，作為防女巫通行憑證，多個問卷可共用且不消耗該物件。
 - **Sponsored Transactions 免 Gas 填答**：藉由 Shinami Gas Station 實現零門檻填答，乾跑（Dry Run）防惡意 Gas 消耗。
 - **Atomic PTB 注資**：發起者一筆交易完成 SUI 投資兌換、金庫建立與問卷註冊，失敗自動 rollback。
-- **單向 Mint Pool 經濟體系**：SUI 投資注入池子帶動 `SurveySuiReward` 升值，保障代幣價值，池中 SUI 僅 admin 可領。
+- **單向 Mint Pool 經濟體系**：SUI 投資注入池子帶動 `SurveysuiReward` 升值，保障代幣價值，池中 SUI 僅 admin 可領。
 
 ---
 

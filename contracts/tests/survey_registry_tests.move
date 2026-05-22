@@ -46,6 +46,7 @@ fun test_register_emits_event() {
             b"schema_hash_abc",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -76,6 +77,7 @@ fun test_query_by_creator() {
             b"schema_1",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -97,6 +99,7 @@ fun test_query_by_creator() {
             b"schema_2",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -118,6 +121,7 @@ fun test_query_by_creator() {
             b"schema_3",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -154,6 +158,7 @@ fun test_register_duplicate_content_hash_abort() {
             b"schema_1",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -174,6 +179,7 @@ fun test_register_duplicate_content_hash_abort() {
             b"schema_2",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -208,6 +214,7 @@ fun test_register_invalid_question_type_abort() {
             b"schema_1",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -250,6 +257,7 @@ fun test_register_too_many_options_abort() {
             b"schema_1",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -284,6 +292,7 @@ fun test_register_empty_question_abort() {
             b"schema_1",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -325,6 +334,7 @@ fun test_register_duplicate_question_id_abort() {
             b"schema_1",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -368,6 +378,7 @@ fun test_register_event_payload_complete() {
             b"schema_hash_123",
             b"test_pubkey",
             questions,
+            0,
             &clk,
             sc.ctx(),
         );
@@ -384,9 +395,69 @@ fun test_register_event_payload_complete() {
         assert!(survey_registry::content_hash(&survey) == b"content_hash_123");
         assert!(survey_registry::schema_hash(&survey) == b"schema_hash_123");
         assert!(survey_registry::encrypted_content(&survey) == b"encrypted_blob_123");
+        assert!(survey_registry::min_tier(&survey) == 0);
         ts::return_shared(survey);
     };
 
+    clock::destroy_for_testing(clk);
+    sc.end();
+}
+
+#[test]
+fun test_register_accepts_max_min_tier() {
+    let (mut sc, clk) = setup();
+    {
+        let mut registry = ts::take_shared<SurveyRegistry>(&sc);
+        let questions = vector[valid_question()];
+        let vault = survey_vault::create_empty(0, 0, 0, @0x0, sc.ctx());
+        survey_registry::register(
+            &mut registry,
+            &vault,
+            b"hash_tier3",
+            b"encrypted_tier3",
+            b"schema_tier3",
+            b"test_pubkey",
+            questions,
+            3,
+            &clk,
+            sc.ctx(),
+        );
+        survey_vault::share_vault(vault);
+        ts::return_shared(registry);
+    };
+    sc.next_tx(CREATOR);
+    {
+        let survey = ts::take_shared<surveysui::survey_registry::Survey>(&sc);
+        assert!(survey_registry::min_tier(&survey) == 3);
+        ts::return_shared(survey);
+    };
+    clock::destroy_for_testing(clk);
+    sc.end();
+}
+
+#[test]
+#[expected_failure(abort_code = 6, location = surveysui::survey_registry)]
+fun test_register_rejects_min_tier_above_max() {
+    let (mut sc, clk) = setup();
+    {
+        let mut registry = ts::take_shared<SurveyRegistry>(&sc);
+        let questions = vector[valid_question()];
+        let vault = survey_vault::create_empty(0, 0, 0, @0x0, sc.ctx());
+        survey_registry::register(
+            &mut registry,
+            &vault,
+            b"hash_tier_overflow",
+            b"encrypted_overflow",
+            b"schema_overflow",
+            b"test_pubkey",
+            questions,
+            4,
+            &clk,
+            sc.ctx(),
+        );
+        survey_vault::share_vault(vault);
+        ts::return_shared(registry);
+    };
     clock::destroy_for_testing(clk);
     sc.end();
 }

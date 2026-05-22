@@ -50,7 +50,7 @@ vi.mock('../lib/crypto', () => ({
   }),
   base64urlToBytes: vi.fn(() => new Uint8Array(32)),
   decryptSurveyContent: vi.fn().mockResolvedValue({
-    markdown: '---\ntitle: "測試問卷"\nperResponse: 1\nmaxResponses: 100\ndeadline: "2030-01-01T00:00:00Z"\nquestions:\n  - id: "q1"\n    type: "text"\n    prompt: "選擇題"\n    required: true\n---'
+    markdown: '---\ntitle: "測試問卷"\nperResponse: 1\nmaxResponses: 100\ndeadline: "2030-01-01T00:00:00Z"\nminTier: 0\n---\n\n```yaml\nquestions:\n  - id: q1\n    type: SHORT_ANSWER\n    prompt: "選擇題"\n    required: true\n```\n'
   }),
 }))
 
@@ -92,7 +92,7 @@ function mockVaultObject(overrides: Partial<{
           dataType: 'moveObject',
           fields: {
             creator: CREATOR,
-            balance: '58000000000', // 58 sSSR
+            balance: '58000000000', // 58 SSR
             status: 0, // STATUS_OPEN
             claimed_count: '0',
             max_responses: '100',
@@ -223,7 +223,7 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
       renderDashboard()
 
       const balance = await screen.findByLabelText('vault-balance')
-      // 58 sSSR
+      // 58 SSR
       expect(balance).toHaveTextContent('58')
     })
   })
@@ -274,7 +274,8 @@ describe('DashboardPage — T4.6 /dashboard/:vaultId', () => {
       renderDashboard()
 
       await screen.findByLabelText('response-count')
-      expect(screen.getByRole('button', { name: /結束活動/ })).toBeDisabled()
+      // CLOSED 狀態下 button 文字會從「結束活動」轉為「已結束」
+      expect(screen.getByRole('button', { name: /已結束|結束活動/ })).toBeDisabled()
     })
 
     it('creator 點擊結束活動按鈕觸發 buildClosePtb + signAndExecute', async () => {

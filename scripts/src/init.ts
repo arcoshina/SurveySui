@@ -36,8 +36,8 @@ try {
 
 export interface DeployResult {
   packageId: string
+  srTreasuryId: string
   ssrTreasuryId: string
-  sssrTreasuryId: string
   surveyRegistryId: string
   nullifierRegistryId: string
   issuerConfigId: string
@@ -87,7 +87,7 @@ function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
 
 /**
  * Compile and publish the Move package.
- * The `init` functions of survey_sui_reward, stacked_survey_reward, and survey_registry
+ * The `init` functions of survey_reward, stacked_survey_reward, and survey_registry
  * create shared objects automatically on publish; we extract their IDs from the effects.
  */
 export async function deployPackage(
@@ -111,8 +111,8 @@ export async function deployPackage(
   await client.waitForTransaction({ digest: result.digest, timeout: 120_000 })
 
   let packageId = ''
+  let srTreasuryId = ''
   let ssrTreasuryId = ''
-  let sssrTreasuryId = ''
   let surveyRegistryId = ''
   let nullifierRegistryId = ''
   let issuerConfigId = ''
@@ -122,10 +122,10 @@ export async function deployPackage(
       packageId = change.packageId
     }
     if (change.type === 'created') {
-      if (change.objectType.includes('::survey_sui_reward::SsrTreasury'))
+      if (change.objectType.includes('::survey_reward::SrTreasury'))
+        srTreasuryId = change.objectId
+      if (change.objectType.includes('::stacked_survey_reward::SsrTreasury'))
         ssrTreasuryId = change.objectId
-      if (change.objectType.includes('::stacked_survey_reward::SssrTreasury'))
-        sssrTreasuryId = change.objectId
       if (change.objectType.includes('::survey_registry::SurveyRegistry'))
         surveyRegistryId = change.objectId
       if (change.objectType.includes('::survey_pass::NullifierRegistry'))
@@ -135,21 +135,21 @@ export async function deployPackage(
     }
   }
 
-  if (!packageId || !ssrTreasuryId || !sssrTreasuryId || !surveyRegistryId || !nullifierRegistryId || !issuerConfigId) {
+  if (!packageId || !srTreasuryId || !ssrTreasuryId || !surveyRegistryId || !nullifierRegistryId || !issuerConfigId) {
     throw new Error(
-      `Deploy incomplete. packageId="${packageId}" ssrTreasuryId="${ssrTreasuryId}" ` +
-        `sssrTreasuryId="${sssrTreasuryId}" surveyRegistryId="${surveyRegistryId}" ` +
+      `Deploy incomplete. packageId="${packageId}" srTreasuryId="${srTreasuryId}" ` +
+        `ssrTreasuryId="${ssrTreasuryId}" surveyRegistryId="${surveyRegistryId}" ` +
         `nullifierRegistryId="${nullifierRegistryId}" issuerConfigId="${issuerConfigId}"`,
     )
   }
 
   console.log(`  packageId:            ${packageId}`)
+  console.log(`  srTreasuryId:         ${srTreasuryId}`)
   console.log(`  ssrTreasuryId:        ${ssrTreasuryId}`)
-  console.log(`  sssrTreasuryId:       ${sssrTreasuryId}`)
   console.log(`  surveyRegistryId:     ${surveyRegistryId}`)
   console.log(`  nullifierRegistryId:  ${nullifierRegistryId}`)
   console.log(`  issuerConfigId:       ${issuerConfigId}`)
-  return { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId }
+  return { packageId, srTreasuryId, ssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId }
 }
 
 /**
@@ -192,16 +192,16 @@ export async function initAmmPool(
 export async function queryPoolState(
   client: SuiClient,
   poolId: string,
-): Promise<{ suiReserve: bigint; ssrReserve: bigint; totalSuiInvested: bigint }> {
+): Promise<{ suiReserve: bigint; srReserve: bigint; totalSuiInvested: bigint }> {
   const obj = await client.getObject({ id: poolId, options: { showContent: true } })
   if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') {
     throw new Error(`Pool object ${poolId} not found or not a Move object`)
   }
   const f = obj.data.content.fields as Record<string, unknown>
   const suiReserve = BigInt(f.sui_reserve as string | number)
-  const ssrReserve = BigInt(f.ssr_reserve as string | number)
+  const srReserve = BigInt(f.sr_reserve as string | number)
   const totalSuiInvested = BigInt(f.total_sui_invested as string)
-  return { suiReserve, ssrReserve, totalSuiInvested }
+  return { suiReserve, srReserve, totalSuiInvested }
 }
 
 /**
@@ -230,8 +230,8 @@ async function main() {
     : Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
   const client = new SuiClient({ url: getFullnodeUrl(network) })
 
-  // 1. Deploy (creates SsrTreasury, SssrTreasury, SurveyRegistry, NullifierRegistry, IssuerConfig)
-  const { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId } =
+  // 1. Deploy (creates SrTreasury, SsrTreasury, SurveyRegistry, NullifierRegistry, IssuerConfig)
+  const { packageId, srTreasuryId, ssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId } =
     await deployPackage(client, keypair, adminAddress)
 
   // 2. Init AMM pool (empty bonding-curve pool; no initial liquidity required)
@@ -276,8 +276,8 @@ async function main() {
   // 4. Persist IDs into root .env and .env.shared
   writeEnvShared({
     SUI_PACKAGE_ID: packageId,
+    SR_TREASURY_ID: srTreasuryId,
     SSR_TREASURY_ID: ssrTreasuryId,
-    SSSR_TREASURY_ID: sssrTreasuryId,
     AMM_POOL_ID: poolId,
     SURVEY_REGISTRY_ID: surveyRegistryId,
     PASS_REGISTRY_ID: nullifierRegistryId,
@@ -288,8 +288,8 @@ async function main() {
   const frontendEnvPath = resolve(__dirname, '../../frontend/.env')
   mergeEnvFile(frontendEnvPath, {
     VITE_PACKAGE_ID: packageId,
+    VITE_SR_TREASURY_ID: srTreasuryId,
     VITE_SSR_TREASURY_ID: ssrTreasuryId,
-    VITE_SSSR_TREASURY_ID: sssrTreasuryId,
     VITE_AMM_POOL_ID: poolId,
     VITE_SURVEY_REGISTRY_ID: surveyRegistryId,
     VITE_PASS_REGISTRY_ID: nullifierRegistryId,
@@ -315,7 +315,7 @@ async function main() {
   const state = await queryPoolState(client, poolId)
   console.log(`\nPool verified (empty at start):`)
   console.log(`  sui_reserve:        ${state.suiReserve}`)
-  console.log(`  ssr_reserve:        ${state.ssrReserve}`)
+  console.log(`  sr_reserve:         ${state.srReserve}`)
   console.log(`  total_sui_invested: ${state.totalSuiInvested}`)
   console.log('\nDeployment complete!')
 }

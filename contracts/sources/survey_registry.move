@@ -18,8 +18,10 @@ const EInvalidQuestionType: u64 = 2;
 const EOptionLimitExceeded: u64 = 3;
 const EEmptyQuestion: u64 = 4;
 const EDuplicateQuestionId: u64 = 5;
+const EInvalidMinTier: u64 = 6;
 
 const MAX_OPTIONS_LIMIT: u64 = 50;
+const MAX_MIN_TIER: u8 = 3;
 
 // ── structs ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,7 @@ public struct Survey has key {
     creator_pub_key: vector<u8>,
     status: u8,
     registered_at_ms: u64,
+    min_tier: u8,
 }
 
 /// Shared registry: indexes survey IDs by creator for on-chain queries.
@@ -62,6 +65,7 @@ public struct SurveyRegistered has copy, drop {
     schema_hash: vector<u8>,
     question_count: u64,
     registered_at_ms: u64,
+    min_tier: u8,
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -103,6 +107,7 @@ public fun register(
     schema_hash: vector<u8>,
     pub_key: vector<u8>,
     questions: vector<Question>,
+    min_tier: u8,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -111,7 +116,10 @@ public fun register(
     assert!(!table::contains(&registry.registered_hashes, content_hash), EDuplicateSurvey);
     table::add(&mut registry.registered_hashes, content_hash, ctx.sender());
 
-    // 2. Validate questions structure
+    // 2. min_tier validation
+    assert!(min_tier <= MAX_MIN_TIER, EInvalidMinTier);
+
+    // 3. Validate questions structure
     let num_questions = vector::length(&questions);
     let mut i = 0;
     while (i < num_questions) {
@@ -156,6 +164,7 @@ public fun register(
         creator_pub_key: pub_key,
         status: STATUS_ACTIVE,
         registered_at_ms: now_ms,
+        min_tier,
     };
 
     let survey_id = object::id(&survey);
@@ -168,6 +177,7 @@ public fun register(
         schema_hash,
         question_count: num_questions,
         registered_at_ms: now_ms,
+        min_tier,
     });
 
     if (table::contains(&registry.surveys_by_creator, creator)) {
@@ -196,6 +206,7 @@ public fun schema_hash(survey: &Survey): vector<u8> { survey.schema_hash }
 public fun creator_pub_key(survey: &Survey): vector<u8> { survey.creator_pub_key }
 public fun status(survey: &Survey): u8              { survey.status }
 public fun registered_at_ms(survey: &Survey): u64   { survey.registered_at_ms }
+public fun min_tier(survey: &Survey): u8            { survey.min_tier }
 public fun total_count(registry: &SurveyRegistry): u64 { registry.total_count }
 
 /// Returns the list of survey IDs registered by `creator`, or an empty vector.
@@ -214,6 +225,7 @@ public fun content_hash_from_event(event: &SurveyRegistered): vector<u8> { event
 public fun schema_hash_from_event(event: &SurveyRegistered): vector<u8> { event.schema_hash }
 public fun question_count_from_event(event: &SurveyRegistered): u64   { event.question_count }
 public fun registered_at_ms_from_event(event: &SurveyRegistered): u64   { event.registered_at_ms }
+public fun min_tier_from_event(event: &SurveyRegistered): u8           { event.min_tier }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
 

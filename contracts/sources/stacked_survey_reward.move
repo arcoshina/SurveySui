@@ -10,8 +10,8 @@ const EExceedsCap: u64 = 0;
 /// One-time witness — uppercase of module name.
 public struct STACKED_SURVEY_REWARD has drop {}
 
-/// Shared treasury for sSSR. Package-internal mint/burn; no public mint.
-public struct SssrTreasury has key {
+/// Shared treasury for SSR. Package-internal mint/burn; no public mint.
+public struct SsrTreasury has key {
     id: UID,
     cap: TreasuryCap<STACKED_SURVEY_REWARD>,
 }
@@ -20,19 +20,19 @@ fun init(witness: STACKED_SURVEY_REWARD, ctx: &mut TxContext) {
     let (cap, metadata) = coin::create_currency(
         witness,
         DECIMALS,
-        b"sSSR",
-        b"Stacked SurveySui Reward",
-        b"Stacked survey reward — redeem at AMM pool for SSR",
+        b"SSR",
+        b"Stacked Surveysui Reward",
+        b"Stacked survey reward — redeem at AMM pool for SR",
         option::none(),
         ctx,
     );
     transfer::public_freeze_object(metadata);
-    transfer::share_object(SssrTreasury { id: object::new(ctx), cap });
+    transfer::share_object(SsrTreasury { id: object::new(ctx), cap });
 }
 
-/// Mint sSSR. Only callable within the surveysui package (amm_pool calls this).
+/// Mint SSR. Only callable within the surveysui package (amm_pool calls this).
 public(package) fun mint(
-    treasury: &mut SssrTreasury,
+    treasury: &mut SsrTreasury,
     amount: u64,
     ctx: &mut TxContext,
 ): Coin<STACKED_SURVEY_REWARD> {
@@ -41,18 +41,18 @@ public(package) fun mint(
     coin::mint(&mut treasury.cap, amount, ctx)
 }
 
-/// Burn sSSR. Only callable within the surveysui package (amm_pool::redeem calls this).
-public(package) fun burn(treasury: &mut SssrTreasury, coin: Coin<STACKED_SURVEY_REWARD>) {
+/// Burn SSR. Only callable within the surveysui package (amm_pool::redeem calls this).
+public(package) fun burn(treasury: &mut SsrTreasury, coin: Coin<STACKED_SURVEY_REWARD>) {
     coin::burn(&mut treasury.cap, coin);
 }
 
-public fun total_supply(treasury: &SssrTreasury): u64 {
+public fun total_supply(treasury: &SsrTreasury): u64 {
     coin::total_supply(&treasury.cap)
 }
 
 public fun supply_cap(): u64 { TOTAL_SUPPLY_CAP }
 
-public fun display_sssr(amount: u64): u64 {
+public fun display_ssr(amount: u64): u64 {
     let decimals_to_round = 100000;
     let half = decimals_to_round / 2;
     ((amount + half) / decimals_to_round) * decimals_to_round

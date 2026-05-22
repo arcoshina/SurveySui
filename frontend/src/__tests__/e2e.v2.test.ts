@@ -47,8 +47,8 @@ const E2E_ENABLED = env.E2E_ENABLED === '1' || env.E2E_ENABLED === 'true'
 const PACKAGE_ID = env.SUI_PACKAGE_ID ?? ''
 const PASS_REGISTRY_ID = env.PASS_REGISTRY_ID ?? ''
 const AMM_POOL_ID = env.AMM_POOL_ID ?? ''
+const SR_TREASURY_ID = env.SR_TREASURY_ID ?? ''
 const SSR_TREASURY_ID = env.SSR_TREASURY_ID ?? ''
-const SSSR_TREASURY_ID = env.SSSR_TREASURY_ID ?? ''
 const SURVEY_REGISTRY_ID = env.SURVEY_REGISTRY_ID ?? ''
 const ADMIN_PRIVATE_KEY = env.SUI_ADMIN_PRIVATE_KEY ?? ''
 const BFF_URL = env.BFF_URL ?? 'http://localhost:3100'
@@ -58,8 +58,8 @@ const REQUIRED_VARS = [
   PACKAGE_ID,
   PASS_REGISTRY_ID,
   AMM_POOL_ID,
+  SR_TREASURY_ID,
   SSR_TREASURY_ID,
-  SSSR_TREASURY_ID,
   SURVEY_REGISTRY_ID,
   ADMIN_PRIVATE_KEY,
 ]
@@ -72,8 +72,8 @@ function loadKeypair(privKey: string): Ed25519Keypair {
   return Ed25519Keypair.fromSecretKey(Buffer.from(privKey, 'hex'))
 }
 
-// sSSR base units per human unit（9 decimals）
-const SSSR_BASE_PER_UNIT = 1_000_000_000n
+// SSR base units per human unit（9 decimals）
+const SSR_BASE_PER_UNIT = 1_000_000_000n
 
 // ── test_e2e_harness_boots_against_devnet / test_e2e_happy_path_no_mock ────────
 
@@ -126,7 +126,7 @@ describe.skipIf(!E2E_ENABLED)('S0.2 e2e harness（需 E2E_ENABLED=1）', () => {
 
     // ── Phase 1: 發起者建立問卷（直接執行 PTB，不經 BFF）──────────────────────
 
-    const perResponseHuman = 1n  // 1 sSSR / 份
+    const perResponseHuman = 1n  // 1 SSR / 份
     const maxResponses = 2
     const deadlineMs = BigInt(Date.now() + 365 * 24 * 60 * 60 * 1000) // 1 年後
 
@@ -136,13 +136,13 @@ describe.skipIf(!E2E_ENABLED)('S0.2 e2e harness（需 E2E_ENABLED=1）', () => {
     const totalSuiInvested = BigInt(poolFields?.total_sui_invested ?? '0')
 
     const BONDING_DECAY = 1_000_000_000_000n
-    const INITIAL_SSSR_PER_SUI = 1000n
+    const INITIAL_SSR_PER_SUI = 1000n
 
-    // 計算所需 sSSR 和 SUI
-    const netSssrBase = perResponseHuman * BigInt(maxResponses) * SSSR_BASE_PER_UNIT
-    const grossSssrBase = (netSssrBase * 10_000n + 9_970n - 1n) / 9_970n
-    const denom = BONDING_DECAY * INITIAL_SSSR_PER_SUI
-    const numer = grossSssrBase * (BONDING_DECAY + totalSuiInvested)
+    // 計算所需 SSR 和 SUI
+    const netSsrBase = perResponseHuman * BigInt(maxResponses) * SSR_BASE_PER_UNIT
+    const grossSsrBase = (netSsrBase * 10_000n + 9_970n - 1n) / 9_970n
+    const denom = BONDING_DECAY * INITIAL_SSR_PER_SUI
+    const numer = grossSsrBase * (BONDING_DECAY + totalSuiInvested)
     const suiToInvest = (numer + denom - 1n) / denom
     const suiWithSlippage = (suiToInvest * 102n) / 100n  // +2% slippage
 
@@ -153,20 +153,20 @@ describe.skipIf(!E2E_ENABLED)('S0.2 e2e harness（需 E2E_ENABLED=1）', () => {
 
     const createTx = new Transaction()
     const [suiCoin] = createTx.splitCoins(createTx.gas, [createTx.pure.u64(suiWithSlippage)])
-    const [sssrCoin] = createTx.moveCall({
+    const [ssrCoin] = createTx.moveCall({
       target: `${PACKAGE_ID}::amm_pool::invest_and_mint`,
       arguments: [
         createTx.object(AMM_POOL_ID),
+        createTx.object(SR_TREASURY_ID),
         createTx.object(SSR_TREASURY_ID),
-        createTx.object(SSSR_TREASURY_ID),
         suiCoin,
       ],
     })
     const [vault] = createTx.moveCall({
       target: `${PACKAGE_ID}::survey_vault::create`,
       arguments: [
-        sssrCoin,
-        createTx.pure.u64(perResponseHuman * SSSR_BASE_PER_UNIT),
+        ssrCoin,
+        createTx.pure.u64(perResponseHuman * SSR_BASE_PER_UNIT),
         createTx.pure.u64(maxResponses),
         createTx.pure.u64(deadlineMs),
         createTx.pure.address(adminAddress),
@@ -273,29 +273,29 @@ describe.skipIf(!E2E_ENABLED)('S0.2 e2e harness（需 E2E_ENABLED=1）', () => {
 
     expect(claimResult.effects?.status?.status, '填答 claim 失敗').toBe('success')
 
-    // 找到領取的 sSSR coin
-    const sssrChange = claimResult.objectChanges?.find(
+    // 找到領取的 SSR coin
+    const ssrChange = claimResult.objectChanges?.find(
       (c: Record<string, unknown>) =>
         c.type === 'created' &&
         typeof c.objectType === 'string' &&
         c.objectType.includes('::coin::Coin<') &&
         c.objectType.includes('staked_survey_reward'),
     )
-    const sssrCoinId = (sssrChange as Record<string, string> | undefined)?.objectId
+    const ssrCoinId = (ssrChange as Record<string, string> | undefined)?.objectId
 
-    // ── Phase 4: 受訪者 redeem sSSR → SSR ────────────────────────────────────
+    // ── Phase 4: 受訪者 redeem SSR → SSR ────────────────────────────────────
 
-    if (sssrCoinId) {
+    if (ssrCoinId) {
       const redeemTx = new Transaction()
-      const [ssrCoin] = redeemTx.moveCall({
+      const [srCoin] = redeemTx.moveCall({
         target: `${PACKAGE_ID}::amm_pool::redeem`,
         arguments: [
           redeemTx.object(AMM_POOL_ID),
-          redeemTx.object(SSSR_TREASURY_ID),
-          redeemTx.object(sssrCoinId),
+          redeemTx.object(SSR_TREASURY_ID),
+          redeemTx.object(ssrCoinId),
         ],
       })
-      redeemTx.transferObjects([ssrCoin], redeemTx.pure.address(adminAddress))
+      redeemTx.transferObjects([srCoin], redeemTx.pure.address(adminAddress))
 
       const redeemResult = await client.signAndExecuteTransaction({
         transaction: redeemTx,

@@ -2,7 +2,7 @@
  * scripts/src/reset-registry.ts
  *
  * 開發 / 手動測試逃生口：當 `survey_registry::registered_hashes`
- * 累積了重複內容、導致每次發布都觸發 `EDuplicateSurvey` 時，
+ * 累積了重複內容、導致每次發布都觸發 `EDuplicateSurvey` 時,
  * 用這支腳本把整包重發、產生全新的 `SurveyRegistry` shared object。
  *
  * Trade-off：會同步重發整個 package（pool / treasury / registries 全新），
@@ -61,15 +61,15 @@ async function main() {
     : Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
   const client = new SuiClient({ url: getFullnodeUrl(network) })
 
-  const { packageId, ssrTreasuryId, sssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId } =
+  const { packageId, srTreasuryId, ssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId } =
     await deployPackage(client, keypair, adminAddress)
 
   const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
 
   writeEnvShared({
     SUI_PACKAGE_ID: packageId,
+    SR_TREASURY_ID: srTreasuryId,
     SSR_TREASURY_ID: ssrTreasuryId,
-    SSSR_TREASURY_ID: sssrTreasuryId,
     AMM_POOL_ID: poolId,
     SURVEY_REGISTRY_ID: surveyRegistryId,
     PASS_REGISTRY_ID: nullifierRegistryId,
@@ -79,8 +79,8 @@ async function main() {
   const frontendEnvPath = resolve(__dirname, '../../frontend/.env')
   mergeEnvFile(frontendEnvPath, {
     VITE_PACKAGE_ID: packageId,
+    VITE_SR_TREASURY_ID: srTreasuryId,
     VITE_SSR_TREASURY_ID: ssrTreasuryId,
-    VITE_SSSR_TREASURY_ID: sssrTreasuryId,
     VITE_AMM_POOL_ID: poolId,
     VITE_SURVEY_REGISTRY_ID: surveyRegistryId,
     VITE_PASS_REGISTRY_ID: nullifierRegistryId,

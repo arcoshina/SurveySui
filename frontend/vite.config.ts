@@ -23,8 +23,8 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_PACKAGE_ID': JSON.stringify(env.SUI_PACKAGE_ID || ''),
     'import.meta.env.VITE_AMM_POOL_ID': JSON.stringify(env.AMM_POOL_ID || ''),
-    'import.meta.env.VITE_SSSR_TREASURY_ID': JSON.stringify(env.SSSR_TREASURY_ID || ''),
     'import.meta.env.VITE_SSR_TREASURY_ID': JSON.stringify(env.SSR_TREASURY_ID || ''),
+    'import.meta.env.VITE_SR_TREASURY_ID': JSON.stringify(env.SR_TREASURY_ID || ''),
     'import.meta.env.VITE_SURVEY_REGISTRY_ID': JSON.stringify(env.SURVEY_REGISTRY_ID || ''),
     'import.meta.env.VITE_PASS_REGISTRY_ID': JSON.stringify(env.PASS_REGISTRY_ID || ''),
     'import.meta.env.VITE_NULLIFIER_REGISTRY_ID': JSON.stringify(env.NULLIFIER_REGISTRY_ID || env.PASS_REGISTRY_ID || ''),

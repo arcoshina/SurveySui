@@ -11,6 +11,7 @@ import { Transaction } from '@mysten/sui/transactions'
 import { buildClaimPtb, executeSponsoredTx, executeTxWithFallback } from '../lib/sponsoredTx'
 import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
 import { parseFullSurveyMarkdown } from '../lib/frontmatter'
+import { renderMarkdown } from '../lib/markdown'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
 import { buildMintPassPtb } from '../lib/ptb'
 import { fetchActivePass, SurveyPassData } from '../lib/surveyPass'
@@ -47,6 +48,7 @@ interface Question {
 interface Survey {
   id: string
   title: string
+  description: string
   status: 'ACTIVE' | 'CLOSED'
   deadline: string
   per_response: number
@@ -56,7 +58,7 @@ interface Survey {
 }
 
 type Answers = Record<string, string | string[]>
-type Phase = 'loading' | 'filling' | 'review' | 'submitting' | 'success' | 'error' | 'need_pass'
+type Phase = 'loading' | 'filling' | 'review' | 'submitting' | 'success' | 'error' | 'need_pass' | 'closed'
 
 export default function SurveyPage() {
   const { id } = useParams<{ id: string }>()
@@ -188,7 +190,21 @@ export default function SurveyPage() {
         const fields = obj.data.content.fields as any
         const vault_id = fields.vault_id
         const status = fields.status // 0 = ACTIVE, 1 = ARCHIVED
-        
+
+        // 加查 vault 狀態，作為「是否關閉」的權威來源
+        // (Survey.status 永遠是 ACTIVE，因為 close 流程不會呼叫 archive)
+        const vaultObj = await suiClient.getObject({
+          id: vault_id,
+          options: { showContent: true },
+        })
+        if (
+          vaultObj.data?.content?.dataType === 'moveObject' &&
+          Number((vaultObj.data.content.fields as any).status) === 1 // STATUS_CLOSED
+        ) {
+          setPhase('closed')
+          return
+        }
+
         // Extract encrypted content
         let rawContent: Uint8Array
         if (Array.isArray(fields.encrypted_content)) {
@@ -250,6 +266,7 @@ export default function SurveyPage() {
         setSurvey({
           id: surveyId,
           title: parsed.data.title,
+          description: parsed.data.description,
           status: status === 0 ? 'ACTIVE' : 'CLOSED',
           deadline: new Date(parsed.data.deadlineMs).toISOString(),
           per_response: parsed.data.perResponse,
@@ -532,7 +549,7 @@ export default function SurveyPage() {
   }
 
   // ── Wallet Check ──────────────────────────────────────────────────────────
-  if (!account && phase !== 'loading') {
+  if (!account && phase !== 'loading' && phase !== 'closed') {
     return (
       <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
         <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-md text-center space-y-6 flex flex-col items-center">
@@ -562,13 +579,38 @@ export default function SurveyPage() {
   }
 
   // ── error ─────────────────────────────────────────────────────────────────
-  if (phase === 'error' || !survey) {
+  if ((phase === 'error' || !survey) && phase !== 'closed') {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
         <h1 className="text-2xl font-bold mb-6 text-gray-800">填寫問卷</h1>
         <p role="alert" className="text-red-500">
           問卷載入失敗，請稍後再試。
         </p>
+      </main>
+    )
+  }
+
+  // ── closed (問卷已結束，禁止填寫) ─────────────────────────────────────────
+  if (phase === 'closed') {
+    return (
+      <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
+        <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-md text-center space-y-6">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-200 text-gray-500 mx-auto">
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800">此問卷已關閉</h1>
+          <p className="text-sm text-gray-600">
+            發起人已結束此問卷活動，無法再填寫。
+          </p>
+          <Link
+            to="/"
+            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition-colors text-sm"
+          >
+            返回首頁
+          </Link>
+        </div>
       </main>
     )
   }
@@ -580,7 +622,7 @@ export default function SurveyPage() {
         <div className="bg-white border border-gray-200 rounded-3xl p-8 max-w-md w-full shadow-xl space-y-6">
           <div className="text-center">
             <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">📇</div>
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">首次填答，請先驗證</h2>
+            <h2 className="text-2xl font-black text-gray-800 tracking-tight">首次填答，請先領取通行證</h2>
             <p className="text-xs text-gray-500 mt-2">
               本系統需要真人憑證 (SurveyPass) 以防範女巫攻擊。請輸入 Email 獲取驗證碼以鑄造您專屬的 SBT 憑證卡。
             </p>
@@ -734,6 +776,7 @@ export default function SurveyPage() {
 
   // ── review / submitting ───────────────────────────────────────────────────
   if (phase === 'review' || phase === 'submitting') {
+    if (!survey) return null
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
         <h1 className="text-2xl font-bold mb-6 text-gray-800">確認您的答案</h1>
@@ -787,14 +830,24 @@ export default function SurveyPage() {
     || (surveyMinTier > 0 && !isPassValid)
     || (isPassValid && activePass!.effectiveTier < surveyMinTier)
 
-  const submitLabel = isPassValid ? '預覽答案' : '需要身分驗證才能填答'
+  const submitLabel = (surveyMinTier === 0 || isPassValid) ? '預覽答案' : '需要身分驗證才能填答'
+
+  if (!survey) return null
 
   return (
     <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
       <h1 className="text-2xl font-bold mb-2 text-gray-800">{survey.title}</h1>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-500 mb-4">
         截止日期：{new Date(survey.deadline).toLocaleDateString('zh-TW')}
       </p>
+
+      {survey.description && (
+        <div
+          aria-label="問卷說明"
+          className="prose max-w-none border-l-4 border-blue-300 bg-blue-50/50 px-4 py-3 mb-6 text-sm"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(survey.description) }}
+        />
+      )}
 
       {!account && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">

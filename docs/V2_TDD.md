@@ -38,9 +38,9 @@
 
 | ID | 不變式 | 驗證方式 |
 | --- | --- | --- |
-| INV-1 | **新鑄 sSSR 不入發起者錢包**：PTB 跑完後 `balance(creator, sSSR) == balance_before − offset_used`（不可 > before） | Move test_scenario 對拍餘額；FE e2e 對拍 dApp Kit 餘額 |
-| INV-2 | **Vault 餘額下限**：step ⑤ 合併後 `vault.sssr ≥ per_response × max`；不滿足必 abort | Move test_scenario abort 路徑 |
-| INV-3 | **費率分拆對帳**：`vault.sssr_after_fee + treasury_delta == offset_in + minted` ± 1 base unit（rounding tolerance） | Move test_scenario |
+| INV-1 | **新鑄 SSR 不入發起者錢包**：PTB 跑完後 `balance(creator, SSR) == balance_before − offset_used`（不可 > before） | Move test_scenario 對拍餘額；FE e2e 對拍 dApp Kit 餘額 |
+| INV-2 | **Vault 餘額下限**：step ⑤ 合併後 `vault.ssr ≥ per_response × max`；不滿足必 abort | Move test_scenario abort 路徑 |
+| INV-3 | **費率分拆對帳**：`vault.ssr_after_fee + treasury_delta == offset_in + minted` ± 1 base unit（rounding tolerance） | Move test_scenario |
 | INV-4 | **費率公式一致**：FE `estimateFundCostV2` 算的 `effective_fee_bps == Move FeeConfig.effective()`，公式 `total × discount / 10000` | Vitest 對拍（5 組固定輸入） |
 | INV-5 | **問卷雜湊唯一**：同一 `content_hash` 第二次 register 必 abort `EDuplicateSurvey` | Move 單元 |
 | INV-6 | **SurveyPass 不消耗**：同一 pass 完成多份問卷後仍 `exists(pass.id) && is_valid` | Move test_scenario（保留 V1 測試） |
@@ -78,7 +78,7 @@
 
 ### S1.1 AMM / FeeConfig（總費率 20% × 折扣 50%）
 
-- **`test_initial_ssr_per_sui_one_thousand`** — given `total_sui_invested == 0`，when invest 1 SUI（1e9 MIST），then mint `1000 * 1e9` sSSR base = 1000 sSSR units。（**保留 V1 既有測試**，列在這裡是為了 V2_Tasks「確認」項目能勾掉）
+- **`test_initial_ssr_per_sui_one_thousand`** — given `total_sui_invested == 0`，when invest 1 SUI（1e9 MIST），then mint `1000 * 1e9` SSR base = 1000 SSR units。（**保留 V1 既有測試**，列在這裡是為了 V2_Tasks「確認」項目能勾掉）
 - **`test_fee_config_default_values`** — given `init_pool`，when 讀 FeeConfig，then `total_fee_bps == 2000 && discount_bps == 5000`。
 - **`test_fee_config_effective_formula`** — given `(total=2000, discount=5000)`，when call `effective()`，then `== 1000`；另測 `(2000, 0) -> 0`、`(2000, 10000) -> 2000`、`(1500, 3000) -> 450`、`(0, 5000) -> 0`。
 - **`test_fee_config_setter_admin_only`** — given 非 admin sender，when `set_fee_config`，then abort `ENotAdmin`。
@@ -99,32 +99,32 @@
 
 #### Happy path
 
-- **`test_ptb_seven_steps_happy_path_no_offset`** — given 發起者 sSSR 餘額 = 0、池 `total_sui_invested == 0`、要求 `per_response × max = 100 sSSR`，when 七步 PTB，then：
-  - vault.sssr = `100 - fee`（fee 用 `effective_fee_bps` 算）
-  - admin treasury sssr += `fee`
-  - creator sSSR 餘額仍為 0（INV-1）
+- **`test_ptb_seven_steps_happy_path_no_offset`** — given 發起者 SSR 餘額 = 0、池 `total_sui_invested == 0`、要求 `per_response × max = 100 SSR`，when 七步 PTB，then：
+  - vault.ssr = `100 - fee`（fee 用 `effective_fee_bps` 算）
+  - admin treasury ssr += `fee`
+  - creator SSR 餘額仍為 0（INV-1）
   - 池 `total_sui_invested` 增量 = 對應的 SUI in
   - `SurveyRegistered` event payload 含 `content_hash`、`vault_id`、`schema_hash`
-- **`test_ptb_seven_steps_happy_path_with_offset`** — given 發起者 sSSR = 50（既有），要求 100 sSSR，when 七步 PTB，then：
-  - step ③ 注入 50 sSSR
-  - step ④ AMM 補 mint 約 50 sSSR（INV-3 對帳）
-  - creator sSSR 餘額 = 0（折抵全用掉）
+- **`test_ptb_seven_steps_happy_path_with_offset`** — given 發起者 SSR = 50（既有），要求 100 SSR，when 七步 PTB，then：
+  - step ③ 注入 50 SSR
+  - step ④ AMM 補 mint 約 50 SSR（INV-3 對帳）
+  - creator SSR 餘額 = 0（折抵全用掉）
   - 折抵組 SUI in < no-offset 組（迴歸對拍）
-- **`test_ptb_seven_steps_happy_path_overfund_offset`** — given 發起者既有 sSSR > 100（超過所需），when 七步 PTB，then 只折抵剛好 100 sSSR / `(1 - fee_rate)`；剩餘 sSSR 退回 creator（合約 helper 自動處理）。
+- **`test_ptb_seven_steps_happy_path_overfund_offset`** — given 發起者既有 SSR > 100（超過所需），when 七步 PTB，then 只折抵剛好 100 SSR / `(1 - fee_rate)`；剩餘 SSR 退回 creator（合約 helper 自動處理）。
 
 #### Abort 路徑
 
-- **`test_ptb_step5_invariant_underfund_abort`** — given 故意傳偏低 SUI（前端估算錯）→ step ⑤ 合併後 vault < net_sssr，then abort `EInsufficientVaultBalance`，整筆 PTB rollback（INV-2）。
+- **`test_ptb_step5_invariant_underfund_abort`** — given 故意傳偏低 SUI（前端估算錯）→ step ⑤ 合併後 vault < net_ssr，then abort `EInsufficientVaultBalance`，整筆 PTB rollback（INV-2）。
 - **`test_ptb_step7_duplicate_content_abort`** — given 同一 `content_hash` 已 registered，when 第二次跑七步 PTB，then abort `EDuplicateSurvey`，rollback（INV-5）。
 - **`test_ptb_step7_invalid_schema_abort`** — given 結構違規的 encrypted_blob + schema_hash，then abort `EInvalidSchema`。
-- **`test_ptb_atomic_rollback_step3_failure`** — 模擬 step ③ deposit 失敗（sSSR coin 不足），整筆 PTB rollback，pool / vault / treasury 餘額不變。
+- **`test_ptb_atomic_rollback_step3_failure`** — 模擬 step ③ deposit 失敗（SSR coin 不足），整筆 PTB rollback，pool / vault / treasury 餘額不變。
 - **`test_ptb_atomic_rollback_step4_failure`** — 模擬 step ④ AMM mint 失敗（SUI in 為 0），全部 rollback。
 - **`test_ptb_atomic_rollback_step6_failure`** — 模擬 step ⑥ split_fee 失敗（FeeConfig 不存在），全部 rollback。
 
 #### Invariant
 
-- **`test_ptb_creator_balance_invariant`** — 跑完 happy path no_offset / with_offset / overfund 三組後，`balance(creator, sSSR) == before − offset_used`，不大於 before（INV-1）。
-- **`test_ptb_fee_split_accounting`** — `vault.sssr + treasury_delta == offset_in + minted ± 1`（INV-3）。
+- **`test_ptb_creator_balance_invariant`** — 跑完 happy path no_offset / with_offset / overfund 三組後，`balance(creator, SSR) == before − offset_used`，不大於 before（INV-1）。
+- **`test_ptb_fee_split_accounting`** — `vault.ssr + treasury_delta == offset_in + minted ± 1`（INV-3）。
 
 ---
 
@@ -132,16 +132,16 @@
 
 ### S2.1 estimateFundCostV2 對拍 Move（INV-4）
 
-- **`test_estimateFundCostV2_matches_move`** — Vitest 對拍 5 組 `(perResponse, max, totalSuiInvested, fee_config)` 與 Move 端計算，期望 `(sui_to_invest, gross_sssr, effective_fee_bps)` 三欄全相等。
-- **`test_estimateFundCostV2_handles_zero_offset`** — given 發起者 sSSR = 0，輸出 `offset_in = 0`、`minted = gross_sssr`。
-- **`test_estimateFundCostV2_handles_overfund_offset`** — given 發起者 sSSR > 需求，輸出 `sui_to_invest = 0`、`minted = 0`、`offset_in = net_target / (1 - fee_rate)`。
+- **`test_estimateFundCostV2_matches_move`** — Vitest 對拍 5 組 `(perResponse, max, totalSuiInvested, fee_config)` 與 Move 端計算，期望 `(sui_to_invest, gross_ssr, effective_fee_bps)` 三欄全相等。
+- **`test_estimateFundCostV2_handles_zero_offset`** — given 發起者 SSR = 0，輸出 `offset_in = 0`、`minted = gross_ssr`。
+- **`test_estimateFundCostV2_handles_overfund_offset`** — given 發起者 SSR > 需求，輸出 `sui_to_invest = 0`、`minted = 0`、`offset_in = net_target / (1 - fee_rate)`。
 
 ### S2.2 七步驟 PTB 前端整合 + 預覽合併步驟
 
-- **`test_create_page_shows_cost_breakdown_realtime`** — 改 perResponse / max → breakdown（sSSR / SUI / fee）即時更新（debounce ≤ 200ms）。
+- **`test_create_page_shows_cost_breakdown_realtime`** — 改 perResponse / max → breakdown（SSR / SUI / fee）即時更新（debounce ≤ 200ms）。
 - **`test_create_page_preview_plus_fund_combined_step`** — 「預覽問卷 + 注資」是單一 step（單一按鈕，無中間 wizard 頁）。
 - **`test_create_page_breakdown_matches_move_after_submit`** — submit 前 UI 顯示的數值 == 實際打到鏈上的 PTB 參數（對拍 spy）。
-- **`test_fund_page_renders_three_sections`** — `FundPage` 顯示「既有 sSSR 折抵 / AMM 注資 / 費率分拆」三段。
+- **`test_fund_page_renders_three_sections`** — `FundPage` 顯示「既有 SSR 折抵 / AMM 注資 / 費率分拆」三段。
 
 ### S2.3 答案只記錄結果不記錄題目
 
@@ -154,12 +154,12 @@
 
 ## S3：UI Bug 修復
 
-### S3.1 sSSR 計算畸零數修復（Frontend）
+### S3.1 SSR 計算畸零數修復（Frontend）
 
 > Fixture 抓自 commit `23a68b5` 之後實際出現過的畸零回報。
 
-- **`test_format_sssr_no_floating_artifact`** — given 已知會畸零的 5 組 base units（例：`1000000001`、`999999999`、`123456789012` 等）→ when `formatSssr(x)`，then 顯示字串符合 fixture 期望（無 `0.99999...`、無尾巴零過長）。
-- **`test_format_sssr_rounding_consistent_with_move`** — Vitest 對拍 Move 端的 `display_sssr` helper。
+- **`test_format_ssr_no_floating_artifact`** — given 已知會畸零的 5 組 base units（例：`1000000001`、`999999999`、`123456789012` 等）→ when `formatSsr(x)`，then 顯示字串符合 fixture 期望（無 `0.99999...`、無尾巴零過長）。
+- **`test_format_ssr_rounding_consistent_with_move`** — Vitest 對拍 Move 端的 `display_ssr` helper。
 
 ### S3.2 Markdown 渲染成問卷預覽（Frontend）
 

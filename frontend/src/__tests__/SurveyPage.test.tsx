@@ -54,6 +54,13 @@ title: "測試問卷"
 perResponse: 1
 maxResponses: 100
 deadline: "2099-12-31T23:59:59Z"
+minTier: 0
+draftStamp: "2026-05-22T08:00:00.000Z"
+---
+
+問卷說明文字
+
+\`\`\`yaml
 questions:
   - id: q1
     type: SINGLE_CHOICE
@@ -67,9 +74,7 @@ questions:
     type: SHORT_ANSWER
     prompt: "其他意見"
     required: false
----
-
-問卷說明文字
+\`\`\`
 `
 
 // ── 輔助函式 ────────────────────────────────────────────────────────────────

@@ -26,7 +26,7 @@ const ABORT_MAP: Record<string, Record<number, string>> = {
   },
   amm_pool: {
     1: 'SUI 注資金額為 0',
-    2: 'AMM 鑄出的 sSSR 不足以滿足注資需求',
+    2: 'AMM 鑄出的 SSR 不足以滿足注資需求',
   },
   survey_pass: {
     0: '該身分（Email）已被其他錢包綁定。如果您需要更換錢包，請先使用原錢包進行「銷毀憑證（Delete Pass）」，或更換其他信箱進行驗證。',
@@ -63,7 +63,7 @@ export function translateMoveAbort(error: string | null | undefined): string | n
     if (fnMatch) {
       const fnName = fnMatch[1]
       if (fnName === 'register' || fnName === 'archive' || fnName === 'new_question') moduleName = 'survey_registry'
-      else if (fnName === 'create' || fnName === 'create_empty' || fnName === 'claim' || fnName === 'close' || fnName === 'merge_balances' || fnName === 'deposit_existing_sssr' || fnName === 'split_fee_to_treasury') moduleName = 'survey_vault'
+      else if (fnName === 'create' || fnName === 'create_empty' || fnName === 'claim' || fnName === 'close' || fnName === 'merge_balances' || fnName === 'deposit_existing_ssr' || fnName === 'split_fee_to_treasury') moduleName = 'survey_vault'
       else if (fnName === 'invest_and_mint' || fnName === 'redeem') moduleName = 'amm_pool'
       else if (fnName === 'mint_pass' || fnName === 'update_pass_credential' || fnName === 'delete_pass') moduleName = 'survey_pass'
     }

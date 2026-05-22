@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import CreatePage from '../pages/CreatePage'
+import { parseFullSurveyMarkdown } from '../lib/frontmatter'
 
 const mockNavigate = vi.fn()
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -27,21 +28,19 @@ vi.mock('@mysten/dapp-kit', () => ({
                   fields: {
                     total_fee_bps: '2000',
                     discount_bps: '5000',
-                  }
-                }
-              }
-            }
-          }
-        }
+                  },
+                },
+              },
+            },
+          },
+        },
       }
     }
     if (queryName === 'getCoins') {
       return {
         data: {
-          data: [
-            { coinObjectId: '0xcoin1', balance: '5000000000' } // 5 sSSR
-          ]
-        }
+          data: [{ coinObjectId: '0xcoin1', balance: '5000000000' }], // 5 SSR
+        },
       }
     }
     return { data: null }
@@ -57,17 +56,7 @@ function renderCreatePage() {
   )
 }
 
-const VALID_FRONTMATTER = `---
-title: "Sui Overflow 滿意度調查"
-perResponse: 7
-maxResponses: 42
-deadline: "2099-01-01T00:00:00Z"
----
-
-問卷正文…
-`
-
-describe('CreatePage — T4.2 /create 建立問卷頁', () => {
+describe('CreatePage — Builder UI', () => {
   beforeEach(() => {
     window.localStorage.clear()
   })
@@ -76,91 +65,92 @@ describe('CreatePage — T4.2 /create 建立問卷頁', () => {
     vi.clearAllMocks()
   })
 
-  it('test_parse_frontmatter — 預覽區顯示解析後的獎勵設定', () => {
+  it('預設帶出空白範本：標題、每份獎勵、名額、身分門檻欄位存在', () => {
     renderCreatePage()
-
-    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
-    fireEvent.change(editor, { target: { value: VALID_FRONTMATTER } })
-
-    const summary = screen.getByLabelText('獎勵設定預覽')
-
-    expect(within(summary).getByText(/perResponse/i)).toBeInTheDocument()
-    expect(within(summary).getByText(/\b7\b/)).toBeInTheDocument()
-
-    expect(within(summary).getByText(/maxResponses/i)).toBeInTheDocument()
-    expect(within(summary).getByText(/\b42\b/)).toBeInTheDocument()
-
-    expect(within(summary).getByText(/deadline/i)).toBeInTheDocument()
-    expect(within(summary).getByText(/2099/)).toBeInTheDocument()
+    expect(screen.getByLabelText('問卷標題')).toBeInTheDocument()
+    expect(screen.getByLabelText('perResponse')).toBeInTheDocument()
+    expect(screen.getByLabelText('maxResponses')).toBeInTheDocument()
+    expect(screen.getByLabelText('deadline')).toBeInTheDocument()
+    expect(screen.getByLabelText('minTier')).toBeInTheDocument()
+    expect(screen.getByLabelText('description')).toBeInTheDocument()
   })
 
-  it('test_invalid_yaml_shows_error — 缺欄位 / 格式錯誤顯示錯誤訊息', async () => {
+  it('新增題目按鈕會多一張題目卡片', () => {
     renderCreatePage()
+    const before = screen.getAllByText(/^#\d+/).length
+    fireEvent.click(screen.getByRole('button', { name: /\+ 新增題目/ }))
+    const after = screen.getAllByText(/^#\d+/).length
+    expect(after).toBe(before + 1)
+  })
 
-    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
+  it('Markdown 預覽即時反映 description（frontmatter 被 renderMarkdown 隱藏）', () => {
+    renderCreatePage()
+    fireEvent.change(screen.getByLabelText('description'), { target: { value: '這是新的說明' } })
+    const preview = screen.getByLabelText('markdown 預覽')
+    expect(preview.textContent).toContain('這是新的說明')
+  })
 
-    // 空內容：按送出顯示錯誤
-    fireEvent.change(editor, { target: { value: '   ' } })
+  it('身分門檻 select 反映當前值', () => {
+    renderCreatePage()
+    const select = screen.getByLabelText('minTier') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: '2' } })
+    expect(select.value).toBe('2')
+  })
+
+  it('提交空標題顯示錯誤、不導航', () => {
+    renderCreatePage()
+    fireEvent.change(screen.getByLabelText('問卷標題'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: /下一步：前往注資/ }))
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
-    expect(mockNavigate).not.toHaveBeenCalled()
-
-    // frontmatter 缺欄位
-    fireEvent.change(editor, { target: { value: '---\ntitle: only-title\n---\n' } })
-    fireEvent.click(screen.getByRole('button', { name: /下一步：前往注資/ }))
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
-    expect(mockNavigate).not.toHaveBeenCalled()
-
-    // 沒有 frontmatter 區塊
-    fireEvent.change(editor, { target: { value: '純文字沒有 frontmatter' } })
-    fireEvent.click(screen.getByRole('button', { name: /下一步：前往注資/ }))
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(/標題/)
     expect(mockNavigate).not.toHaveBeenCalled()
   })
 
-  it('test_submit_persists_draft_and_navigates_to_fund_with_draft_id — 有效 frontmatter 時寫 localStorage 並跳 /fund/:draftId', () => {
+  it('提交有效表單：寫入 localStorage 並導航到 /fund/:draftId，內容為新三段式 markdown', () => {
     renderCreatePage()
-
-    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
-    fireEvent.change(editor, { target: { value: VALID_FRONTMATTER } })
+    fireEvent.change(screen.getByLabelText('問卷標題'), { target: { value: '我的問卷' } })
+    fireEvent.change(screen.getByLabelText('perResponse'), { target: { value: '7' } })
+    fireEvent.change(screen.getByLabelText('maxResponses'), { target: { value: '42' } })
+    fireEvent.change(screen.getByLabelText('minTier'), { target: { value: '1' } })
 
     fireEvent.click(screen.getByRole('button', { name: /下一步：前往注資/ }))
 
     expect(mockNavigate).toHaveBeenCalledTimes(1)
-    const [navTarget] = mockNavigate.mock.calls[0]
-    expect(typeof navTarget).toBe('string')
+    const navTarget = mockNavigate.mock.calls[0][0] as string
     expect(navTarget).toMatch(/^\/fund\/[^/]+$/)
 
-    const draftId = (navTarget as string).split('/').pop()!
+    const draftId = navTarget.split('/').pop()!
     const stored = window.localStorage.getItem(`surveysui:draft:${draftId}`)
     expect(stored).not.toBeNull()
     const parsed = JSON.parse(stored!)
-    expect(parsed.contentMd).toBe(VALID_FRONTMATTER)
+    expect(typeof parsed.contentMd).toBe('string')
+
+    const survey = parseFullSurveyMarkdown(parsed.contentMd)
+    expect(survey.ok).toBe(true)
+    if (survey.ok) {
+      expect(survey.data.title).toBe('我的問卷')
+      expect(survey.data.perResponse).toBe(7)
+      expect(survey.data.maxResponses).toBe(42)
+      expect(survey.data.minTier).toBe(1)
+    }
   })
 
-  it('test_create_page_shows_cost_breakdown_realtime — 即時顯示估計費用', async () => {
+  it('費用預估區即時顯示', async () => {
     renderCreatePage()
-
-    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
-    fireEvent.change(editor, { target: { value: VALID_FRONTMATTER } })
-
-    await waitFor(() => {
-      expect(screen.getByText(/既有 sSSR 折抵/i)).toBeInTheDocument()
-      expect(screen.getByText(/需新鑄 sSSR \(AMM\)/i)).toBeInTheDocument()
-      expect(screen.getByText(/平台手續費 \(fee\)/i)).toBeInTheDocument()
-      expect(screen.getByText(/預估 SUI 消耗/i)).toBeInTheDocument()
-    }, { timeout: 1000 })
+    await waitFor(
+      () => {
+        expect(screen.getByText(/既有 SSR 折抵/i)).toBeInTheDocument()
+        expect(screen.getByText(/需新鑄 SSR \(AMM\)/i)).toBeInTheDocument()
+        expect(screen.getByText(/平台手續費 \(fee\)/i)).toBeInTheDocument()
+        expect(screen.getByText(/預估 SUI 消耗/i)).toBeInTheDocument()
+      },
+      { timeout: 1000 },
+    )
   })
 
-  it('test_create_page_preview_plus_fund_combined_step — 整合步驟', async () => {
+  it('工具列存在三個按鈕：下載草稿、上傳、下載範本', () => {
     renderCreatePage()
-
-    const editor = screen.getByLabelText('問卷內容（Markdown with frontmatter）')
-    fireEvent.change(editor, { target: { value: VALID_FRONTMATTER } })
-
-    const nextBtn = screen.getByRole('button', { name: /下一步：前往注資/ })
-    fireEvent.click(nextBtn)
-
-    expect(mockNavigate).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /下載草稿/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /上傳/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /下載空白範本/ })).toBeInTheDocument()
   })
 })

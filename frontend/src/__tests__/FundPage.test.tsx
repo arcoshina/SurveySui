@@ -55,8 +55,8 @@ import {
 
 const PACKAGE_ID = '0x' + '11'.repeat(32)
 const POOL_ID = '0x' + '22'.repeat(32)
-const SSR_TREASURY_ID = '0x' + '33'.repeat(32)
-const SSSR_TREASURY_ID = '0x' + '44'.repeat(32)
+const SR_TREASURY_ID = '0x' + '33'.repeat(32)
+const SSR_TREASURY_ID = '0x' + '44'.repeat(32)
 const REGISTRY_ID = '0x' + '55'.repeat(32)
 const ADMIN_TREASURY = '0x' + '66'.repeat(32)
 const VAULT_ID = '0x' + 'aa'.repeat(32)
@@ -77,9 +77,20 @@ title: "測試問卷"
 perResponse: 2
 maxResponses: 5
 deadline: "2099-01-01T00:00:00Z"
+minTier: 0
+draftStamp: "2026-05-22T08:00:00.000Z"
 ---
 
-問卷說明...`
+問卷說明...
+
+\`\`\`yaml
+questions:
+  - id: "q1"
+    type: SHORT_ANSWER
+    prompt: "問題?"
+    required: false
+\`\`\`
+`
 }
 
 function renderFundPage(draftId: string) {
@@ -101,8 +112,8 @@ describe('ptb lib — T4.3', () => {
       const tx = buildCreateSurveyPtb({
         packageId: PACKAGE_ID,
         poolId: POOL_ID,
+        srTreasuryId: SR_TREASURY_ID,
         ssrTreasuryId: SSR_TREASURY_ID,
-        sssrTreasuryId: SSSR_TREASURY_ID,
         registryId: REGISTRY_ID,
         adminTreasury: ADMIN_TREASURY,
         perResponse: 2n,
@@ -114,7 +125,7 @@ describe('ptb lib — T4.3', () => {
         schemaHash: new Uint8Array(32),
         questions: [],
         offsetIn: 0n,
-        creatorSssrCoins: [],
+        creatorSsrCoins: [],
       })
 
       const data = tx.getData()
@@ -123,7 +134,7 @@ describe('ptb lib — T4.3', () => {
       const targets = moveCalls.map((c) => c.MoveCall?.function)
       expect(targets).toContain('invest_and_mint')
       expect(targets).toContain('create_empty')
-      expect(targets).toContain('deposit_existing_sssr')
+      expect(targets).toContain('deposit_existing_ssr')
       expect(targets).toContain('merge_balances')
       expect(targets).toContain('split_fee_to_treasury')
       expect(targets).toContain('register')
@@ -133,8 +144,8 @@ describe('ptb lib — T4.3', () => {
       const tx = buildCreateSurveyPtb({
         packageId: PACKAGE_ID,
         poolId: POOL_ID,
+        srTreasuryId: SR_TREASURY_ID,
         ssrTreasuryId: SSR_TREASURY_ID,
-        sssrTreasuryId: SSSR_TREASURY_ID,
         registryId: REGISTRY_ID,
         adminTreasury: ADMIN_TREASURY,
         perResponse: 2n,
@@ -146,7 +157,7 @@ describe('ptb lib — T4.3', () => {
         schemaHash: new Uint8Array(32),
         questions: [],
         offsetIn: 0n,
-        creatorSssrCoins: [],
+        creatorSsrCoins: [],
       })
 
       const data = tx.getData()
@@ -208,25 +219,25 @@ describe('ptb lib — T4.3', () => {
   })
 
   describe('estimateFundCost', () => {
-    it('bonding curve 初始狀態（total_invested = 0）：1 SUI → 1000 sSSR', () => {
-      // perResponse=2, max=5 → 需 vault 內持有 10 sSSR（base units 含 9 decimals）
-      // 因 vault 抽 0.3% 費用，須先 mint 約 10 / 0.997 = 10.0301 sSSR
-      // total_invested=0 時 1 SUI = 1000 sSSR，故 SUI ≈ 0.01003 SUI
+    it('bonding curve 初始狀態（total_invested = 0）：1 SUI → 1000 SSR', () => {
+      // perResponse=2, max=5 → 需 vault 內持有 10 SSR（base units 含 9 decimals）
+      // 因 vault 抽 0.3% 費用，須先 mint 約 10 / 0.997 = 10.0301 SSR
+      // total_invested=0 時 1 SUI = 1000 SSR，故 SUI ≈ 0.01003 SUI
       const result = estimateFundCost({
         perResponse: 2n,
         maxResponses: 5,
         totalSuiInvested: 0n,
       })
-      // 1 sSSR = 1e9 base units；10 sSSR = 1e10
-      // grossSssr = ceil(1e10 * 10000 / 9970) = ceil(10_030_090_270.81...) = 10_030_090_271
-      expect(result.grossSssrBase).toBe(10_030_090_271n)
-      expect(result.vaultFeeBase).toBe(30_090_270n) // 0.3% of grossSssr
-      // 初始狀態 SUI = ceil(grossSssr / 1000) MIST
+      // 1 SSR = 1e9 base units；10 SSR = 1e10
+      // grossSsr = ceil(1e10 * 10000 / 9970) = ceil(10_030_090_270.81...) = 10_030_090_271
+      expect(result.grossSsrBase).toBe(10_030_090_271n)
+      expect(result.vaultFeeBase).toBe(30_090_270n) // 0.3% of grossSsr
+      // 初始狀態 SUI = ceil(grossSsr / 1000) MIST
       // 10_030_090_271 / 1000 = 10_030_090.271 → ceil = 10_030_091 MIST ≈ 0.01003 SUI
       expect(result.suiToInvest).toBe(10_030_091n)
     })
 
-    it('total_invested 增加後，相同 sSSR 需要更多 SUI', () => {
+    it('total_invested 增加後，相同 SSR 需要更多 SUI', () => {
       const r1 = estimateFundCost({
         perResponse: 1n,
         maxResponses: 1,
@@ -302,7 +313,7 @@ describe('FundPage — T4.3 注資頁', () => {
         return {
           data: {
             data: [
-              { coinObjectId: '0xcoin1', balance: '10000000000' } // 10 sSSR
+              { coinObjectId: '0xcoin1', balance: '10000000000' } // 10 SSR
             ]
           }
         } as any
@@ -439,7 +450,7 @@ describe('FundPage — T4.3 注資頁', () => {
 
     renderFundPage('draft-ok')
 
-    expect(screen.getByText(/既有 sSSR 折抵/i)).toBeInTheDocument()
+    expect(screen.getByText(/既有 SSR 折抵/i)).toBeInTheDocument()
     expect(screen.getByText(/AMM 注資/i)).toBeInTheDocument()
     expect(screen.getByText(/費率分拆/i)).toBeInTheDocument()
   })
@@ -478,7 +489,7 @@ describe('FundPage — T4.3 注資頁', () => {
       expect(args).toHaveProperty('schemaHash')
       expect(args).toHaveProperty('questions')
       expect(args).toHaveProperty('offsetIn')
-      expect(args).toHaveProperty('creatorSssrCoins')
+      expect(args).toHaveProperty('creatorSsrCoins')
     })
   })
 
@@ -570,11 +581,11 @@ describe('FundPage — T4.3 注資頁', () => {
 
     // Wait for cost estimation to populate in UI
     await waitFor(() => {
-      expect(screen.getByText(/抵扣數額: 10.0000 sSSR/i)).toBeInTheDocument()
+      expect(screen.getByText(/抵扣數額: 10.0000 SSR/i)).toBeInTheDocument()
     })
 
-    expect(screen.getByText(/新購數額: 1.1111 sSSR/i)).toBeInTheDocument()
-    expect(screen.getByText(/分拆手續費 \(fee\): 1.1111 sSSR/i)).toBeInTheDocument()
+    expect(screen.getByText(/新購數額: 1.1111 SSR/i)).toBeInTheDocument()
+    expect(screen.getByText(/分拆手續費 \(fee\): 1.1111 SSR/i)).toBeInTheDocument()
     expect(screen.getByText(/0.0011 SUI/i)).toBeInTheDocument()
 
     // Step 1: setup key, then step 2: fund

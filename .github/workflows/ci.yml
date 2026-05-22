@@ -129,8 +129,8 @@ jobs:
       SUI_RPC_URL: https://fullnode.devnet.sui.io:443
       SUI_PACKAGE_ID: ${{ secrets.SUI_PACKAGE_ID }}
       AMM_POOL_ID: ${{ secrets.AMM_POOL_ID }}
+      SR_TREASURY_ID: ${{ secrets.SR_TREASURY_ID }}
       SSR_TREASURY_ID: ${{ secrets.SSR_TREASURY_ID }}
-      SSSR_TREASURY_ID: ${{ secrets.SSSR_TREASURY_ID }}
       SURVEY_REGISTRY_ID: ${{ secrets.SURVEY_REGISTRY_ID }}
       PASS_REGISTRY_ID: ${{ secrets.PASS_REGISTRY_ID }}
       SUI_ADMIN_PRIVATE_KEY: ${{ secrets.SUI_ADMIN_PRIVATE_KEY }}

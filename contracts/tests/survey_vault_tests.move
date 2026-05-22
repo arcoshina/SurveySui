@@ -4,7 +4,7 @@ module surveysui::survey_vault_tests;
 use sui::clock;
 use sui::coin::{Self, Coin};
 use sui::test_scenario as ts;
-use surveysui::stacked_survey_reward::{Self, SssrTreasury, STACKED_SURVEY_REWARD};
+use surveysui::stacked_survey_reward::{Self, SsrTreasury, STACKED_SURVEY_REWARD};
 use surveysui::survey_pass::{Self, NullifierRegistry, IssuerConfig, SurveyPass};
 use surveysui::survey_vault::{Self, SurveyVault};
 
@@ -47,7 +47,7 @@ fun setup(): ts::Scenario {
     };
     sc.next_tx(ADMIN);
     {
-        let mut treasury = ts::take_shared<SssrTreasury>(&sc);
+        let mut treasury = ts::take_shared<SsrTreasury>(&sc);
         let coin = stacked_survey_reward::mint(&mut treasury, VAULT_FUND, sc.ctx());
         transfer::public_transfer(coin, CREATOR);
         ts::return_shared(treasury);
@@ -353,7 +353,8 @@ fun test_claim_quota_exceeded_fails() {
 #[test]
 fun test_close_refunds_remaining_to_creator() {
     let mut sc = setup();
-    let clk = clock::create_for_testing(sc.ctx());
+    let mut clk = clock::create_for_testing(sc.ctx());
+    clock::set_for_testing(&mut clk, T0);
 
     sc.next_tx(CREATOR);
     {
@@ -367,9 +368,10 @@ fun test_close_refunds_remaining_to_creator() {
     sc.next_tx(CREATOR);
     {
         let mut vault = ts::take_shared<SurveyVault>(&sc);
-        survey_vault::close(&mut vault, sc.ctx());
+        survey_vault::close(&mut vault, &clk, sc.ctx());
         assert!(survey_vault::status(&vault)        == 1);
         assert!(survey_vault::balance_value(&vault) == 0);
+        assert!(survey_vault::closed_at_ms(&vault)  == T0);
         ts::return_shared(vault);
     };
 
@@ -387,7 +389,8 @@ fun test_close_refunds_remaining_to_creator() {
 #[test, expected_failure(abort_code = surveysui::survey_vault::ENotCreator)]
 fun test_close_aborts_when_caller_not_creator() {
     let mut sc = setup();
-    let clk = clock::create_for_testing(sc.ctx());
+    let mut clk = clock::create_for_testing(sc.ctx());
+    clock::set_for_testing(&mut clk, T0);
 
     sc.next_tx(CREATOR);
     {
@@ -401,7 +404,40 @@ fun test_close_aborts_when_caller_not_creator() {
     sc.next_tx(BOB);
     {
         let mut vault = ts::take_shared<SurveyVault>(&sc);
-        survey_vault::close(&mut vault, sc.ctx());
+        survey_vault::close(&mut vault, &clk, sc.ctx());
+        ts::return_shared(vault);
+    };
+
+    clock::destroy_for_testing(clk);
+    sc.end();
+}
+
+#[test, expected_failure(abort_code = surveysui::survey_vault::EVaultClosed)]
+fun test_close_aborts_when_already_closed() {
+    let mut sc = setup();
+    let mut clk = clock::create_for_testing(sc.ctx());
+    clock::set_for_testing(&mut clk, T0);
+
+    sc.next_tx(CREATOR);
+    {
+        let coin = ts::take_from_sender<Coin<STACKED_SURVEY_REWARD>>(&sc);
+        let vault = survey_vault::create(
+            coin, PER_RESPONSE, MAX_RESPONSES, T0 + TTL_180D, ADMIN, sc.ctx(),
+        );
+        survey_vault::share_vault(vault);
+    };
+
+    sc.next_tx(CREATOR);
+    {
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        survey_vault::close(&mut vault, &clk, sc.ctx());
+        ts::return_shared(vault);
+    };
+
+    sc.next_tx(CREATOR);
+    {
+        let mut vault = ts::take_shared<SurveyVault>(&sc);
+        survey_vault::close(&mut vault, &clk, sc.ctx());
         ts::return_shared(vault);
     };
 

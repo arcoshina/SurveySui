@@ -9,11 +9,11 @@ describe('estimateFundCostV2 — S2.1 對拍 Move', () => {
       maxResponses: 1,
       totalSuiInvested: 0n,
       feeConfig: { totalFeeBps: 2000n, discountBps: 5000n },
-      creatorSssrBalance: 0n,
+      creatorSsrBalance: 0n,
     })
-    expect(res1.netSssrBase).toBe(90_000_000_000n)
+    expect(res1.netSsrBase).toBe(90_000_000_000n)
     expect(res1.effectiveFeeBps).toBe(1000n)
-    expect(res1.grossSssrBase).toBe(100_000_000_000n)
+    expect(res1.grossSsrBase).toBe(100_000_000_000n)
     expect(res1.offsetIn).toBe(0n)
     expect(res1.minted).toBe(100_000_000_000n)
     expect(res1.suiToInvest).toBe(100_000_000n)
@@ -24,11 +24,11 @@ describe('estimateFundCostV2 — S2.1 對拍 Move', () => {
       maxResponses: 1,
       totalSuiInvested: 0n,
       feeConfig: { totalFeeBps: 2000n, discountBps: 5000n },
-      creatorSssrBalance: 50_000_000_000n,
+      creatorSsrBalance: 50_000_000_000n,
     })
-    expect(res2.netSssrBase).toBe(90_000_000_000n)
+    expect(res2.netSsrBase).toBe(90_000_000_000n)
     expect(res2.effectiveFeeBps).toBe(1000n)
-    expect(res2.grossSssrBase).toBe(100_000_000_000n)
+    expect(res2.grossSsrBase).toBe(100_000_000_000n)
     expect(res2.offsetIn).toBe(50_000_000_000n)
     expect(res2.minted).toBe(50_000_000_000n)
     expect(res2.suiToInvest).toBe(50_000_000n)
@@ -39,11 +39,11 @@ describe('estimateFundCostV2 — S2.1 對拍 Move', () => {
       maxResponses: 4,
       totalSuiInvested: 500_000_000_000n,
       feeConfig: { totalFeeBps: 2000n, discountBps: 5000n },
-      creatorSssrBalance: 0n,
+      creatorSsrBalance: 0n,
     })
-    expect(res3.netSssrBase).toBe(100_000_000_000n)
+    expect(res3.netSsrBase).toBe(100_000_000_000n)
     expect(res3.effectiveFeeBps).toBe(1000n)
-    expect(res3.grossSssrBase).toBe(111_111_111_111n)
+    expect(res3.grossSsrBase).toBe(111_111_111_111n)
     expect(res3.offsetIn).toBe(0n)
     expect(res3.minted).toBe(111_111_111_111n)
     expect(res3.suiToInvest).toBe(166_666_667n)
@@ -54,11 +54,11 @@ describe('estimateFundCostV2 — S2.1 對拍 Move', () => {
       maxResponses: 10,
       totalSuiInvested: 100_000_000_000n,
       feeConfig: { totalFeeBps: 1500n, discountBps: 3000n },
-      creatorSssrBalance: 500_000_000_000n,
+      creatorSsrBalance: 500_000_000_000n,
     })
-    expect(res4.netSssrBase).toBe(1_000_000_000_000n)
+    expect(res4.netSsrBase).toBe(1_000_000_000_000n)
     expect(res4.effectiveFeeBps).toBe(450n)
-    expect(res4.grossSssrBase).toBe(1_047_120_418_848n)
+    expect(res4.grossSsrBase).toBe(1_047_120_418_848n)
     expect(res4.offsetIn).toBe(500_000_000_000n)
     expect(res4.minted).toBe(547_120_418_848n)
     expect(res4.suiToInvest).toBe(601_832_461n)
@@ -69,37 +69,37 @@ describe('estimateFundCostV2 — S2.1 對拍 Move', () => {
       maxResponses: 2,
       totalSuiInvested: 2_000_000_000_000n,
       feeConfig: { totalFeeBps: 2000n, discountBps: 0n },
-      creatorSssrBalance: 0n,
+      creatorSsrBalance: 0n,
     })
-    expect(res5.netSssrBase).toBe(20_000_000_000n)
+    expect(res5.netSsrBase).toBe(20_000_000_000n)
     expect(res5.effectiveFeeBps).toBe(0n)
-    expect(res5.grossSssrBase).toBe(20_000_000_000n)
+    expect(res5.grossSsrBase).toBe(20_000_000_000n)
     expect(res5.offsetIn).toBe(0n)
     expect(res5.minted).toBe(20_000_000_000n)
     expect(res5.suiToInvest).toBe(60_000_000n)
   })
 
-  it('test_estimateFundCostV2_handles_zero_offset — 當 sSSR = 0 時，offset_in 為 0 且 minted 為 gross_sssr', () => {
+  it('test_estimateFundCostV2_handles_zero_offset — 當 SSR = 0 時，offset_in 為 0 且 minted 為 gross_ssr', () => {
     const res = estimateFundCostV2({
       perResponse: 90n,
       maxResponses: 1,
       totalSuiInvested: 0n,
       feeConfig: { totalFeeBps: 2000n, discountBps: 5000n },
-      creatorSssrBalance: 0n,
+      creatorSsrBalance: 0n,
     })
     expect(res.offsetIn).toBe(0n)
-    expect(res.minted).toBe(res.grossSssrBase)
+    expect(res.minted).toBe(res.grossSsrBase)
   })
 
-  it('test_estimateFundCostV2_handles_overfund_offset — 當 sSSR 足夠時，sui_to_invest = 0, minted = 0, offset_in = gross_sssr', () => {
+  it('test_estimateFundCostV2_handles_overfund_offset — 當 SSR 足夠時，sui_to_invest = 0, minted = 0, offset_in = gross_ssr', () => {
     const res = estimateFundCostV2({
       perResponse: 90n,
       maxResponses: 1,
       totalSuiInvested: 0n,
       feeConfig: { totalFeeBps: 2000n, discountBps: 5000n },
-      creatorSssrBalance: 150_000_000_000n,
+      creatorSsrBalance: 150_000_000_000n,
     })
-    expect(res.grossSssrBase).toBe(100_000_000_000n)
+    expect(res.grossSsrBase).toBe(100_000_000_000n)
     expect(res.offsetIn).toBe(100_000_000_000n)
     expect(res.minted).toBe(0n)
     expect(res.suiToInvest).toBe(0n)
