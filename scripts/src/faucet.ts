@@ -11,7 +11,10 @@ export async function requestFaucet(address: string, network: Network = 'testnet
   }
 }
 
-export async function getSuiBalance(address: string, network: Network = 'testnet'): Promise<bigint> {
+export async function getSuiBalance(
+  address: string,
+  network: Network = 'testnet'
+): Promise<bigint> {
   const client = new SuiClient({ url: getFullnodeUrl(network) })
   const balance = await client.getBalance({ owner: address })
   return BigInt(balance.totalBalance)

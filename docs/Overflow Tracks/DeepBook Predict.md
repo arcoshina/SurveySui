@@ -3,7 +3,7 @@
 <aside>
 💡
 
-Join our Telegram group!  https://t.me/+bZTS2KvwIBQyOGZl
+Join our Telegram group! https://t.me/+bZTS2KvwIBQyOGZl
 
 </aside>
 
@@ -11,7 +11,7 @@ Prediction markets today are powerful, but still fundamentally fragmented and sh
 
 As prediction markets evolve from "will X happen" novelty bets into a real piece of crypto market structure, they need a more durable foundation
 
-- the ability to price *every* strike and expiry against a live volatility surface, not just hand-listed events
+- the ability to price _every_ strike and expiry against a live volatility surface, not just hand-listed events
 - short, rolling expiries that work like a real options market — sub-hour cycles, not weekly
 - a vault that takes the other side of every trade so liquidity is always present, with on-chain LP economics anyone can audit and compose against
 - and primitives that are portable across the wider Sui DeFi ecosystem — composable with margin, lending, structured vaults, and bots — not locked inside a single app
@@ -28,7 +28,7 @@ Where Predict is today
 
 You need DUSDC for deepbook predict, this is not the official USDC on testnet.
 
-You can request DUSDC by submitting this form  https://tally.so/r/Xx102L
+You can request DUSDC by submitting this form https://tally.so/r/Xx102L
 
 </aside>
 
@@ -100,7 +100,7 @@ Pick one, twist it, or ignore it entirely — these are starting points, not a c
 ## References to use:
 
 - [DeepBook Predict codebase (protocol, current testnet deployment, integration model)](https://github.com/MystenLabs/deepbookv3/tree/predict-testnet-4-16/packages/predict)
-    - remember to use branch `predict-testnet-4-16` instead of `main` branch
+  - remember to use branch `predict-testnet-4-16` instead of `main` branch
 - [Deepbook sandbox (1 line deployment of entire deepbook stack on your local machine, predict support coming soon)](https://github.com/MystenLabs/deepbook-sandbox)
 - [Deepbook predict doc](https://docs.sui.io/onchain-finance/deepbook-predict/)
 - [Deepbook v3 doc](https://docs.sui.io/onchain-finance/deepbookv3/deepbook)

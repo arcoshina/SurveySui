@@ -4,7 +4,7 @@ on:
   push:
   pull_request:
   schedule:
-    - cron: '0 2 * * *'  # 每日 02:00 UTC 跑 nightly e2e（避開 Devnet 抖動影響 PR gate）
+    - cron: '0 2 * * *' # 每日 02:00 UTC 跑 nightly e2e（避開 Devnet 抖動影響 PR gate）
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

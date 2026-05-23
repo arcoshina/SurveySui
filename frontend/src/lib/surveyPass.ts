@@ -12,7 +12,7 @@ export interface SurveyPassData {
 
 /**
  * Fetches the active SurveyPass for a user by querying the NullifierRegistry passes table on-chain.
- * 
+ *
  * @param suiClient The SuiClient instance
  * @param userAddress The owner's wallet address
  * @param registryId The NullifierRegistry object ID
@@ -36,11 +36,7 @@ export async function fetchActivePass(
       },
     })
 
-    if (
-      !registryRes.data ||
-      !registryRes.data.content ||
-      !('fields' in registryRes.data.content)
-    ) {
+    if (!registryRes.data || !registryRes.data.content || !('fields' in registryRes.data.content)) {
       console.warn('NullifierRegistry content not found or invalid format.')
       return null
     }
@@ -80,11 +76,7 @@ export async function fetchActivePass(
           },
         })
 
-        if (
-          passRes.data &&
-          passRes.data.content &&
-          'fields' in passRes.data.content
-        ) {
+        if (passRes.data && passRes.data.content && 'fields' in passRes.data.content) {
           const fields = passRes.data.content.fields as any
           return {
             objectId: passId,

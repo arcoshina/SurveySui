@@ -48,7 +48,7 @@ export interface DeployResult {
 function buildPackage(): { modules: string[]; dependencies: string[] } {
   const stdout = execSync(
     `sui move build --dump-bytecode-as-base64 --path "${CONTRACTS_PATH}" --build-env testnet`,
-    { encoding: 'utf8' },
+    { encoding: 'utf8' }
   )
   const match = stdout.match(/\{[\s\S]*\}/)
   if (!match) throw new Error(`No JSON in build output:\n${stdout}`)
@@ -79,7 +79,7 @@ function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
     Object.entries(merged)
       .map(([k, v]) => `${k}=${v}`)
       .join('\n') + '\n',
-    'utf8',
+    'utf8'
   )
 }
 
@@ -93,7 +93,7 @@ function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
 export async function deployPackage(
   client: SuiClient,
   keypair: Ed25519Keypair,
-  adminAddress: string,
+  adminAddress: string
 ): Promise<DeployResult> {
   console.log('Building Move package…')
   const { modules, dependencies } = buildPackage()
@@ -122,8 +122,7 @@ export async function deployPackage(
       packageId = change.packageId
     }
     if (change.type === 'created') {
-      if (change.objectType.includes('::survey_reward::SrTreasury'))
-        srTreasuryId = change.objectId
+      if (change.objectType.includes('::survey_reward::SrTreasury')) srTreasuryId = change.objectId
       if (change.objectType.includes('::stacked_survey_reward::SsrTreasury'))
         ssrTreasuryId = change.objectId
       if (change.objectType.includes('::survey_registry::SurveyRegistry'))
@@ -135,11 +134,18 @@ export async function deployPackage(
     }
   }
 
-  if (!packageId || !srTreasuryId || !ssrTreasuryId || !surveyRegistryId || !nullifierRegistryId || !issuerConfigId) {
+  if (
+    !packageId ||
+    !srTreasuryId ||
+    !ssrTreasuryId ||
+    !surveyRegistryId ||
+    !nullifierRegistryId ||
+    !issuerConfigId
+  ) {
     throw new Error(
       `Deploy incomplete. packageId="${packageId}" srTreasuryId="${srTreasuryId}" ` +
         `ssrTreasuryId="${ssrTreasuryId}" surveyRegistryId="${surveyRegistryId}" ` +
-        `nullifierRegistryId="${nullifierRegistryId}" issuerConfigId="${issuerConfigId}"`,
+        `nullifierRegistryId="${nullifierRegistryId}" issuerConfigId="${issuerConfigId}"`
     )
   }
 
@@ -149,7 +155,14 @@ export async function deployPackage(
   console.log(`  surveyRegistryId:     ${surveyRegistryId}`)
   console.log(`  nullifierRegistryId:  ${nullifierRegistryId}`)
   console.log(`  issuerConfigId:       ${issuerConfigId}`)
-  return { packageId, srTreasuryId, ssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId }
+  return {
+    packageId,
+    srTreasuryId,
+    ssrTreasuryId,
+    surveyRegistryId,
+    nullifierRegistryId,
+    issuerConfigId,
+  }
 }
 
 /**
@@ -161,7 +174,7 @@ export async function initAmmPool(
   client: SuiClient,
   keypair: Ed25519Keypair,
   packageId: string,
-  adminAddress: string,
+  adminAddress: string
 ): Promise<string> {
   console.log('Initialising AMM bonding-curve pool…')
   const tx = new Transaction()
@@ -191,7 +204,7 @@ export async function initAmmPool(
  */
 export async function queryPoolState(
   client: SuiClient,
-  poolId: string,
+  poolId: string
 ): Promise<{ suiReserve: bigint; srReserve: bigint; totalSuiInvested: bigint }> {
   const obj = await client.getObject({ id: poolId, options: { showContent: true } })
   if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') {
@@ -231,8 +244,14 @@ async function main() {
   const client = new SuiClient({ url: getFullnodeUrl(network) })
 
   // 1. Deploy (creates SrTreasury, SsrTreasury, SurveyRegistry, NullifierRegistry, IssuerConfig)
-  const { packageId, srTreasuryId, ssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId } =
-    await deployPackage(client, keypair, adminAddress)
+  const {
+    packageId,
+    srTreasuryId,
+    ssrTreasuryId,
+    surveyRegistryId,
+    nullifierRegistryId,
+    issuerConfigId,
+  } = await deployPackage(client, keypair, adminAddress)
 
   // 2. Init AMM pool (empty bonding-curve pool; no initial liquidity required)
   const poolId = await initAmmPool(client, keypair, packageId, adminAddress)

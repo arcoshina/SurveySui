@@ -11,10 +11,7 @@ describe.skipIf(!isIntegration)(
       const poolId = process.env.AMM_POOL_ID
       if (!poolId) throw new Error('AMM_POOL_ID env var is not set')
 
-      const network = (process.env.SUI_NETWORK ?? 'testnet') as
-        | 'testnet'
-        | 'devnet'
-        | 'localnet'
+      const network = (process.env.SUI_NETWORK ?? 'testnet') as 'testnet' | 'devnet' | 'localnet'
       const client = new SuiClient({ url: getFullnodeUrl(network) })
 
       const { suiReserve, ssrReserve } = await queryPoolState(client, poolId)
@@ -22,5 +19,5 @@ describe.skipIf(!isIntegration)(
       expect(suiReserve).toBeGreaterThanOrEqual(0n)
       expect(ssrReserve).toBeGreaterThanOrEqual(0n)
     }, 30_000)
-  },
+  }
 )

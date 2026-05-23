@@ -50,15 +50,15 @@ The goal is to push toward a future where AI agents are not just reactive tools,
 ## References to use:
 
 - [Walrus docs](https://docs.wal.app/)
-    - [Getting started](https://docs.wal.app/docs/getting-started)
-    - [CLI](https://docs.wal.app/docs/walrus-client) / [HTTP API](https://docs.wal.app/docs/http-api/storing-blobs) / [Typescript SDK](https://sdk.mystenlabs.com/walrus)
-    - [Public aggregators and publishers](https://docs.wal.app/docs/system-overview/public-aggregators-and-publishers)
+  - [Getting started](https://docs.wal.app/docs/getting-started)
+  - [CLI](https://docs.wal.app/docs/walrus-client) / [HTTP API](https://docs.wal.app/docs/http-api/storing-blobs) / [Typescript SDK](https://sdk.mystenlabs.com/walrus)
+  - [Public aggregators and publishers](https://docs.wal.app/docs/system-overview/public-aggregators-and-publishers)
 - [Walrus Sites docs](https://docs.wal.app/docs/sites)
-    - [Install the site-builder CLI](https://docs.wal.app/docs/sites/getting-started/installing-the-site-builder)
-    - [Publish a site](https://docs.wal.app/docs/sites/getting-started/publishing-your-first-site)
+  - [Install the site-builder CLI](https://docs.wal.app/docs/sites/getting-started/installing-the-site-builder)
+  - [Publish a site](https://docs.wal.app/docs/sites/getting-started/publishing-your-first-site)
 - [MemWal (Walrus Memory) docs](https://docs.memwal.ai/)
-    - [MemWal (Walrus Memory) Playground](https://docs.memwal.ai/) - create an account and a delegate key for your agent
-    - [MemWal (Walrus Memory) Github Repo](https://github.com/MystenLabs/MemWal) - includes sample apps, skills etc.
+  - [MemWal (Walrus Memory) Playground](https://docs.memwal.ai/) - create an account and a delegate key for your agent
+  - [MemWal (Walrus Memory) Github Repo](https://github.com/MystenLabs/MemWal) - includes sample apps, skills etc.
 - [Seal docs](https://seal-docs.wal.app/) - privacy layer for Walrus and MemWal
 - [Sui Stack Messaging](https://github.com/MystenLabs/sui-stack-messaging) - messaging tooling that uses Walrus for storage & recovery and Seal for privacy
 

@@ -2,14 +2,24 @@ import type { FastifyInstance } from 'fastify'
 import { buildOgHtml } from './renderer.js'
 
 const CRAWLER_KEYWORDS = [
-  'bot', 'crawl', 'spider', 'slurp', 'facebookexternalhit',
-  'preview', 'embed', 'telegram', 'discord', 'slack', 'whatsapp',
-  'twitter', 'linkedin',
+  'bot',
+  'crawl',
+  'spider',
+  'slurp',
+  'facebookexternalhit',
+  'preview',
+  'embed',
+  'telegram',
+  'discord',
+  'slack',
+  'whatsapp',
+  'twitter',
+  'linkedin',
 ]
 
 function isCrawler(ua: string): boolean {
   const lower = ua.toLowerCase()
-  return CRAWLER_KEYWORDS.some(k => lower.includes(k))
+  return CRAWLER_KEYWORDS.some((k) => lower.includes(k))
 }
 
 export interface OgHandlerDeps {

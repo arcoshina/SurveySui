@@ -15,7 +15,7 @@ const networks = {
 }
 
 if (typeof window !== 'undefined') {
-  (window as any).suiSdkForTesting = { SuiClient, Transaction };
+  ;(window as any).suiSdkForTesting = { SuiClient, Transaction }
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -27,5 +27,5 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </WalletProvider>
       </SuiClientProvider>
     </QueryClientProvider>
-  </React.StrictMode>,
+  </React.StrictMode>
 )

@@ -28,10 +28,10 @@ curl http://localhost:3100/health
 
 ## 二、測試模式說明
 
-| 測試方式 | 適用情境 | 命令 |
-|---------|---------|------|
+| 測試方式                        | 適用情境                                | 命令                                                                |
+| ------------------------------- | --------------------------------------- | ------------------------------------------------------------------- |
 | **Playwright 有頭模式**（推薦） | 完整 Flow A→B→C 含鏈上 Gas Sponsored TX | `pnpm exec playwright test frontend/e2e/lifecycle.spec.ts --headed` |
-| **手動 UI 測試** | 發起者流程（建立 + 注資 + Dashboard） | 直接用瀏覽器 |
+| **手動 UI 測試**                | 發起者流程（建立 + 注資 + Dashboard）   | 直接用瀏覽器                                                        |
 
 > **注意**：受訪者的兩個步驟（SurveyPass 領取 `/api/pass/issue`、Sponsored TX `/api/gas/sponsor`）需要有 Admin 私鑰的後端服務。目前這兩個端點由 Playwright E2E 在測試執行時動態 mock，**不在 BFF 的功能範圍**（BFF 啟動時強制禁止帶 Admin 私鑰，見 T5.3）。手動測試若要走完整流程，請使用 Playwright 有頭模式。
 
@@ -49,6 +49,7 @@ pnpm exec playwright test e2e/sad-path.spec.ts --headed
 ```
 
 預期輸出：
+
 ```
 ✓  test_full_flow_a_to_c_real_chain      (~20–40 秒，含 Devnet indexer 延遲)
 ✓  test_duplicate_response_rejected_by_dry_run
@@ -92,6 +93,7 @@ questions:
 ```
 
 **驗收點**：
+
 - [x] 右側「獎勵設定預覽」立即更新：perResponse = 1、maxResponses = 5、deadline = 2027-06-30...、預估總獎勵 = 5 sSSR
 - [x] 「加密問卷題目（推薦，防範鏈上窺探並保護隱私）」checkbox 預設已勾
 - [x] 輸入無效 YAML 或留空 → 右側顯示紅字錯誤、不導頁
@@ -109,10 +111,12 @@ questions:
 3. 點「**一鍵注資**」
 
 **注資分兩次簽名**：
+
 - 第一次：Personal Message 簽名（錢包衍生加密金鑰，用來加密問卷內容）
 - 第二次：Transaction 簽名（atomic PTB：invest_and_mint + vault::create + registry::register）
 
 **驗收點**：
+
 - [x] 費用欄位正確顯示（非「計算中…」）
 - [x] 錢包彈出兩次：第一次是 personal message，第二次是交易
 - [x] 成功後自動跳至 `/dashboard/:vaultId#<contentKey>`
@@ -127,21 +131,25 @@ questions:
 注資成功後自動跳轉，或從步驟 2 成功後的 URL 複製再打開。
 
 **頁面顯示**：
+
 - Vault ID（完整 hex）
 - 三個數據卡：回覆數 / 名額上限 / Vault 餘額（鏈上即時）
 
 **驗收點**：
+
 - [x] Vault 餘額顯示正確 sSSR 數量（非「查詢中…」）
 - [x] 名額上限顯示 `5`（即 maxResponses）
 - [x] 回覆數顯示 `0`（尚無填答）
 - [x] 狀態欄顯示「進行中」
 
 **解密功能**（有回覆後才可操作）：
+
 1. 點「**解密回覆並查看統計**」
 2. 錢包彈出 personal message 簽名（衍生解密金鑰）
 3. 批次解密鏈上加密答案 → Recharts 長條圖
 
 **結束活動**：
+
 - 「**結束活動**」按鈕：僅限 Creator + 狀態為進行中時可點
 - 非 Creator 或已結束 → 按鈕灰化
 
@@ -154,6 +162,7 @@ questions:
 打開 `http://localhost:5173/redeem`
 
 **驗收點**：
+
 - [x] 未連錢包 → 顯示「請先連接錢包」提示
 - [x] 連錢包後自動列出所有 sSSR 憑證（ID + 額度）
 - [x] 點「**兌換**」→ 錢包彈出交易簽名（需少量 SUI 支付 Gas）
@@ -168,6 +177,7 @@ questions:
 打開 `http://localhost:5173/s/<VAULT_ID>#<CONTENT_KEY>`
 
 **驗收點**：
+
 - [x] 未連錢包 → 顯示「請連接錢包」全頁提示
 - [x] 連錢包後：從鏈上拉加密 blob → 解密 → 渲染問卷標題 + 各題
 - [x] 選完答案點「**預覽答案**」：若無 SurveyPass → 跳至通行證領取頁
@@ -200,29 +210,34 @@ Playwright 有頭模式執行時，你可以在瀏覽器視窗觀察以下每個
 https://devnet.suivision.xyz/txblock/<TX_DIGEST>
 ```
 
-| 物件 | ID |
-|------|-----|
-| SUI_PACKAGE_ID | `0x29e04f738842cd0d3651293187304084b089b3a6d5ee6daa4633f529622450b9` |
-| AMM_POOL_ID | `0xf5f6c69c8319631b301c59e2ae463b02870e031667d32d8337c11b4cb8afb260` |
+| 物件               | ID                                                                   |
+| ------------------ | -------------------------------------------------------------------- |
+| SUI_PACKAGE_ID     | `0x29e04f738842cd0d3651293187304084b089b3a6d5ee6daa4633f529622450b9` |
+| AMM_POOL_ID        | `0xf5f6c69c8319631b301c59e2ae463b02870e031667d32d8337c11b4cb8afb260` |
 | SURVEY_REGISTRY_ID | `0x535e687291960f157ed57347a163891d98654b4421e4e3f7930a9bf681fdd6e1` |
-| PASS_REGISTRY_ID | `0x4d10ba16b624a190ef9d3336e9f3dd6c5b1f397f71f47de7def48c3bae5b7b44` |
-| 注資 TX 樣本 | `2dN2cPqQnSsKEFLgBp9BuDaEdrqnmqe7TZjNsDa7zXdU` |
+| PASS_REGISTRY_ID   | `0x4d10ba16b624a190ef9d3336e9f3dd6c5b1f397f71f47de7def48c3bae5b7b44` |
+| 注資 TX 樣本       | `2dN2cPqQnSsKEFLgBp9BuDaEdrqnmqe7TZjNsDa7zXdU`                       |
 
 ---
 
 ## 七、備用問答
 
 **Q：為什麼手動測試受訪者提交會失敗？**
+
 > 受訪者填答需要兩個 Admin 私鑰操作：發 SurveyPass（`/api/pass/issue`）和代付 Gas（`/api/gas/sponsor`）。BFF 啟動時刻意禁止帶 Admin 私鑰（T5.3 安全設計）。Playwright E2E 透過 `page.route()` 在測試層面 mock 這兩個端點，讓真實上鏈得以完成。完整手動體驗請使用 `--headed` 模式。
 
 **Q：受訪者 SUI 餘額 0 怎麼完成填答？**
+
 > Sponsored Transactions（代付 Gas）。前端把 PTB 送給 `/api/gas/sponsor`，後端 dry-run 確認合法後代付 Gas 廣播上鏈。受訪者只需簽名，不消耗自己的 SUI。
 
 **Q：答案的隱私怎麼保護？**
+
 > 答案以 ECIES（X25519 + AES-GCM）加密後上鏈，只有 Creator 用錢包 personal message 衍生的私鑰才能解密。BFF 拿不到解密金鑰。
 
 **Q：sSSR 和 SSR 有什麼差別？**
+
 > `stakedSurveySuiReward`（sSSR）是填答後拿到的質押憑證，可在 `/redeem` 換成 `SurveySuiReward`（SSR）代幣。池中 SUI 越多，兌換比例越高。
 
 **Q：注資 PTB 包含幾個合約呼叫？**
+
 > 六個 command，三個核心 MoveCall：`amm_pool::invest_and_mint`（SUI → sSSR）、`survey_vault::create`（建金庫 + 收 0.3% 費）、`survey_registry::register`（加密 blob 上鏈）。三個呼叫 atomic，全成功或全失敗。

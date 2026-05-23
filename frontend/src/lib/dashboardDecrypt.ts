@@ -62,7 +62,7 @@ export interface DashboardStats {
 export async function fetchClaimedEvents(
   client: SuiClient,
   vaultId: string,
-  packageId: string,
+  packageId: string
 ): Promise<SurveyClaimedEvent[]> {
   const events: SurveyClaimedEvent[] = []
   let cursor: Parameters<SuiClient['queryEvents']>[0]['cursor'] = null
@@ -83,7 +83,7 @@ export async function fetchClaimedEvents(
       }
     }
 
-    cursor = page.hasNextPage ? page.nextCursor ?? null : null
+    cursor = page.hasNextPage ? (page.nextCursor ?? null) : null
     pageCount++
   } while (cursor !== null && pageCount < maxPages)
 
@@ -101,7 +101,7 @@ export async function decryptAllResponses(
   events: SurveyClaimedEvent[],
   creatorPrivateKey: CryptoKey,
   questions: Question[],
-  vaultSchemaHash: string | Uint8Array,
+  vaultSchemaHash: string | Uint8Array
 ): Promise<{ responses: DecryptedResponse[]; failed: number }> {
   const responses: DecryptedResponse[] = []
   let failed = 0
@@ -135,7 +135,7 @@ export async function decryptAllResponses(
  */
 export function aggregateStats(
   responses: DecryptedResponse[],
-  totalEvents: number,
+  totalEvents: number
 ): DashboardStats {
   const questions: Record<string, QuestionStats> = {}
 

@@ -10,10 +10,10 @@
 
 ### 前置需求
 
-| 工具 | 版本 |
-|------|------|
-| Node.js | ≥ 24 |
-| pnpm | ≥ 9 |
+| 工具    | 版本   |
+| ------- | ------ |
+| Node.js | ≥ 24   |
+| pnpm    | ≥ 9    |
 | Sui CLI | ≥ 1.72 |
 
 ### 1. 安裝依賴
@@ -62,23 +62,23 @@ pnpm move:test
 
 > 以下 ID 在執行 `pnpm deploy:Devnet` 後自動寫入 `.env.shared` 與 `.env`
 
-| 物件 | Object ID |
-|------|-----------|
-| Package | `<SUI_PACKAGE_ID>` |
-| SR Treasury | `<SR_TREASURY_ID>` |
-| SSR Treasury | `<SSR_TREASURY_ID>` |
-| AMM Pool | `<AMM_POOL_ID>` |
+| 物件            | Object ID              |
+| --------------- | ---------------------- |
+| Package         | `<SUI_PACKAGE_ID>`     |
+| SR Treasury     | `<SR_TREASURY_ID>`     |
+| SSR Treasury    | `<SSR_TREASURY_ID>`    |
+| AMM Pool        | `<AMM_POOL_ID>`        |
 | Survey Registry | `<SURVEY_REGISTRY_ID>` |
 
 ---
 
 ## Demo URL
 
-| 環境 | URL |
-|------|-----|
-| 線上 Demo（Devnet） | `https://surveysui.demo` *(部署後更新)* |
-| 本機前端 | `http://localhost:5173` |
-| 本機 BFF API | `http://localhost:3000` |
+| 環境                | URL                                     |
+| ------------------- | --------------------------------------- |
+| 線上 Demo（Devnet） | `https://surveysui.demo` _(部署後更新)_ |
+| 本機前端            | `http://localhost:5173`                 |
+| 本機 BFF API        | `http://localhost:3000`                 |
 
 ---
 
@@ -168,10 +168,10 @@ SurveyVault<SurveysuiReward> (shared object, 由合約驗證後派發)
 
 ## 技術堆疊
 
-| 層 | 技術 |
-|----|------|
+| 層   | 技術                                                       |
+| ---- | ---------------------------------------------------------- |
 | 前端 | Vite 6, React 19, @mysten/dapp-kit, Tailwind CSS, Recharts |
-| BFF | Node.js, Fastify 5, lru-cache |
-| 合約 | Sui Move (edition 2024.beta), Devnet |
-| 測試 | Vitest, Playwright, `sui move test` |
-| CI | GitHub Actions（move-test / bff-test / frontend-test） |
+| BFF  | Node.js, Fastify 5, lru-cache                              |
+| 合約 | Sui Move (edition 2024.beta), Devnet                       |
+| 測試 | Vitest, Playwright, `sui move test`                        |
+| CI   | GitHub Actions（move-test / bff-test / frontend-test）     |

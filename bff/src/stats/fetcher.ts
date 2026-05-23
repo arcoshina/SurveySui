@@ -4,7 +4,7 @@ import type { SurveyClaimedEvent } from '../types.js'
 export async function fetchClaimedEvents(
   client: SuiClient,
   vaultId: string,
-  packageId: string,
+  packageId: string
 ): Promise<SurveyClaimedEvent[]> {
   const events: SurveyClaimedEvent[] = []
   let cursor: Parameters<SuiClient['queryEvents']>[0]['cursor'] = null
@@ -21,7 +21,7 @@ export async function fetchClaimedEvents(
       if (parsed.vault_id === vaultId) events.push(parsed)
     }
 
-    cursor = page.hasNextPage ? page.nextCursor ?? null : null
+    cursor = page.hasNextPage ? (page.nextCursor ?? null) : null
   } while (cursor !== null)
 
   return events

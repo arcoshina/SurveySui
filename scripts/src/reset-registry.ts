@@ -44,7 +44,7 @@ function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
     Object.entries(merged)
       .map(([k, v]) => `${k}=${v}`)
       .join('\n') + '\n',
-    'utf8',
+    'utf8'
   )
 }
 
@@ -61,8 +61,14 @@ async function main() {
     : Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
   const client = new SuiClient({ url: getFullnodeUrl(network) })
 
-  const { packageId, srTreasuryId, ssrTreasuryId, surveyRegistryId, nullifierRegistryId, issuerConfigId } =
-    await deployPackage(client, keypair, adminAddress)
+  const {
+    packageId,
+    srTreasuryId,
+    ssrTreasuryId,
+    surveyRegistryId,
+    nullifierRegistryId,
+    issuerConfigId,
+  } = await deployPackage(client, keypair, adminAddress)
 
   const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
 

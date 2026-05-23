@@ -1,11 +1,7 @@
 import { Transaction } from '@mysten/sui/transactions'
 
 /** CPMM 公式：與合約 compute_amount_out 完全一致（0.3% fee，整數除法取下整） */
-export function calcAmountOut(
-  amountIn: bigint,
-  reserveIn: bigint,
-  reserveOut: bigint,
-): bigint {
+export function calcAmountOut(amountIn: bigint, reserveIn: bigint, reserveOut: bigint): bigint {
   if (amountIn <= 0n) throw new Error('amountIn 須大於 0')
   if (reserveIn <= 0n || reserveOut <= 0n) throw new Error('儲備量不能為零')
   const numerator = reserveOut * amountIn * 997n
@@ -14,17 +10,12 @@ export function calcAmountOut(
 }
 
 /** 計算價格影響百分比 (0–100)，與合約 0.3% fee 對齊 */
-export function calcPriceImpact(
-  amountIn: bigint,
-  reserveIn: bigint,
-  reserveOut: bigint,
-): number {
+export function calcPriceImpact(amountIn: bigint, reserveIn: bigint, reserveOut: bigint): number {
   if (amountIn <= 0n || reserveIn <= 0n || reserveOut <= 0n) return 0
   const amountOut = calcAmountOut(amountIn, reserveIn, reserveOut)
   if (amountOut <= 0n) return 0
   // price impact = 1 - (amountOut * reserveIn) / (amountIn * reserveOut)
-  const ratio =
-    (Number(amountOut) * Number(reserveIn)) / (Number(amountIn) * Number(reserveOut))
+  const ratio = (Number(amountOut) * Number(reserveIn)) / (Number(amountIn) * Number(reserveOut))
   return (1 - ratio) * 100
 }
 

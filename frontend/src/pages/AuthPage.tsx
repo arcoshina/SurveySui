@@ -1,15 +1,8 @@
 import { useState, useEffect } from 'react'
-import {
-  useCurrentAccount,
-  useSignAndExecuteTransaction,
-  useSuiClient,
-} from '@mysten/dapp-kit'
+import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit'
+import { IdCard, AlertTriangle, Check } from 'lucide-react'
 import { Transaction } from '@mysten/sui/transactions'
-import {
-  buildMintPassPtb,
-  buildUpdatePassCredentialPtb,
-  buildDeletePassPtb,
-} from '../lib/ptb'
+import { buildMintPassPtb, buildUpdatePassCredentialPtb, buildDeletePassPtb } from '../lib/ptb'
 import { fetchActivePass, SurveyPassData } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 
@@ -28,7 +21,8 @@ export default function AuthPage() {
   const suiClient = useSuiClient()
 
   const packageId = import.meta.env.VITE_PACKAGE_ID ?? ''
-  const registryId = import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
+  const registryId =
+    import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
   const configId = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
 
   // Local component states
@@ -176,7 +170,10 @@ export default function AuthPage() {
             setStep('input')
             setDebugOtp(null)
             try {
-              await suiClient.waitForTransaction({ digest: result.digest, options: { showEffects: true } })
+              await suiClient.waitForTransaction({
+                digest: result.digest,
+                options: { showEffects: true },
+              })
             } catch (e) {
               console.error(e)
             }
@@ -186,7 +183,7 @@ export default function AuthPage() {
             const friendly = translateMoveAbort(err.message)
             setErrorMsg(friendly || err.message || '交易執行失敗')
           },
-        },
+        }
       )
     } catch (err: any) {
       const friendly = translateMoveAbort(err.message)
@@ -222,7 +219,10 @@ export default function AuthPage() {
             setTxDigest(result.digest)
             setSuccessMsg('SurveyPass 已成功從鏈上銷毀，個人隱私資料已完全移除！')
             try {
-              await suiClient.waitForTransaction({ digest: result.digest, options: { showEffects: true } })
+              await suiClient.waitForTransaction({
+                digest: result.digest,
+                options: { showEffects: true },
+              })
             } catch (e) {
               console.error(e)
             }
@@ -232,7 +232,7 @@ export default function AuthPage() {
             const friendly = translateMoveAbort(err.message)
             setErrorMsg(friendly || err.message || '銷毀失敗')
           },
-        },
+        }
       )
     } catch (err: any) {
       const friendly = translateMoveAbort(err.message)
@@ -254,10 +254,7 @@ export default function AuthPage() {
       const transaction = new Transaction()
       transaction.moveCall({
         target: `${packageId}::survey_pass::revoke_pass`,
-        arguments: [
-          transaction.object(activePass.objectId),
-          transaction.object(configId),
-        ],
+        arguments: [transaction.object(activePass.objectId), transaction.object(configId)],
       })
 
       signAndExecute(
@@ -267,7 +264,10 @@ export default function AuthPage() {
             setTxDigest(result.digest)
             setSuccessMsg('SurveyPass 吊銷成功（限 Admin 發送）')
             try {
-              await suiClient.waitForTransaction({ digest: result.digest, options: { showEffects: true } })
+              await suiClient.waitForTransaction({
+                digest: result.digest,
+                options: { showEffects: true },
+              })
             } catch (e) {
               console.error(e)
             }
@@ -277,7 +277,7 @@ export default function AuthPage() {
             const friendly = translateMoveAbort(err.message)
             setErrorMsg(friendly || err.message || '吊銷失敗（請確認您是否使用 Admin 錢包）')
           },
-        },
+        }
       )
     } catch (err: any) {
       const friendly = translateMoveAbort(err.message)
@@ -289,12 +289,18 @@ export default function AuthPage() {
 
   const getSourceLabel = (src: number) => {
     switch (src) {
-      case 1: return '自我申報 (Self Report)'
-      case 2: return '郵件認證 (Email OTP)'
-      case 3: return '社群媒體 (OAuth/Social)'
-      case 4: return '自我協議 (Self Protocol)'
-      case 5: return 'World ID'
-      default: return '未知'
+      case 1:
+        return '自我申報 (Self Report)'
+      case 2:
+        return '郵件認證 (Email OTP)'
+      case 3:
+        return '社群媒體 (OAuth/Social)'
+      case 4:
+        return '自我協議 (Self Protocol)'
+      case 5:
+        return 'World ID'
+      default:
+        return '未知'
     }
   }
 
@@ -308,7 +314,8 @@ export default function AuthPage() {
               SurveyPass 真人認證
             </h1>
             <p className="mt-2 text-lg text-neutral-500">
-              透過去中心化身份驗證（KYC），取得專屬 SurveyPass。解鎖高等級問卷，防範女巫攻擊與虛假填答。
+              透過去中心化身份驗證（KYC），取得專屬
+              SurveyPass。解鎖高等級問卷，防範女巫攻擊與虛假填答。
             </p>
           </div>
         </div>
@@ -325,9 +332,14 @@ export default function AuthPage() {
           )}
 
           {successMsg && (
-            <div role="status" className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-6 rounded-2xl shadow-sm space-y-2">
+            <div
+              role="status"
+              className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-6 rounded-2xl shadow-sm space-y-2"
+            >
               <h3 className="text-base font-bold flex items-center gap-2 text-emerald-700">
-                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 font-bold">✓</span>
+                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-600">
+                  <Check size={14} />
+                </span>
                 執行成功
               </h3>
               <p className="text-sm text-emerald-600">{successMsg}</p>
@@ -341,8 +353,12 @@ export default function AuthPage() {
           )}
 
           {errorMsg && (
-            <div role="alert" className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-xl shadow-sm text-sm font-semibold break-all">
-              ⚠️ {errorMsg}
+            <div
+              role="alert"
+              className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-xl shadow-sm text-sm font-semibold break-all flex items-center gap-1.5"
+            >
+              <AlertTriangle size={14} className="shrink-0 text-rose-500" />
+              <span>{errorMsg}</span>
             </div>
           )}
         </div>
@@ -367,26 +383,40 @@ export default function AuthPage() {
                   <div className="space-y-6 z-10">
                     <div className="flex justify-between items-start">
                       <div>
-                        <span className="text-xs font-extrabold uppercase tracking-widest text-indigo-400">SURVEYSUI IDENTITY</span>
+                        <span className="text-xs font-extrabold uppercase tracking-widest text-indigo-400">
+                          SURVEYSUI IDENTITY
+                        </span>
                         <h3 className="text-2xl font-black mt-1 tracking-tight">SurveyPass V2</h3>
                       </div>
-                      <span className={`text-xs font-bold px-3 py-1.5 rounded-full ${
-                        activePass.status === 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                      }`}>
+                      <span
+                        className={`text-xs font-bold px-3 py-1.5 rounded-full ${
+                          activePass.status === 0
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                        }`}
+                      >
                         {activePass.status === 0 ? '● Active' : '● Revoked'}
                       </span>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <span className="text-xs text-indigo-300 block uppercase tracking-wider font-bold">有效等級 (Trust Tier)</span>
-                        <span className="text-3xl font-black text-white">Tier {activePass.effectiveTier}</span>
+                        <span className="text-xs text-indigo-300 block uppercase tracking-wider font-bold">
+                          有效等級 (Trust Tier)
+                        </span>
+                        <span className="text-3xl font-black text-white">
+                          Tier {activePass.effectiveTier}
+                        </span>
                       </div>
                       <div>
-                        <span className="text-xs text-indigo-300 block uppercase tracking-wider font-bold">認證來源</span>
+                        <span className="text-xs text-indigo-300 block uppercase tracking-wider font-bold">
+                          認證來源
+                        </span>
                         <span className="text-sm font-semibold text-white">
                           {activePass.credentialSources.length > 0
-                            ? activePass.credentialSources.map((src: number) => getSourceLabel(src)).join(', ')
+                            ? activePass.credentialSources
+                                .map((src: number) => getSourceLabel(src))
+                                .join(', ')
                             : '無憑證'}
                         </span>
                       </div>
@@ -411,10 +441,13 @@ export default function AuthPage() {
               ) : (
                 /* No Pass State */
                 <div className="bg-slate-50 border border-slate-200 rounded-3xl p-8 text-center shadow-inner">
-                  <div className="w-16 h-16 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">📇</div>
+                  <div className="w-16 h-16 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <IdCard size={32} />
+                  </div>
                   <h3 className="text-lg font-bold text-neutral-700">您尚未擁有 SurveyPass</h3>
                   <p className="text-sm text-neutral-500 mt-2 max-w-sm mx-auto">
-                    您需要至少經過一種途徑（如 Email OTP）驗證以向 BFF 取得憑證 Ticket，並在鏈上鑄造您的 SurveyPass。
+                    您需要至少經過一種途徑（如 Email OTP）驗證以向 BFF 取得憑證
+                    Ticket，並在鏈上鑄造您的 SurveyPass。
                   </p>
                 </div>
               )}
@@ -423,10 +456,11 @@ export default function AuthPage() {
               {activePass && (
                 <div className="bg-neutral-50 border border-neutral-200 rounded-3xl p-6 space-y-4 shadow-sm">
                   <h3 className="text-lg font-bold text-neutral-800 flex items-center gap-2">
-                    🛡️ GDPR 隱私與憑證管理
+                    GDPR 隱私與憑證管理
                   </h3>
                   <p className="text-xs text-neutral-500 leading-relaxed">
-                    本系統設計遵循 GDPR 隱私標準。已被吊銷的憑證可由 Owner 一鍵銷毀。一經銷毀，鏈上所有 PII 映射與憑證欄位將被完全移除。
+                    本系統設計遵循 GDPR 隱私標準。已被吊銷的憑證可由 Owner
+                    一鍵銷毀。一經銷毀，鏈上所有 PII 映射與憑證欄位將被完全移除。
                   </p>
 
                   <div className="flex flex-wrap gap-3">
@@ -440,7 +474,7 @@ export default function AuthPage() {
                           : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
                       }`}
                     >
-                      🗑️ 完全銷毀 (Delete Pass)
+                      完全銷毀 (Delete Pass)
                     </button>
 
                     <button
@@ -453,12 +487,13 @@ export default function AuthPage() {
                           : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
                       }`}
                     >
-                      🚫 模擬 Admin 吊銷 (Revoke)
+                      模擬 Admin 吊銷 (Revoke)
                     </button>
                   </div>
                   {activePass.status !== 3 && (
                     <p className="text-[10px] text-amber-600 font-medium">
-                      * 註：必須先執行「模擬 Admin 吊銷」將 Status 變為 Revoked 後，Owner 方能點擊「完全銷毀」。
+                      * 註：必須先執行「模擬 Admin 吊銷」將 Status 變為 Revoked 後，Owner
+                      方能點擊「完全銷毀」。
                     </p>
                   )}
                 </div>
@@ -469,13 +504,16 @@ export default function AuthPage() {
             <div className="md:col-span-5">
               <div className="bg-white border border-neutral-200 rounded-3xl p-6 shadow-md space-y-6">
                 <h3 className="text-xl font-extrabold text-neutral-800">
-                  {activePass ? '🔄 憑證更新與升級' : '✨ 申請全新 SurveyPass'}
+                  {activePass ? '憑證更新與升級' : '申請全新 SurveyPass'}
                 </h3>
 
                 {step === 'input' ? (
                   <form onSubmit={handleRequestOtp} className="space-y-4">
                     <div>
-                      <label htmlFor="email" className="block text-xs font-bold text-neutral-500 mb-1.5 uppercase tracking-wide">
+                      <label
+                        htmlFor="email"
+                        className="block text-xs font-bold text-neutral-500 mb-1.5 uppercase tracking-wide"
+                      >
                         電子郵件驗證 (Email Verification)
                       </label>
                       <input
@@ -513,7 +551,8 @@ export default function AuthPage() {
                       />
                       {debugOtp && (
                         <p className="text-xs text-blue-600 mt-2 bg-blue-50/50 p-2 rounded-lg border border-blue-100">
-                          ⚙️ 開發者提示（免登收信）：輸入 <span className="font-bold font-mono text-sm">{debugOtp}</span> 即可。
+                          開發者提示（免登收信）：輸入{' '}
+                          <span className="font-bold font-mono text-sm">{debugOtp}</span> 即可。
                         </p>
                       )}
                     </div>

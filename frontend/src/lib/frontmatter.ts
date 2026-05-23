@@ -1,12 +1,14 @@
 export interface FrontmatterData {
   perResponse: number
+  /** 0 = 禁止重複填答（預設）。 */
+  repeatReward: number
+  /** 預設 3。 */
+  repeatMaxTimes: number
   maxResponses: number
   deadlineMs: number
 }
 
-export type FrontmatterResult =
-  | { ok: true; data: FrontmatterData }
-  | { ok: false; error: string }
+export type FrontmatterResult = { ok: true; data: FrontmatterData } | { ok: false; error: string }
 
 /** 從 Markdown frontmatter 解析 perResponse / maxResponses / deadline，不依賴 js-yaml */
 export function parseFrontmatter(md: string): FrontmatterResult {
@@ -24,6 +26,8 @@ export function parseFrontmatter(md: string): FrontmatterResult {
   const perResponseStr = getVal('perResponse')
   const maxResponsesStr = getVal('maxResponses')
   const deadlineStr = getVal('deadline')
+  const repeatRewardStr = getVal('repeatReward')
+  const repeatMaxTimesStr = getVal('repeatMaxTimes')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -41,7 +45,17 @@ export function parseFrontmatter(md: string): FrontmatterResult {
   if (isNaN(deadlineMs)) return { ok: false, error: 'deadline 格式無效（需為 ISO 日期字串）' }
   if (deadlineMs <= Date.now()) return { ok: false, error: 'deadline 須為未來時間' }
 
-  return { ok: true, data: { perResponse, maxResponses, deadlineMs } }
+  const repeatReward = repeatRewardStr == null ? 0 : Number(repeatRewardStr)
+  if (!Number.isInteger(repeatReward) || repeatReward < 0) {
+    return { ok: false, error: 'repeatReward 必須為非負整數（0 = 禁止重複填答）' }
+  }
+
+  const repeatMaxTimes = repeatMaxTimesStr == null ? 3 : Number(repeatMaxTimesStr)
+  if (!Number.isInteger(repeatMaxTimes) || repeatMaxTimes < 1) {
+    return { ok: false, error: 'repeatMaxTimes 必須為正整數' }
+  }
+
+  return { ok: true, data: { perResponse, repeatReward, repeatMaxTimes, maxResponses, deadlineMs } }
 }
 
 export type QuestionType = 'single_choice' | 'multi_choice' | 'text' | 'scale'
@@ -57,18 +71,20 @@ export interface Question {
 export interface FullSurveyData {
   title: string
   perResponse: number
+  /** 重複填答獎勵（SSR）。0 = 禁止重複填答（預設）。 */
+  repeatReward: number
+  /** 每地址最多重填次數。僅在 repeatReward > 0 時生效；正整數。 */
+  repeatMaxTimes: number
   maxResponses: number
   deadlineMs: number
-  /** 0 = 無門檻；1/2/3 對應 KYC tier */
+  /** 0 = 無門檻；1/2 對應 KYC tier */
   minTier: number
   /** 問卷說明文字（純 markdown，frontmatter 與 questions 程式碼區塊之間） */
   description: string
   questions: Question[]
 }
 
-export type FullSurveyResult =
-  | { ok: true; data: FullSurveyData }
-  | { ok: false; error: string }
+export type FullSurveyResult = { ok: true; data: FullSurveyData } | { ok: false; error: string }
 
 const QUESTION_TYPE_TO_YAML: Record<QuestionType, string> = {
   single_choice: 'SINGLE_CHOICE',
@@ -130,6 +146,8 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   const maxResponsesStr = getVal('maxResponses')
   const deadlineStr = getVal('deadline')
   const minTierStr = getVal('minTier')
+  const repeatRewardStr = getVal('repeatReward')
+  const repeatMaxTimesStr = getVal('repeatMaxTimes')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -147,8 +165,18 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   if (isNaN(deadlineMs)) return { ok: false, error: 'deadline 格式無效（需為 ISO 日期字串）' }
 
   const minTier = minTierStr == null ? 0 : Number(minTierStr)
-  if (!Number.isInteger(minTier) || minTier < 0 || minTier > 3) {
-    return { ok: false, error: 'minTier 必須為 0-3 的整數' }
+  if (!Number.isInteger(minTier) || minTier < 0 || minTier > 2) {
+    return { ok: false, error: 'minTier 必須為 0-2 的整數' }
+  }
+
+  const repeatReward = repeatRewardStr == null ? 0 : Number(repeatRewardStr)
+  if (!Number.isInteger(repeatReward) || repeatReward < 0) {
+    return { ok: false, error: 'repeatReward 必須為非負整數（0 = 禁止重複填答）' }
+  }
+
+  const repeatMaxTimes = repeatMaxTimesStr == null ? 3 : Number(repeatMaxTimesStr)
+  if (!Number.isInteger(repeatMaxTimes) || repeatMaxTimes < 1) {
+    return { ok: false, error: 'repeatMaxTimes 必須為正整數' }
   }
 
   // 2) yaml code block (questions)
@@ -171,6 +199,8 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
     data: {
       title,
       perResponse,
+      repeatReward,
+      repeatMaxTimes,
       maxResponses,
       deadlineMs,
       minTier,
@@ -181,7 +211,7 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
 }
 
 function parseQuestionsYaml(
-  yaml: string,
+  yaml: string
 ): { ok: true; questions: Question[] } | { ok: false; error: string } {
   const lines = yaml.split('\n')
   const questions: Question[] = []
@@ -276,7 +306,7 @@ export interface SerializeOptions {
  */
 export function serializeFullSurveyToMarkdown(
   data: FullSurveyData,
-  opts: SerializeOptions = {},
+  opts: SerializeOptions = {}
 ): string {
   const draftStamp = opts.draftStamp ?? new Date().toISOString()
   const deadlineIso = new Date(data.deadlineMs).toISOString()
@@ -285,6 +315,8 @@ export function serializeFullSurveyToMarkdown(
     '---',
     `title: ${quoteString(data.title)}`,
     `perResponse: ${data.perResponse}`,
+    `repeatReward: ${data.repeatReward}`,
+    `repeatMaxTimes: ${data.repeatMaxTimes}`,
     `maxResponses: ${data.maxResponses}`,
     `deadline: ${quoteString(deadlineIso)}`,
     `minTier: ${data.minTier}`,
@@ -327,20 +359,14 @@ function quoteString(s: string): string {
 export function makeBlankSurveyData(): FullSurveyData {
   const future = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) // 60 天後
   return {
-    title: '問卷標題',
-    perResponse: 10,
-    maxResponses: 100,
+    title: '',
+    perResponse: 1,
+    repeatReward: 0,
+    repeatMaxTimes: 3,
+    maxResponses: 5,
     deadlineMs: future.getTime(),
     minTier: 0,
-    description: '在這裡撰寫問卷說明文字…',
-    questions: [
-      {
-        id: 'q1',
-        type: 'single_choice',
-        prompt: '您最喜歡 Sui 的哪個特性？',
-        options_json: ['Move 語言', 'Object model', '低 gas'],
-        required: true,
-      },
-    ],
+    description: '',
+    questions: [],
   }
 }

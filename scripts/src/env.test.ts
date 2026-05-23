@@ -33,7 +33,7 @@ describe('env utilities', () => {
   it('assertAllRequired error message lists all missing vars', () => {
     const missing = [TEST_VAR, '__TEST_ANOTHER__']
     expect(() => assertAllRequired(missing)).toThrowError(
-      /(__TEST_SURVEYSUI_VAR__|__TEST_ANOTHER__)/,
+      /(__TEST_SURVEYSUI_VAR__|__TEST_ANOTHER__)/
     )
   })
 })

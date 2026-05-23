@@ -168,7 +168,15 @@
       "Bash(sui --version)",
       "Bash(SUI_NETWORK=devnet pnpm --filter @surveysui/scripts exec tsx scripts/src/init.ts)",
       "Bash(SUI_NETWORK=devnet pnpm --filter @surveysui/scripts exec tsx src/init.ts)",
-      "Bash(cd \"d:/Users/Arco_asus/Documents/GitHub/SurveySui/frontend\" && git stash && mv src/lib/__tests__/frontmatter.test.ts /tmp/frontmatter.test.ts.bak ; npx tsc --noEmit 2>&1 | grep -E \"SurveyPage|DashboardPage\" ; mv /tmp/frontmatter.test.ts.bak src/lib/__tests__/frontmatter.test.ts ; git stash pop > /dev/null 2>&1)"
+      "Bash(cd \"d:/Users/Arco_asus/Documents/GitHub/SurveySui/frontend\" && git stash && mv src/lib/__tests__/frontmatter.test.ts /tmp/frontmatter.test.ts.bak ; npx tsc --noEmit 2>&1 | grep -E \"SurveyPage|DashboardPage\" ; mv /tmp/frontmatter.test.ts.bak src/lib/__tests__/frontmatter.test.ts ; git stash pop > /dev/null 2>&1)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm vitest *)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\" -Recurse)",
+      "Bash(Select-Object -First 20)",
+      "Bash(tee /tmp/publish.json)",
+      "Bash(python3 -c ' *)",
+      "Bash(awk '/^{/{p=1} p' publish.json)",
+      "Bash(tee /tmp/init_pool.json)"
     ],
     "additionalDirectories": [
       "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui",

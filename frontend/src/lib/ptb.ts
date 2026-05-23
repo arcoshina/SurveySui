@@ -65,6 +65,10 @@ export function estimateFundCost(p: EstimateFundCostParams): EstimateFundCostRes
 export interface EstimateFundCostV2Params {
   /** SSR per response, integer in human units. */
   perResponse: bigint
+  /** SSR per repeat submission, integer in human units. 0 = no repeats allowed. */
+  repeatReward?: bigint
+  /** Max repeats per address. Only matters when repeatReward > 0. */
+  repeatMaxTimes?: number
   /** Max responses (quota). */
   maxResponses: number
   /** Current `Pool.total_sui_invested` in MIST. */
@@ -98,7 +102,13 @@ export interface EstimateFundCostV2Result {
  * Handles existing SSR balance offset and fee config from pool.
  */
 export function estimateFundCostV2(p: EstimateFundCostV2Params): EstimateFundCostV2Result {
-  const netSsrBase = p.perResponse * BigInt(p.maxResponses) * SSR_BASE_PER_UNIT
+  const repeatReward = p.repeatReward ?? 0n
+  const repeatMaxTimes = BigInt(p.repeatMaxTimes ?? 0)
+  // Worst-case budget = perResponse * maxResponses + repeatReward * maxResponses * repeatMaxTimes
+  // (every respondent submits 1 initial + repeatMaxTimes repeats).
+  const baseSsr = p.perResponse * BigInt(p.maxResponses)
+  const repeatSsr = repeatReward * BigInt(p.maxResponses) * repeatMaxTimes
+  const netSsrBase = (baseSsr + repeatSsr) * SSR_BASE_PER_UNIT
   const effectiveFeeBps = (p.feeConfig.totalFeeBps * p.feeConfig.discountBps) / 10000n
 
   if (effectiveFeeBps >= 10000n) {
@@ -152,6 +162,10 @@ export interface BuildCreateSurveyPtbParams {
   adminTreasury: string
   /** SSR per response, integer in human units. */
   perResponse: bigint
+  /** SSR per repeat submission, integer in human units. 0 disables repeats. */
+  repeatReward?: bigint
+  /** Max repeats per address. Required by contract; defaults to 1 when omitted. */
+  repeatMaxTimes?: number
   maxResponses: number
   deadlineMs: bigint
   /** Encrypted survey blob to store in `survey_registry::register`. */
@@ -197,10 +211,14 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   const creatorSsrCoins = p.creatorSsrCoins || []
 
   // 1. Create empty vault
+  const repeatReward = p.repeatReward ?? 0n
+  const repeatMaxTimes = BigInt(p.repeatMaxTimes ?? 1)
   const [vault] = tx.moveCall({
     target: `${p.packageId}::survey_vault::create_empty`,
     arguments: [
       tx.pure.u64(p.perResponse * SSR_BASE_PER_UNIT),
+      tx.pure.u64(repeatReward * SSR_BASE_PER_UNIT),
+      tx.pure.u64(repeatMaxTimes),
       tx.pure.u64(p.maxResponses),
       tx.pure.u64(p.deadlineMs),
       tx.pure.address(p.adminTreasury),
@@ -213,10 +231,14 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     if (creatorSsrCoins.length === 0) {
       throw new Error('No SSR coins available for offset')
     }
-    const sortedCoins = [...creatorSsrCoins].sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)))
+    const sortedCoins = [...creatorSsrCoins].sort((a, b) =>
+      Number(BigInt(b.balance) - BigInt(a.balance))
+    )
     const totalAvailable = sortedCoins.reduce((sum, c) => sum + BigInt(c.balance), 0n)
     if (totalAvailable < offsetIn) {
-      throw new Error(`Insufficient SSR balance. Required: ${offsetIn}, Available: ${totalAvailable}`)
+      throw new Error(
+        `Insufficient SSR balance. Required: ${offsetIn}, Available: ${totalAvailable}`
+      )
     }
 
     const primaryCoinId = sortedCoins[0].coinObjectId
@@ -231,7 +253,10 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     }
 
     if (coinsToMerge.length > 0) {
-      tx.mergeCoins(primaryCoinInput, coinsToMerge.map((id) => tx.object(id)))
+      tx.mergeCoins(
+        primaryCoinInput,
+        coinsToMerge.map((id) => tx.object(id))
+      )
     }
 
     const [splitCoin] = tx.splitCoins(primaryCoinInput, [tx.pure.u64(offsetIn)])
@@ -291,7 +316,10 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
         tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.id))),
         tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.type))),
         tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.prompt))),
-        tx.pure.vector('vector<u8>', (q.options_json || []).map((opt) => Array.from(new TextEncoder().encode(opt)))),
+        tx.pure.vector(
+          'vector<u8>',
+          (q.options_json || []).map((opt) => Array.from(new TextEncoder().encode(opt)))
+        ),
         tx.pure.bool(q.required),
       ],
     })
@@ -323,38 +351,6 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     target: `${p.packageId}::survey_vault::share_vault`,
     arguments: [vault],
   })
-
-  return tx
-}
-
-// ── build redeem PTB ──────────────────────────────────────────────────────────
-
-export interface BuildRedeemPtbParams {
-  packageId: string
-  poolId: string
-  ssrTreasuryId: string
-  ssrCoinId: string
-  senderAddress: string
-}
-
-/**
- * Build redeem PTB:
- *   1. amm_pool::redeem(pool, ssrTreasury, ssrCoin) -> srCoin
- *   2. transferObjects([srCoin], senderAddress)
- */
-export function buildRedeemPtb(p: BuildRedeemPtbParams): Transaction {
-  const tx = new Transaction()
-
-  const [srCoin] = tx.moveCall({
-    target: `${p.packageId}::amm_pool::redeem`,
-    arguments: [
-      tx.object(p.poolId),
-      tx.object(p.ssrTreasuryId),
-      tx.object(p.ssrCoinId),
-    ],
-  })
-
-  tx.transferObjects([srCoin], tx.pure.address(p.senderAddress))
 
   return tx
 }
@@ -394,28 +390,25 @@ export interface ObjectChangeLike {
 
 function findCreatedBySuffix(
   changes: readonly ObjectChangeLike[] | undefined,
-  suffix: string,
+  suffix: string
 ): string | null {
   if (!changes) return null
   const hit = changes.find(
-    (c) =>
-      c.type !== 'deleted' &&
-      typeof c.objectType === 'string' &&
-      c.objectType.endsWith(suffix),
+    (c) => c.type !== 'deleted' && typeof c.objectType === 'string' && c.objectType.endsWith(suffix)
   )
   return hit?.objectId ?? null
 }
 
 /** Extract the newly-created SurveyVault object ID from `objectChanges`. */
 export function extractVaultIdFromEffects(
-  objectChanges: readonly ObjectChangeLike[] | undefined,
+  objectChanges: readonly ObjectChangeLike[] | undefined
 ): string | null {
   return findCreatedBySuffix(objectChanges, '::survey_vault::SurveyVault')
 }
 
 /** Extract the newly-created Survey object ID from `objectChanges`. */
 export function extractSurveyIdFromEffects(
-  objectChanges: readonly ObjectChangeLike[] | undefined,
+  objectChanges: readonly ObjectChangeLike[] | undefined
 ): string | null {
   return findCreatedBySuffix(objectChanges, '::survey_registry::Survey')
 }

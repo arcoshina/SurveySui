@@ -126,9 +126,9 @@ export function renderMarkdown(md: string): string {
     if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
       closeLists()
       inTable = true
-      const cells = trimmed.split('|').map(c => c.trim())
+      const cells = trimmed.split('|').map((c) => c.trim())
       const actualCells = cells.slice(1, cells.length - 1)
-      const isSeparator = actualCells.every(c => /^[:-]+$/.test(c))
+      const isSeparator = actualCells.every((c) => /^[:-]+$/.test(c))
       if (isSeparator && tableRows.length === 1) {
         hasTableHeaderSeparator = true
       }
@@ -193,4 +193,3 @@ export function renderMarkdown(md: string): string {
 
   return parts.join('')
 }
-

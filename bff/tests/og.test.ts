@@ -43,7 +43,9 @@ describe('test_crawler_ua_gets_og_html', () => {
       const res = await app.inject({
         method: 'GET',
         url: '/og/0xsurvey456',
-        headers: { 'user-agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
+        headers: {
+          'user-agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+        },
       })
       expect(res.statusCode).toBe(200)
       expect(res.body).toContain('og:title')

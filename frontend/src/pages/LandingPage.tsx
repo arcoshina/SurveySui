@@ -1,20 +1,21 @@
 import { Link } from 'react-router-dom'
+import { FileText, ClipboardList, Gift, Sparkles, Lock, Zap } from 'lucide-react'
 
 const steps = [
   {
-    emoji: '📝',
+    icon: FileText,
     number: '1',
     title: '發起者建立問卷',
     desc: '用 Markdown 寫題目、設定每份獎勵金額，一筆交易完成發布。',
   },
   {
-    emoji: '📋',
+    icon: ClipboardList,
     number: '2',
     title: '受訪者免費填答',
     desc: '完全不需要持有任何加密貨幣，手續費由發起者負擔。',
   },
   {
-    emoji: '🎁',
+    icon: Gift,
     number: '3',
     title: '獎勵自動發放',
     desc: '填答完成即自動結算，SUI 獎勵直接打進你的錢包。',
@@ -23,17 +24,17 @@ const steps = [
 
 const features = [
   {
-    emoji: '🆓',
+    icon: Sparkles,
     title: '填答零成本',
     desc: '填問卷不需要任何加密貨幣。發起者預先存入獎勵池，手續費由平台代付。',
   },
   {
-    emoji: '🔒',
+    icon: Lock,
     title: '資料永久保存',
     desc: '問卷資料儲存在 Sui 區塊鏈，任何人都可查驗，無法被刪除或竄改。',
   },
   {
-    emoji: '⚡',
+    icon: Zap,
     title: '獎勵直入錢包',
     desc: '系統根據合約自動分配，不需信任任何中間人或人工審核。',
   },
@@ -78,12 +79,6 @@ export default function LandingPage() {
           >
             真人驗證 SurveyPass
           </Link>
-          <Link
-            to="/redeem"
-            className="rounded-lg border border-gray-300 px-6 py-3 font-medium hover:bg-gray-50 transition-colors"
-          >
-            兌換獎勵
-          </Link>
         </div>
       </section>
 
@@ -92,16 +87,21 @@ export default function LandingPage() {
         <div className="mx-auto max-w-5xl px-6">
           <h2 className="text-2xl font-bold text-center mb-12">三步驟，完成一份問卷</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
-            {steps.map((step) => (
-              <div key={step.number} className="text-center">
-                <div className="text-4xl mb-3">{step.emoji}</div>
-                <div className="inline-block bg-blue-100 text-blue-700 text-sm font-semibold rounded-full px-3 py-0.5 mb-3">
-                  步驟 {step.number}
+            {steps.map((step) => {
+              const Icon = step.icon
+              return (
+                <div key={step.number} className="text-center flex flex-col items-center">
+                  <div className="text-blue-600 mb-3 flex items-center justify-center h-12 w-12 bg-blue-50 rounded-full">
+                    <Icon size={24} />
+                  </div>
+                  <div className="inline-block bg-blue-100 text-blue-700 text-sm font-semibold rounded-full px-3 py-0.5 mb-3">
+                    步驟 {step.number}
+                  </div>
+                  <h3 className="text-lg font-semibold mb-2">{step.title}</h3>
+                  <p className="text-gray-600 text-sm leading-relaxed">{step.desc}</p>
                 </div>
-                <h3 className="text-lg font-semibold mb-2">{step.title}</h3>
-                <p className="text-gray-600 text-sm leading-relaxed">{step.desc}</p>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </section>
@@ -111,16 +111,21 @@ export default function LandingPage() {
         <div className="mx-auto max-w-5xl px-6">
           <h2 className="text-2xl font-bold text-center mb-12">為什麼選擇 SurveySui？</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            {features.map((f) => (
-              <div
-                key={f.title}
-                className="bg-white border border-gray-200 rounded-xl p-6 text-center"
-              >
-                <div className="text-4xl mb-4">{f.emoji}</div>
-                <h3 className="text-lg font-semibold mb-2">{f.title}</h3>
-                <p className="text-gray-600 text-sm leading-relaxed">{f.desc}</p>
-              </div>
-            ))}
+            {features.map((f) => {
+              const Icon = f.icon
+              return (
+                <div
+                  key={f.title}
+                  className="bg-white border border-gray-200 rounded-xl p-6 text-center flex flex-col items-center"
+                >
+                  <div className="text-blue-600 mb-4 flex items-center justify-center h-12 w-12 bg-blue-50 rounded-full">
+                    <Icon size={24} />
+                  </div>
+                  <h3 className="text-lg font-semibold mb-2">{f.title}</h3>
+                  <p className="text-gray-600 text-sm leading-relaxed">{f.desc}</p>
+                </div>
+              )
+            })}
           </div>
         </div>
       </section>

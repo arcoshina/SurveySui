@@ -1,6 +1,6 @@
 # DeFi & Payments Problem Statement
 
-### ***Programmable Money, Payments & Financial Systems on Sui***
+### **_Programmable Money, Payments & Financial Systems on Sui_**
 
 ## **Problem**
 

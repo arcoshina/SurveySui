@@ -18,10 +18,22 @@
 // ── PKCS#8 DER prefix for X25519 private key (RFC 8410) ─────────────────────
 
 const X25519_PKCS8_PREFIX = new Uint8Array([
-  0x30, 0x2e, // SEQUENCE(46)
-  0x02, 0x01, 0x00, // INTEGER version=0
-  0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, // OID 1.3.101.110 (X25519)
-  0x04, 0x22, 0x04, 0x20, // OCTET STRING(34) > OCTET STRING(32)
+  0x30,
+  0x2e, // SEQUENCE(46)
+  0x02,
+  0x01,
+  0x00, // INTEGER version=0
+  0x30,
+  0x05,
+  0x06,
+  0x03,
+  0x2b,
+  0x65,
+  0x6e, // OID 1.3.101.110 (X25519)
+  0x04,
+  0x22,
+  0x04,
+  0x20, // OCTET STRING(34) > OCTET STRING(32)
 ])
 
 // ── HKDF info constants ───────────────────────────────────────────────────────
@@ -50,7 +62,7 @@ export function base64urlToBytes(b64url: string): Uint8Array {
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/')
   const padded = b64 + '==='.slice(0, (4 - (b64.length % 4)) % 4)
   const binary = atob(padded)
-  return Uint8Array.from(binary, c => c.charCodeAt(0))
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0))
 }
 
 export function bytesToBase64url(bytes: Uint8Array): string {
@@ -82,18 +94,16 @@ export interface CreatorKeyPair {
  * @param walletSignatureBytes — raw bytes returned by wallet.signPersonalMessage
  */
 export async function deriveCreatorKeyPair(
-  walletSignatureBytes: Uint8Array,
+  walletSignatureBytes: Uint8Array
 ): Promise<CreatorKeyPair> {
-  const seed = new Uint8Array(
-    await crypto.subtle.digest('SHA-256', walletSignatureBytes as any),
-  )
+  const seed = new Uint8Array(await crypto.subtle.digest('SHA-256', walletSignatureBytes as any))
   const der = seedToX25519Pkcs8(seed)
   const privateKey = await crypto.subtle.importKey(
     'pkcs8',
     der as any,
     { name: 'X25519' },
     true, // extractable=true so we can export JWK to retrieve pubkey
-    ['deriveBits'],
+    ['deriveBits']
   )
   const jwk = await crypto.subtle.exportKey('jwk', privateKey)
   if (!jwk.x) throw new Error('Failed to derive X25519 public key from JWK')
@@ -105,7 +115,7 @@ export async function deriveCreatorKeyPair(
     der as any,
     { name: 'X25519' },
     false, // non-extractable
-    ['deriveBits'],
+    ['deriveBits']
   )
 
   return { publicKeyBytes, privateKey: privateKeyFinal }
@@ -132,29 +142,19 @@ export interface EncryptedSurveyContent {
  */
 export async function encryptSurveyContent(
   markdown: string,
-  creatorPublicKeyBytes: Uint8Array,
+  creatorPublicKeyBytes: Uint8Array
 ): Promise<EncryptedSurveyContent> {
   const contentKey = crypto.getRandomValues(new Uint8Array(32))
-  const aesKey = await crypto.subtle.importKey(
-    'raw',
-    contentKey,
-    { name: 'AES-GCM' },
-    false,
-    ['encrypt'],
-  )
+  const aesKey = await crypto.subtle.importKey('raw', contentKey, { name: 'AES-GCM' }, false, [
+    'encrypt',
+  ])
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      aesKey,
-      new TextEncoder().encode(markdown),
-    ),
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, new TextEncoder().encode(markdown))
   )
 
   // blob = creatorPubKey(32) || iv(12) || ciphertext
-  const encryptedBlob = new Uint8Array(
-    creatorPublicKeyBytes.length + iv.length + ciphertext.length,
-  )
+  const encryptedBlob = new Uint8Array(creatorPublicKeyBytes.length + iv.length + ciphertext.length)
   encryptedBlob.set(creatorPublicKeyBytes, 0)
   encryptedBlob.set(iv, creatorPublicKeyBytes.length)
   encryptedBlob.set(ciphertext, creatorPublicKeyBytes.length + iv.length)
@@ -170,7 +170,7 @@ export async function encryptSurveyContent(
  */
 export async function decryptSurveyContent(
   encryptedBlob: Uint8Array,
-  contentKey: Uint8Array,
+  contentKey: Uint8Array
 ): Promise<{ markdown: string; creatorPublicKeyBytes: Uint8Array }> {
   const creatorPublicKeyBytes = encryptedBlob.slice(0, 32)
   const iv = encryptedBlob.slice(32, 44)
@@ -181,13 +181,9 @@ export async function decryptSurveyContent(
     contentKey as any,
     { name: 'AES-GCM' },
     false,
-    ['decrypt'],
+    ['decrypt']
   )
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    aesKey,
-    ciphertext,
-  )
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext)
   return {
     markdown: new TextDecoder().decode(plaintext),
     creatorPublicKeyBytes,
@@ -204,41 +200,35 @@ export async function decryptSurveyContent(
  */
 export async function encryptAnswers(
   answers: string,
-  creatorPublicKeyBytes: Uint8Array,
+  creatorPublicKeyBytes: Uint8Array
 ): Promise<Uint8Array> {
   const creatorPub = await crypto.subtle.importKey(
     'raw',
     creatorPublicKeyBytes as any,
     { name: 'X25519' },
     false,
-    [],
+    []
   )
 
   // Ephemeral key pair
-  const ephemeral = (await crypto.subtle.generateKey(
-    { name: 'X25519' },
-    true,
-    ['deriveBits'],
-  )) as CryptoKeyPair
+  const ephemeral = (await crypto.subtle.generateKey({ name: 'X25519' }, true, [
+    'deriveBits',
+  ])) as CryptoKeyPair
   const ephemeralPubRaw = new Uint8Array(
-    await crypto.subtle.exportKey('raw', ephemeral.publicKey as any),
+    await crypto.subtle.exportKey('raw', ephemeral.publicKey as any)
   )
 
   // Shared secret → HKDF → AES-GCM key
   const sharedBits = await crypto.subtle.deriveBits(
     { name: 'X25519', public: creatorPub },
     ephemeral.privateKey as any,
-    256,
+    256
   )
   const aesKey = await _deriveAesKey(sharedBits, ['encrypt'])
 
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      aesKey,
-      new TextEncoder().encode(answers),
-    ),
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, new TextEncoder().encode(answers))
   )
 
   // output = ephemeralPub(32) || iv(12) || ciphertext
@@ -256,7 +246,7 @@ export async function encryptAnswers(
  */
 export async function decryptAnswers(
   encryptedAnswers: Uint8Array,
-  creatorPrivateKey: CryptoKey,
+  creatorPrivateKey: CryptoKey
 ): Promise<string> {
   const ephemeralPubRaw = encryptedAnswers.slice(0, 32)
   const iv = encryptedAnswers.slice(32, 44)
@@ -267,37 +257,24 @@ export async function decryptAnswers(
     ephemeralPubRaw as any,
     { name: 'X25519' },
     false,
-    [],
+    []
   )
 
   const sharedBits = await crypto.subtle.deriveBits(
     { name: 'X25519', public: ephemeralPub },
     creatorPrivateKey as any,
-    256,
+    256
   )
   const aesKey = await _deriveAesKey(sharedBits, ['decrypt'])
 
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    aesKey,
-    ciphertext,
-  )
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext)
   return new TextDecoder().decode(plaintext)
 }
 
 // ── private helpers ───────────────────────────────────────────────────────────
 
-async function _deriveAesKey(
-  sharedBits: ArrayBuffer,
-  usages: KeyUsage[],
-): Promise<CryptoKey> {
-  const hkdfKey = await crypto.subtle.importKey(
-    'raw',
-    sharedBits,
-    'HKDF',
-    false,
-    ['deriveKey'],
-  )
+async function _deriveAesKey(sharedBits: ArrayBuffer, usages: KeyUsage[]): Promise<CryptoKey> {
+  const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey'])
   return crypto.subtle.deriveKey(
     {
       name: 'HKDF',
@@ -308,6 +285,6 @@ async function _deriveAesKey(
     hkdfKey,
     { name: 'AES-GCM', length: 256 },
     false,
-    usages,
+    usages
   )
 }

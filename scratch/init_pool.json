@@ -10,38 +10,8 @@
             "type": "pure",
             "valueType": null,
             "value": [
-              11,
-              69,
-              158,
-              57,
-              189,
-              117,
-              83,
-              226,
-              140,
-              86,
-              65,
-              171,
-              144,
-              186,
-              139,
-              1,
-              94,
-              76,
-              223,
-              21,
-              56,
-              119,
-              121,
-              30,
-              2,
-              34,
-              225,
-              22,
-              149,
-              52,
-              138,
-              135
+              11, 69, 158, 57, 189, 117, 83, 226, 140, 86, 65, 171, 144, 186, 139, 1, 94, 76, 223,
+              21, 56, 119, 121, 30, 2, 34, 225, 22, 149, 52, 138, 135
             ]
           }
         ],
@@ -133,9 +103,7 @@
         "digest": "DdFE2o9CdjjV8FAodG7uQA5cTXxkVPYQJBG5HDv8TRQM"
       }
     },
-    "dependencies": [
-      "E7smQ5XR4LqqPhbMwyJBcwPpwFoEztwCH3De8cLRTSMb"
-    ]
+    "dependencies": ["E7smQ5XR4LqqPhbMwyJBcwPpwFoEztwCH3De8cLRTSMb"]
   },
   "objectChanges": [
     {

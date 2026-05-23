@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import { IdCard, AlertTriangle, Check } from 'lucide-react'
 import {
   ConnectButton,
   useCurrentAccount,
@@ -10,7 +11,7 @@ import {
 import { Transaction } from '@mysten/sui/transactions'
 import { buildClaimPtb, executeSponsoredTx, executeTxWithFallback } from '../lib/sponsoredTx'
 import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
-import { parseFullSurveyMarkdown } from '../lib/frontmatter'
+import { parseFullSurveyMarkdown, type QuestionType } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
 import { buildMintPassPtb } from '../lib/ptb'
@@ -18,6 +19,13 @@ import { fetchActivePass, SurveyPassData } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
+
+const TYPE_LABELS_INFO: Record<QuestionType, { label: string }> = {
+  single_choice: { label: '單選' },
+  multi_choice: { label: '複選' },
+  text: { label: '簡答' },
+  scale: { label: '量表' },
+}
 
 function normalizeSuiId(id: string): string {
   if (!id) return ''
@@ -39,7 +47,7 @@ function hexToBytes(hex: string): Uint8Array {
 
 interface Question {
   id: string
-  type: 'single_choice' | 'multi_choice' | 'text' | 'scale'
+  type: QuestionType
   prompt: string
   options_json: string[] | null
   required: boolean
@@ -52,13 +60,25 @@ interface Survey {
   status: 'ACTIVE' | 'CLOSED'
   deadline: string
   per_response: number
+  /** SSR for each repeat submission. 0 = repeats disabled. Read from vault. */
+  repeat_reward: number
+  /** Max repeats per address. Only meaningful when repeat_reward > 0. */
+  repeat_max_times: number
   vaultObjectId: string // Add vaultObjectId for claiming
   questions: Question[]
   schemaHash: string
 }
 
 type Answers = Record<string, string | string[]>
-type Phase = 'loading' | 'filling' | 'review' | 'submitting' | 'success' | 'error' | 'need_pass' | 'closed'
+type Phase =
+  | 'loading'
+  | 'filling'
+  | 'review'
+  | 'submitting'
+  | 'success'
+  | 'error'
+  | 'need_pass'
+  | 'closed'
 
 export default function SurveyPage() {
   const { id } = useParams<{ id: string }>()
@@ -79,7 +99,8 @@ export default function SurveyPage() {
   const [selfPaidMode, setSelfPaidMode] = useState(false)
 
   // SurveyPass SBT & Verification States
-  const registryId = import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
+  const registryId =
+    import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
   const configId = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
 
   const [email, setEmail] = useState('')
@@ -91,6 +112,9 @@ export default function SurveyPage() {
 
   const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
   const [isPassLoading, setIsPassLoading] = useState(false)
+
+  /** How many times the connected wallet has already claimed for this survey. */
+  const [myClaimCount, setMyClaimCount] = useState(0)
 
   const fetchPass = async () => {
     if (!account?.address || !registryId) {
@@ -205,6 +229,16 @@ export default function SurveyPage() {
           return
         }
 
+        const vaultFields = (
+          vaultObj.data?.content?.dataType === 'moveObject'
+            ? (vaultObj.data.content.fields as any)
+            : {}
+        ) as Record<string, any>
+        const repeatRewardBase = Number(vaultFields.repeat_reward ?? 0)
+        const repeatMaxTimes = Number(vaultFields.repeat_max_times ?? 1)
+        // base units (9 decimals) → human SSR
+        const repeatRewardHuman = Math.floor(repeatRewardBase / 1_000_000_000)
+
         // Extract encrypted content
         let rawContent: Uint8Array
         if (Array.isArray(fields.encrypted_content)) {
@@ -213,12 +247,15 @@ export default function SurveyPage() {
           const str = fields.encrypted_content
           if (str.startsWith('0x')) {
             rawContent = new Uint8Array(
-              str.slice(2).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || []
+              str
+                .slice(2)
+                .match(/.{1,2}/g)
+                ?.map((byte: string) => parseInt(byte, 16)) || []
             )
           } else {
             // Assume base64
             const binary = atob(str)
-            rawContent = Uint8Array.from(binary, c => c.charCodeAt(0))
+            rawContent = Uint8Array.from(binary, (c) => c.charCodeAt(0))
           }
         } else {
           throw new Error('無效的加密內容格式')
@@ -270,10 +307,47 @@ export default function SurveyPage() {
           status: status === 0 ? 'ACTIVE' : 'CLOSED',
           deadline: new Date(parsed.data.deadlineMs).toISOString(),
           per_response: parsed.data.perResponse,
+          repeat_reward: repeatRewardHuman,
+          repeat_max_times: repeatMaxTimes,
           vaultObjectId: vault_id,
           questions: parsed.data.questions,
           schemaHash: schemaHashHex,
         })
+
+        // Count this wallet's prior claims on this vault (events filtered client-side).
+        if (account?.address) {
+          try {
+            const myAddrNorm = normalizeSuiId(account.address)
+            let evCursor: any = null
+            let evPages = 0
+            let count = 0
+            do {
+              const res = await suiClient.queryEvents({
+                query: { MoveEventType: `${PACKAGE_ID}::survey_vault::SurveyClaimed` },
+                cursor: evCursor,
+                limit: 50,
+              })
+              for (const ev of res.data) {
+                const j: any = ev.parsedJson
+                if (!j) continue
+                if (
+                  normalizeSuiId(j.vault_id) === normalizeSuiId(vault_id) &&
+                  normalizeSuiId(j.respondent) === myAddrNorm
+                ) {
+                  count++
+                }
+              }
+              evCursor = res.hasNextPage ? (res.nextCursor ?? null) : null
+              evPages++
+            } while (evCursor !== null && evPages < 20)
+            setMyClaimCount(count)
+          } catch (e) {
+            console.warn('[SurveyPage] failed to count prior claims:', e)
+            setMyClaimCount(0)
+          }
+        } else {
+          setMyClaimCount(0)
+        }
         setCreatorPubKey(creatorPublicKeyBytes)
         setSurveyMinTier(Number(fields.min_tier ?? 0))
         setPhase('filling')
@@ -377,7 +451,12 @@ export default function SurveyPage() {
         },
       })
 
-      if (txResult && txResult.effects && txResult.effects.status && txResult.effects.status.status === 'failure') {
+      if (
+        txResult &&
+        txResult.effects &&
+        txResult.effects.status &&
+        txResult.effects.status.status === 'failure'
+      ) {
         const rawErr = txResult.effects.status.error || '未知錯誤'
         const friendly = translateMoveAbort(rawErr)
         throw new Error(friendly || `鏈上交易執行失敗: ${rawErr}`)
@@ -440,7 +519,9 @@ export default function SurveyPage() {
     if (!activePass) {
       setPhase('need_pass')
     } else if (activePass.status === 3) {
-      setValidationError('您的 SurveyPass 已被吊銷 (Revoked)，無法填寫問卷。請先前往真人認證重新發行。')
+      setValidationError(
+        '您的 SurveyPass 已被吊銷 (Revoked)，無法填寫問卷。請先前往真人認證重新發行。'
+      )
     } else if (activePass.expiresAt > 0 && activePass.expiresAt < Date.now()) {
       setValidationError('您的 SurveyPass 已過期，請先前往真人認證更新驗證。')
     } else {
@@ -476,7 +557,10 @@ export default function SurveyPage() {
         throw new Error('未載入問卷建立者金鑰，無法加密答案')
       }
       const encodedPayload = encodeAnswers(answers, survey.questions, survey.schemaHash)
-      const encryptedAnswersBytes = await encryptAnswers(JSON.stringify(encodedPayload), creatorPubKey)
+      const encryptedAnswersBytes = await encryptAnswers(
+        JSON.stringify(encodedPayload),
+        creatorPubKey
+      )
       const encryptedAnswersHex = Array.from(encryptedAnswersBytes)
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('')
@@ -529,7 +613,12 @@ export default function SurveyPage() {
         },
       })
 
-      if (claimTxResult && claimTxResult.effects && claimTxResult.effects.status && claimTxResult.effects.status.status === 'failure') {
+      if (
+        claimTxResult &&
+        claimTxResult.effects &&
+        claimTxResult.effects.status &&
+        claimTxResult.effects.status.status === 'failure'
+      ) {
         const rawErr = claimTxResult.effects.status.error || '未知錯誤'
         throw new Error(`鏈上交易執行失敗: ${rawErr}`)
       }
@@ -548,65 +637,76 @@ export default function SurveyPage() {
     setValidationError(null)
   }
 
-  // ── Wallet Check ──────────────────────────────────────────────────────────
   if (!account && phase !== 'loading' && phase !== 'closed') {
     return (
-      <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
-        <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-md text-center space-y-6 flex flex-col items-center">
-          <h1 className="text-2xl font-bold text-gray-800">請連接錢包</h1>
-          <p className="text-sm text-gray-600">
+      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
+          <h1 className="text-2xl font-semibold text-slate-800">請連接錢包</h1>
+          <p className="text-sm text-slate-500 leading-relaxed">
             本平台為確保填答真實性，需要使用您的 Sui 錢包進行零手續費交易與簽名。
           </p>
-          <div className="my-2">
+          <div className="my-3 scale-110">
             <ConnectButton />
           </div>
-          <p className="text-xs text-gray-400">
-            請點擊上方按鈕連接錢包，或重整頁面。
+          <p className="text-xs text-slate-400">請點擊上方按鈕連接錢包，或重整頁面。</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (phase === 'loading') {
+    return (
+      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
+          <p aria-live="polite" className="text-sm text-slate-500 font-medium">
+            載入問卷中…
           </p>
         </div>
       </main>
     )
   }
 
-  // ── loading ───────────────────────────────────────────────────────────────
-  if (phase === 'loading') {
-    return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800">填寫問卷</h1>
-        <p aria-live="polite" className="text-gray-500">載入問卷中…</p>
-      </main>
-    )
-  }
-
-  // ── error ─────────────────────────────────────────────────────────────────
   if ((phase === 'error' || !survey) && phase !== 'closed') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800">填寫問卷</h1>
-        <p role="alert" className="text-red-500">
-          問卷載入失敗，請稍後再試。
-        </p>
+      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
+            <AlertTriangle size={24} />
+          </div>
+          <p role="alert" className="text-sm text-rose-600 font-semibold">
+            問卷載入失敗，請確認網址或稍後再試。
+          </p>
+        </div>
       </main>
     )
   }
 
-  // ── closed (問卷已結束，禁止填寫) ─────────────────────────────────────────
   if (phase === 'closed') {
     return (
-      <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
-        <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-md text-center space-y-6">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-200 text-gray-500 mx-auto">
-            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 text-slate-400">
+            <svg
+              className="w-6 h-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M5 13l4 4L19 7"
+              ></path>
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-gray-800">此問卷已關閉</h1>
-          <p className="text-sm text-gray-600">
-            發起人已結束此問卷活動，無法再填寫。
-          </p>
+          <h1 className="text-2xl font-semibold text-slate-800">此問卷已關閉</h1>
+          <p className="text-sm text-slate-500 leading-relaxed">發起人已結束此問卷活動，目前已無法再填寫。</p>
           <Link
             to="/"
-            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition-colors text-sm"
+            className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-6 py-3 rounded-xl transition-all shadow-sm text-sm"
           >
             返回首頁
           </Link>
@@ -615,39 +715,46 @@ export default function SurveyPage() {
     )
   }
 
-  // ── need_pass (SurveyPass 首次領取) ───────────────────────────────────────
   if (phase === 'need_pass') {
     return (
-      <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
-        <div className="bg-white border border-gray-200 rounded-3xl p-8 max-w-md w-full shadow-xl space-y-6">
+      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 animate-fadeIn w-full">
           <div className="text-center">
-            <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">📇</div>
-            <h2 className="text-2xl font-black text-gray-800 tracking-tight">首次填答，請先領取通行證</h2>
-            <p className="text-xs text-gray-500 mt-2">
-              本系統需要真人憑證 (SurveyPass) 以防範女巫攻擊。請輸入 Email 獲取驗證碼以鑄造您專屬的 SBT 憑證卡。
+            <div className="w-12 h-12 bg-blue-50 border border-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <IdCard size={24} />
+            </div>
+            <h2 className="text-2xl font-semibold text-slate-800">
+              首次填答，請先領取通行證
+            </h2>
+            <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+              本系統需要真人憑證 (SurveyPass) 以防範女巫攻擊。請輸入 Email 獲取驗證碼以鑄造您專屬的
+              SBT 憑證卡。
             </p>
           </div>
 
           {!account ? (
             <div className="text-center space-y-4">
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-slate-500">
                 要獲取或鑄造您的 SurveyPass，您必須先連結您的 Sui 錢包。
               </p>
-              <div className="flex justify-center">
+              <div className="flex justify-center my-2">
                 <ConnectButton />
               </div>
               <button
                 type="button"
                 onClick={() => setPhase('filling')}
-                className="text-xs text-gray-400 hover:text-gray-600 transition-colors underline block mx-auto"
+                className="text-xs text-slate-400 hover:text-slate-600 transition-colors underline block mx-auto"
               >
                 返回問卷
               </button>
             </div>
           ) : otpStep === 'input' ? (
             <form onSubmit={handleRequestOtp} className="space-y-4">
-              <div>
-                <label htmlFor="email" className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wider">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="email"
+                  className="block text-xs font-bold text-slate-500 uppercase tracking-wider"
+                >
                   電子郵件地址
                 </label>
                 <input
@@ -656,29 +763,30 @@ export default function SurveyPage() {
                   placeholder="respondent@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
+                  className="w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 text-sm font-semibold bg-white text-slate-800"
                   required
                 />
               </div>
 
               {issuingError && (
-                <p role="alert" className="text-rose-500 text-xs font-semibold">
-                  ⚠️ {issuingError}
-                </p>
+                <div role="alert" className="text-rose-500 text-xs font-semibold flex items-center gap-1 bg-rose-50 border border-rose-100 rounded-xl p-3">
+                  <AlertTriangle size={14} className="shrink-0" />
+                  <span>{issuingError}</span>
+                </div>
               )}
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => setPhase('filling')}
-                  className="w-1/3 border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-colors text-xs font-bold text-gray-600"
+                  className="w-1/3 border border-slate-200 py-2.5 rounded-xl hover:bg-slate-50 transition-all text-sm font-semibold text-slate-650 shadow-sm"
                 >
                   返回修改
                 </button>
                 <button
                   type="submit"
                   disabled={issuingPass}
-                  className="w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-2.5 rounded-xl transition-all disabled:opacity-50 text-xs hover:shadow-sm"
+                  className="w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold py-2.5 rounded-xl transition-all disabled:opacity-50 text-sm hover:brightness-110 shadow-md"
                 >
                   {issuingPass ? '正在發送...' : '獲取驗證碼 →'}
                 </button>
@@ -686,8 +794,8 @@ export default function SurveyPage() {
             </form>
           ) : (
             <form onSubmit={handleVerifyAndMint} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wider">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
                   請輸入 6 位數驗證碼
                 </label>
                 <input
@@ -696,37 +804,39 @@ export default function SurveyPage() {
                   maxLength={6}
                   value={otpCode}
                   onChange={(e) => setOtpCode(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-center font-mono font-bold tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-205 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 text-sm text-center font-mono font-bold tracking-widest bg-white text-slate-800"
                   required
                 />
                 {debugOtp && (
-                  <p className="text-[10px] text-blue-600 mt-2 bg-blue-50/50 p-2 rounded-lg border border-blue-100">
-                    ⚙️ 開發者提示：輸入 <span className="font-bold font-mono">{debugOtp}</span> 即可。
+                  <p className="text-[10px] text-blue-700 mt-2 bg-blue-50/50 p-2.5 rounded-xl border border-blue-105 font-medium leading-relaxed">
+                    開發者提示：輸入 <span className="font-bold font-mono">{debugOtp}</span>{' '}
+                    即可。
                   </p>
                 )}
               </div>
 
               {issuingError && (
-                <p role="alert" className="text-rose-500 text-xs font-semibold">
-                  ⚠️ {issuingError}
-                </p>
+                <div role="alert" className="text-rose-500 text-xs font-semibold flex items-center gap-1 bg-rose-50 border border-rose-100 rounded-xl p-3">
+                  <AlertTriangle size={14} className="shrink-0" />
+                  <span>{issuingError}</span>
+                </div>
               )}
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => {
                     setOtpStep('input')
                     setDebugOtp(null)
                   }}
-                  className="w-1/3 border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-colors text-xs font-bold text-gray-600"
+                  className="w-1/3 border border-slate-200 py-2.5 rounded-xl hover:bg-slate-50 transition-all text-sm font-semibold text-slate-650 shadow-sm"
                 >
                   返回修改
                 </button>
                 <button
                   type="submit"
                   disabled={issuingPass}
-                  className="w-2/3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold py-2.5 rounded-xl transition-all disabled:opacity-50 text-xs hover:shadow-sm"
+                  className="w-2/3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-semibold py-2.5 rounded-xl transition-all disabled:opacity-50 text-sm hover:brightness-110 shadow-md"
                 >
                   {issuingPass ? '正在驗證鑄造...' : '驗證並鑄造憑證'}
                 </button>
@@ -738,34 +848,44 @@ export default function SurveyPage() {
     )
   }
 
-  // ── success ───────────────────────────────────────────────────────────────
   if (phase === 'success') {
     return (
-      <main className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
-        <div className="bg-white border rounded-xl p-8 max-w-md w-full shadow-lg text-center space-y-6">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 text-green-600 mb-2">
-            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 mb-1 animate-scaleIn">
+            <svg
+              className="w-8 h-8"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M5 13l4 4L19 7"
+              ></path>
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-gray-800">提交成功！</h1>
+          <h1 className="text-2xl font-semibold text-slate-800">提交成功！</h1>
           {selfPaidMode && (
-            <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-              本次以自付 gas 模式完成（Gas Station 暫時不可用）
-            </p>
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 leading-relaxed w-full">
+              <strong>提示：</strong>本次以自付 gas 模式完成（Gas Station 暫時不可用）
+            </div>
           )}
-          <p className="text-gray-600 text-sm">
+          <p className="text-slate-500 text-sm leading-relaxed">
             感謝您的熱心參與，填答完成驗證已在鏈上通過，RWD 獎勵已發放至您的錢包！
           </p>
-          <div className="bg-gray-50 border rounded-lg p-4 text-left">
-            <p className="text-xs text-gray-500 mb-1 font-semibold">交易雜湊（TX Hash）</p>
-            <p aria-label="tx-hash" className="font-mono text-xs break-all text-blue-600">
+          <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 text-left w-full space-y-1 shadow-inner">
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">交易雜湊（TX Hash）</p>
+            <p aria-label="tx-hash" className="font-mono text-xs break-all text-blue-600 font-semibold">
               {txHash}
             </p>
           </div>
           <Link
             to="/"
-            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition-colors text-sm"
+            className="w-full bg-slate-100 hover:bg-slate-200 text-slate-705 font-semibold px-6 py-3 rounded-xl transition-all shadow-sm text-sm"
           >
             返回首頁
           </Link>
@@ -774,241 +894,361 @@ export default function SurveyPage() {
     )
   }
 
-  // ── review / submitting ───────────────────────────────────────────────────
   if (phase === 'review' || phase === 'submitting') {
     if (!survey) return null
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800">確認您的答案</h1>
+      <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
+          <div className="border-b pb-4 border-slate-100">
+            <h1 className="text-2xl font-semibold text-slate-800">確認您的答案</h1>
+            <p className="text-sm text-slate-500 mt-1">請在提交前核對您所填寫的回答內容。</p>
+          </div>
 
-        <div className="space-y-4 mb-8">
-          {survey.questions.map((q, i) => (
-            <div key={q.id} className="bg-gray-50 rounded-lg p-4">
-              <p className="text-sm text-gray-500 mb-1">
-                第 {i + 1} 題{q.required ? '（必填）' : '（選填）'}
-              </p>
-              <p className="font-medium mb-2 text-gray-800">{q.prompt}</p>
-              <p className="text-blue-700 font-semibold">{getAnswerDisplay(q)}</p>
+          <div className="space-y-4 max-h-[450px] overflow-y-auto pr-1">
+            {survey.questions.map((q, i) => (
+              <div key={q.id} className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 space-y-3 shadow-sm transition-colors hover:bg-slate-50">
+                <div className="flex items-center justify-between border-b pb-2 border-slate-200/60">
+                  <span className="text-sm font-semibold text-slate-700">第 {i + 1} 題</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
+                    {q.required ? '必填' : '選填'}
+                  </span>
+                </div>
+                <p className="font-semibold text-slate-800 text-sm leading-relaxed">{q.prompt}</p>
+                <div className="bg-white border border-slate-100 rounded-xl px-4 py-2.5 shadow-inner">
+                  <p className="text-blue-700 font-bold text-sm">{getAnswerDisplay(q)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {submitError && (
+            <div role="alert" className="text-rose-500 text-xs font-semibold flex items-center gap-1 bg-rose-50 border border-rose-100 rounded-xl p-3">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span>{submitError}</span>
             </div>
-          ))}
-        </div>
+          )}
 
-        {submitError && (
-          <p role="alert" className="text-red-500 mb-4 text-sm font-semibold">
-            {submitError}
-          </p>
-        )}
-
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={() => setPhase('filling')}
-            disabled={phase === 'submitting'}
-            className="border px-6 py-2 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors text-sm font-semibold"
-          >
-            返回修改
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSubmit()}
-            disabled={phase === 'submitting'}
-            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-semibold flex-1"
-          >
-            {phase === 'submitting' ? '提交中…' : '確認提交'}
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setPhase('filling')}
+              disabled={phase === 'submitting'}
+              className="w-full sm:w-1/3 border border-slate-200 py-3 rounded-xl hover:bg-slate-50 transition-all text-sm font-semibold text-slate-650 shadow-sm flex items-center justify-center gap-1.5"
+            >
+              ⬅ 返回修改
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={phase === 'submitting'}
+              className="w-full sm:w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 text-sm shadow-md flex items-center justify-center gap-1.5"
+            >
+              {phase === 'submitting' ? '提交中…' : '確認提交並領取獎勵 ➔'}
+            </button>
+          </div>
         </div>
       </main>
     )
   }
 
   // ── filling ───────────────────────────────────────────────────────────────
-  const isPassValid = !!activePass
-    && activePass.status !== 3
-    && (activePass.expiresAt === 0 || activePass.expiresAt > Date.now())
+  const isPassValid =
+    !!activePass &&
+    activePass.status !== 3 &&
+    (activePass.expiresAt === 0 || activePass.expiresAt > Date.now())
 
-  const submitDisabled = (phase as string) === 'submitting'
-    || (surveyMinTier > 0 && !isPassValid)
-    || (isPassValid && activePass!.effectiveTier < surveyMinTier)
+  // Repeat-submission gate
+  const repeatsEnabled = !!survey && survey.repeat_reward > 0
+  const maxTotalSubmissions = survey ? (repeatsEnabled ? 1 + survey.repeat_max_times : 1) : 1
+  const remainingSubmissions = Math.max(0, maxTotalSubmissions - myClaimCount)
+  const atSubmissionLimit = myClaimCount >= maxTotalSubmissions
 
-  const submitLabel = (surveyMinTier === 0 || isPassValid) ? '預覽答案' : '需要身分驗證才能填答'
+  const submitDisabled =
+    (phase as string) === 'submitting' ||
+    !isPassValid ||
+    (activePass && activePass.effectiveTier < surveyMinTier) ||
+    atSubmissionLimit
+
+  const submitLabel = atSubmissionLimit
+    ? '已達填答次數上限'
+    : !isPassValid || (activePass && activePass.effectiveTier < surveyMinTier)
+      ? '需要身分驗證才能填答'
+      : myClaimCount > 0
+        ? '預覽答案（重複填答）'
+        : '預覽答案'
 
   if (!survey) return null
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-2 text-gray-800">{survey.title}</h1>
-      <p className="text-sm text-gray-500 mb-4">
-        截止日期：{new Date(survey.deadline).toLocaleDateString('zh-TW')}
-      </p>
-
-      {survey.description && (
-        <div
-          aria-label="問卷說明"
-          className="prose max-w-none border-l-4 border-blue-300 bg-blue-50/50 px-4 py-3 mb-6 text-sm"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(survey.description) }}
-        />
-      )}
-
-      {!account && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="text-blue-800 text-left">
-            <strong>請先連結錢包：</strong> 填寫此問卷需要連結錢包並檢測您的身分憑證 (SurveyPass)。
+    <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto">
+      <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
+        
+        {/* 頂部問卷標題與說明區 */}
+        <div className="space-y-3 bg-slate-50/50 border border-slate-100 p-5 rounded-2xl animate-fadeIn">
+          <h1 className="text-2xl font-bold text-slate-800">{survey.title}</h1>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-bold text-slate-500 border-b border-slate-200/60 pb-3">
+            <span>截止日期：{new Date(survey.deadline).toLocaleDateString('zh-TW')}</span>
+            <span>單份獎勵：{survey.per_response} SSR</span>
+            {survey.repeat_reward > 0 && (
+              <span>重複填答：{survey.repeat_reward} SSR (上限 {1 + survey.repeat_max_times} 次)</span>
+            )}
           </div>
-          <ConnectButton />
+          {survey.description && (
+            <div
+              aria-label="問卷說明"
+              className="prose max-w-none text-sm text-slate-600 leading-relaxed pt-1"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(survey.description) }}
+            />
+          )}
         </div>
-      )}
 
-      {isPassValid && (
-        <span data-testid="tier-badge" className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-3 py-1 mb-4">
-          ✓ {activePass!.effectiveTier === 0 ? 'Email 驗證'
-              : activePass!.effectiveTier === 1 ? '社交帳號驗證'
-              : '高階驗證'}
-        </span>
-      )}
-
-      {validationError && (
-        <p role="alert" className="text-red-500 mb-4 text-sm font-semibold">
-          {validationError}
-        </p>
-      )}
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          validateAndPreview()
-        }}
-        noValidate
-        className="space-y-6"
-      >
-        {survey.questions.map((q, i) => (
-          <fieldset key={q.id} className="border rounded-lg p-4 bg-white shadow-sm">
-            <legend className="text-sm text-gray-500 px-2 font-medium">
-              第 {i + 1} 題{q.required && <span className="text-red-500 ml-1">*</span>}
-            </legend>
-            <p className="font-medium mt-2 mb-3 text-gray-800">{q.prompt}</p>
-
-            <div className="mt-1">
-              {q.type === 'single_choice' && q.options_json && (
-                <div className="space-y-2">
-                  {q.options_json.map((opt) => (
-                    <label key={opt} className="flex items-center gap-2 cursor-pointer text-gray-700">
-                      <input
-                        type="radio"
-                        name={q.id}
-                        value={opt}
-                        checked={answers[q.id] === opt}
-                        onChange={() => handleAnswerChange(q.id, opt)}
-                        aria-label={opt}
-                      />
-                      {opt}
-                    </label>
-                  ))}
-                </div>
-              )}
-
-              {q.type === 'multi_choice' && q.options_json && (
-                <div className="space-y-2">
-                  {q.options_json.map((opt) => {
-                    const selected = (answers[q.id] as string[] | undefined) ?? []
-                    return (
-                      <label key={opt} className="flex items-center gap-2 cursor-pointer text-gray-700">
-                        <input
-                          type="checkbox"
-                          value={opt}
-                          checked={selected.includes(opt)}
-                          onChange={(e) => {
-                            const next = e.target.checked
-                              ? [...selected, opt]
-                              : selected.filter((s) => s !== opt)
-                            handleAnswerChange(q.id, next)
-                          }}
-                          aria-label={opt}
-                        />
-                        {opt}
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-
-              {q.type === 'text' && (
-                <textarea
-                  className="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  rows={3}
-                  value={(answers[q.id] as string | undefined) ?? ''}
-                  onChange={(e) => handleAnswerChange(q.id, e.target.value)}
-                  aria-label={q.prompt}
-                  placeholder="請輸入您的回答"
-                />
-              )}
-
-              {q.type === 'scale' && (
-                <div className="flex gap-4">
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <label key={n} className="flex flex-col items-center gap-1 cursor-pointer text-gray-700">
-                      <input
-                        type="radio"
-                        name={q.id}
-                        value={String(n)}
-                        checked={answers[q.id] === String(n)}
-                        onChange={() => handleAnswerChange(q.id, String(n))}
-                        aria-label={String(n)}
-                      />
-                      {n}
-                    </label>
-                  ))}
-                </div>
-              )}
+        {!account && (
+          <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
+            <div className="text-blue-800 text-left font-semibold">
+              <strong>請先連結錢包：</strong> 填寫此問卷需要連結錢包並檢測您的身分憑證 (SurveyPass)。
             </div>
-          </fieldset>
-        ))}
+            <ConnectButton />
+          </div>
+        )}
 
-        {surveyMinTier > 0 && (
-          <div className="mt-4">
-            {!isPassValid ? (
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="text-blue-800 text-left">
-                  <strong>需要 SurveyPass 憑證：</strong> 填寫此問卷要求經過身分驗證。
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOtpStep('input')
-                    setPhase('need_pass')
-                  }}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
-                >
-                  獲取 SurveyPass 憑證
-                </button>
-              </div>
-            ) : (activePass!.effectiveTier < surveyMinTier) && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="text-amber-800 text-left">
-                  <strong>憑證等級不足：</strong> 本問卷要求 Tier {surveyMinTier}，但您的憑證等級為 Tier {activePass!.effectiveTier}。
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOtpStep('input')
-                    setPhase('need_pass')
-                  }}
-                  className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
-                >
-                  升級 SurveyPass 憑證
-                </button>
+        {isPassValid && (
+          <span
+            data-testid="tier-badge"
+            className="inline-flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-3 py-1 mb-2 font-bold"
+          >
+            <Check size={14} />
+            {activePass!.effectiveTier === 0
+              ? 'Email 驗證'
+              : activePass!.effectiveTier === 1
+                ? '社交帳號驗證'
+                : '高階驗證'}
+          </span>
+        )}
+
+        {/* Repeat-submission status banner */}
+        {account && myClaimCount > 0 && (
+          <div
+            data-testid="repeat-banner"
+            className={`mb-2 rounded-2xl border px-5 py-3.5 text-sm shadow-sm ${
+              atSubmissionLimit
+                ? 'bg-amber-50/70 border-amber-200 text-amber-900'
+                : 'bg-blue-50/50 border-blue-100 text-blue-900'
+            }`}
+          >
+            {atSubmissionLimit ? (
+              <p className="font-semibold">
+                <strong>已達填答次數上限：</strong>您此地址已填過 {myClaimCount} 次
+                {repeatsEnabled ? `（上限 ${maxTotalSubmissions} 次）` : ''}，無法再次提交。
+              </p>
+            ) : (
+              <div className="space-y-1">
+                <p className="font-semibold"><strong>您已填過 {myClaimCount} 次。</strong></p>
+                {repeatsEnabled && (
+                  <p className="text-xs text-blue-700 font-semibold">
+                    再填可得 {survey.repeat_reward} SSR，還可再填 {remainingSubmissions} 次。
+                  </p>
+                )}
+                <p className="text-xs text-slate-400">
+                  鏈上事件歷史不可抹除，每次提交都會獨立永久保留。
+                </p>
               </div>
             )}
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={submitDisabled}
-          className="bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold shadow-sm w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
+        {validationError && (
+          <div role="alert" className="text-rose-500 text-xs font-semibold flex items-center gap-1 bg-rose-50 border border-rose-100 rounded-xl p-3">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>{validationError}</span>
+          </div>
+        )}
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            validateAndPreview()
+          }}
+          noValidate
+          className="space-y-6"
         >
-          {submitLabel}
-        </button>
-      </form>
+          {survey.questions.map((q, i) => (
+            <div
+              key={q.id}
+              className="bg-white border border-slate-100 rounded-2xl p-5 space-y-4 shadow-sm hover:border-slate-250 transition-colors animate-fadeIn"
+            >
+              <div className="flex items-center justify-between border-b pb-2 border-slate-200/60">
+                <div className="flex items-center gap-3">
+                  <span className={`text-sm font-semibold transition-colors ${q.required ? 'text-rose-800' : 'text-slate-700'}`}>
+                    第 {i + 1} 題
+                  </span>
+                  {q.required && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 border border-rose-100 text-rose-800">
+                      必填
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
+                  {TYPE_LABELS_INFO[q.type as QuestionType]?.label ?? q.type}
+                </span>
+              </div>
+
+              <p className="text-base font-semibold text-slate-800">{q.prompt}</p>
+
+              <div className="mt-1">
+                {q.type === 'single_choice' && q.options_json && (
+                  <div className="space-y-2">
+                    {q.options_json.map((opt) => {
+                      const isChecked = answers[q.id] === opt
+                      return (
+                        <label
+                          key={opt}
+                          className={`flex items-center gap-2.5 text-sm font-medium cursor-pointer border rounded-xl px-3.5 py-2.5 transition-all w-full ${
+                            isChecked
+                              ? 'bg-blue-50/50 border-blue-200 text-blue-800 font-semibold'
+                              : 'bg-slate-50/50 border-slate-100 hover:bg-slate-50 text-slate-650'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name={q.id}
+                            value={opt}
+                            checked={isChecked}
+                            onChange={() => handleAnswerChange(q.id, opt)}
+                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-slate-300 transition-colors"
+                            aria-label={opt}
+                          />
+                          <span>{opt}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {q.type === 'multi_choice' && q.options_json && (
+                  <div className="space-y-2">
+                    {q.options_json.map((opt) => {
+                      const selected = (answers[q.id] as string[] | undefined) ?? []
+                      const isChecked = selected.includes(opt)
+                      return (
+                        <label
+                          key={opt}
+                          className={`flex items-center gap-2.5 text-sm font-medium cursor-pointer border rounded-xl px-3.5 py-2.5 transition-all w-full ${
+                            isChecked
+                              ? 'bg-blue-50/50 border-blue-200 text-blue-800 font-semibold'
+                              : 'bg-slate-50/50 border-slate-100 hover:bg-slate-50 text-slate-650'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            value={opt}
+                            checked={isChecked}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...selected, opt]
+                                : selected.filter((s) => s !== opt)
+                              handleAnswerChange(q.id, next)
+                            }}
+                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-slate-300 rounded transition-colors"
+                            aria-label={opt}
+                          />
+                          <span>{opt}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {q.type === 'text' && (
+                  <textarea
+                    className="w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 text-sm text-slate-800 bg-white placeholder:text-slate-400 font-mono transition-all"
+                    rows={3}
+                    value={(answers[q.id] as string | undefined) ?? ''}
+                    onChange={(e) => handleAnswerChange(q.id, e.target.value)}
+                    aria-label={q.prompt}
+                    placeholder="請輸入您的回答..."
+                  />
+                )}
+
+                {q.type === 'scale' && (
+                  <div className="flex flex-wrap gap-3">
+                    {[1, 2, 3, 4, 5].map((n) => {
+                      const isChecked = answers[q.id] === String(n)
+                      return (
+                        <label
+                          key={n}
+                          className={`flex flex-col items-center justify-center gap-1.5 cursor-pointer border rounded-xl p-3 w-12 h-14 transition-all ${
+                            isChecked
+                              ? 'bg-blue-50/50 border-blue-200 text-blue-800 ring-2 ring-blue-500/20'
+                              : 'bg-slate-50/50 border-slate-100 hover:bg-slate-50 text-slate-600'
+                          }`}
+                        >
+                          <span className={`text-xs font-bold ${isChecked ? 'text-blue-700' : 'text-slate-400'}`}>{n}</span>
+                          <input
+                            type="radio"
+                            name={q.id}
+                            value={String(n)}
+                            checked={isChecked}
+                            onChange={() => handleAnswerChange(q.id, String(n))}
+                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-slate-300 transition-colors"
+                            aria-label={String(n)}
+                          />
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {(!isPassValid || (activePass && activePass.effectiveTier < surveyMinTier)) && (
+            <div className="mt-4">
+              {!isPassValid ? (
+                <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-blue-850 text-left font-semibold">
+                    <strong>需要 SurveyPass 憑證：</strong> 填寫此問卷要求經過身分驗證。
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtpStep('input')
+                      setPhase('need_pass')
+                    }}
+                    className="bg-blue-600 hover:bg-blue-750 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap animate-pulse"
+                  >
+                    獲取 SurveyPass 憑證
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-amber-50/50 border border-amber-100 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-amber-850 text-left font-semibold">
+                    <strong>憑證等級不足：</strong> 本問卷要求 Tier {surveyMinTier}
+                    ，但您的憑證等級為 Tier {activePass!.effectiveTier}。
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtpStep('input')
+                      setPhase('need_pass')
+                    }}
+                    className="bg-amber-600 hover:bg-amber-750 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap"
+                  >
+                    升級 SurveyPass 憑證
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitDisabled}
+            className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3.5 rounded-xl transition-all shadow-md w-full disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            {submitLabel}
+          </button>
+        </form>
+      </div>
     </main>
   )
 }

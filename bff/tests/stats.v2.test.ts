@@ -8,13 +8,9 @@ vi.mock('@mysten/sui/client')
 const mockQueryEvents = vi.fn()
 const mockSuiClient = { queryEvents: mockQueryEvents } as unknown as SuiClient
 
-function makeFakeResultsOnlyPage(
-  vaultId: string,
-  respondents: string[],
-  hasNextPage = false,
-) {
+function makeFakeResultsOnlyPage(vaultId: string, respondents: string[], hasNextPage = false) {
   return {
-    data: respondents.map(r => ({
+    data: respondents.map((r) => ({
       parsedJson: {
         vault_id: vaultId,
         sub_hash: [1, 2, 3],
@@ -33,7 +29,9 @@ describe('TDD — S2.3 BFF Stats Integration', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('test_bff_stats_aggregates_by_index — BFF /stats/:vault 對結果-only 格式聚合正確', async () => {
-    mockQueryEvents.mockResolvedValueOnce(makeFakeResultsOnlyPage('0xvault-v2', ['0xuser1', '0xuser2']))
+    mockQueryEvents.mockResolvedValueOnce(
+      makeFakeResultsOnlyPage('0xvault-v2', ['0xuser1', '0xuser2'])
+    )
     const app = await buildApp({
       suiClient: mockSuiClient,
       cache: createStatsCache(),

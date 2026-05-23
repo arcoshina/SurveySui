@@ -1,7 +1,37 @@
-@import "tailwindcss";
+@import 'tailwindcss';
+
+@theme {
+  --color-blue-50: oklch(0.990 0.0091 254.604);
+  --color-blue-100: oklch(0.990 0.0208 255.585);
+  --color-blue-200: oklch(0.962 0.0384 254.128);
+  --color-blue-300: oklch(0.889 0.0683 251.813);
+  --color-blue-400: oklch(0.787 0.1073 254.624);
+  --color-blue-500: oklch(0.703 0.1391 259.815);
+  --color-blue-600: oklch(0.626 0.1593 262.881);
+  --color-blue-700: oklch(0.568 0.1580 264.376);
+  --color-blue-800: oklch(0.504 0.1294 265.638);
+  --color-blue-900: oklch(0.459 0.0949 265.522);
+  --color-blue-950: oklch(0.362 0.0592 267.935);
+
+  --color-indigo-50: oklch(0.990 0.0117 272.314);
+  --color-indigo-100: oklch(0.990 0.0221 272.788);
+  --color-indigo-200: oklch(0.959 0.0403 274.607);
+  --color-indigo-300: oklch(0.891 0.0689 274.539);
+  --color-indigo-400: oklch(0.799 0.1047 276.053);
+  --color-indigo-500: oklch(0.714 0.1300 277.517);
+  --color-indigo-600: oklch(0.618 0.1482 274.624);
+  --color-indigo-700: oklch(0.542 0.1352 276.012);
+  --color-indigo-800: oklch(0.479 0.1105 276.132);
+  --color-indigo-900: oklch(0.422 0.0839 275.521);
+  --color-indigo-950: oklch(0.308 0.0527 275.875);
+}
 
 @layer base {
   body {
-    font-family: "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
+    font-family: 'Noto Sans TC', ui-sans-serif, system-ui, sans-serif;
+  }
+  input:focus::placeholder,
+  textarea:focus::placeholder {
+    color: transparent;
   }
 }

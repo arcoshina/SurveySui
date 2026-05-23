@@ -117,7 +117,6 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
    admin  → amm_pool::admin_withdraw_sui（僅 admin）
 ```
 
-
 ### Sponsored Transaction 路徑（Flow B 核心）
 
 ```
@@ -186,6 +185,7 @@ SurveyVault<SurveySuiReward>  (shared object, 由合約驗證後派發)
 6. `pnpm e2e`（Playwright 跑真合約，全綠）
 
 對齊 [專案目標.md](專案目標.md)：
+
 - §MVP 要證明什麼 #1：受訪者錢包 0 SUI 也完成填答 → ✅
 - §MVP 要證明什麼 #2：合約純鏈上驗證 SurveyPass、無中心化後端 → ✅
 - §MVP 要證明什麼 #3：質押憑證 → 兌換 SSR 全鏈路 → ✅

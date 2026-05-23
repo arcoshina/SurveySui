@@ -80,7 +80,10 @@ export default function Navbar() {
     <header className="border-b border-neutral-100 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-md sticky top-0 z-50 transition-colors">
       <div className="mx-auto max-w-5xl px-6 h-12 flex items-center justify-between">
         {/* Left Side: Brand */}
-        <Link to="/" className="flex items-center gap-2 h-full text-xl font-bold tracking-tight text-neutral-900 dark:text-white hover:opacity-90">
+        <Link
+          to="/"
+          className="flex items-center gap-2 h-full text-xl font-bold tracking-tight text-neutral-900 dark:text-white hover:opacity-90"
+        >
           <img src="/logo.svg" alt="SurveySui logo" className="h-full w-auto" />
           <span>SurveySui</span>
         </Link>
@@ -130,7 +133,7 @@ export default function Navbar() {
           <div className="relative sm:hidden" ref={menuRef}>
             <button
               type="button"
-              onClick={() => setMenuOpen(v => !v)}
+              onClick={() => setMenuOpen((v) => !v)}
               className="p-2 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
               aria-label="開啟選單"
             >
@@ -152,7 +155,10 @@ export default function Navbar() {
                 )}
                 <button
                   type="button"
-                  onClick={() => { toggleLang(); setMenuOpen(false) }}
+                  onClick={() => {
+                    toggleLang()
+                    setMenuOpen(false)
+                  }}
                   className="flex items-center gap-2 w-full text-left text-sm font-semibold py-2 px-3 rounded-lg text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
                 >
                   <Languages size={16} />
@@ -160,7 +166,10 @@ export default function Navbar() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { toggleTheme(); setMenuOpen(false) }}
+                  onClick={() => {
+                    toggleTheme()
+                    setMenuOpen(false)
+                  }}
                   className="flex items-center gap-2 w-full text-left text-sm font-semibold py-2 px-3 rounded-lg text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
                 >
                   {isDark ? <Sun size={16} /> : <Moon size={16} />}

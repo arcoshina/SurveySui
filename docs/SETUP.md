@@ -18,11 +18,11 @@
 
 需要先有的：
 
-| 工具 | 安裝方式 |
-|---|---|
-| **Git for Windows** | https://git-scm.com/download/win |
-| **scoop** | PowerShell：`Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`，再 `irm get.scoop.sh \| iex` |
-| **Windows Terminal** | Microsoft Store（可選，但比預設 PowerShell 視窗好用） |
+| 工具                 | 安裝方式                                                                                                         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Git for Windows**  | https://git-scm.com/download/win                                                                                 |
+| **scoop**            | PowerShell：`Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`，再 `irm get.scoop.sh \| iex` |
+| **Windows Terminal** | Microsoft Store（可選，但比預設 PowerShell 視窗好用）                                                            |
 
 設定 git（換成你的）：
 
@@ -76,9 +76,11 @@ sui client balance
 ```
 
 > **取出 admin private key**（後面 `.env` 設定要用）：
+>
 > ```powershell
 > sui keytool export --key-identity <admin-address>
 > ```
+>
 > 複製輸出的 `aliasedPrivateKey` hex 字串，去掉 `0x` 前綴，填到 `.env` 的 `SUI_ADMIN_PRIVATE_KEY` 欄位中。
 
 ---
@@ -128,9 +130,9 @@ pnpm dev
 
 開啟瀏覽器存取：
 
-| 服務 | URL |
-|---|---|
-| 前端 | http://localhost:5173 |
+| 服務         | URL                          |
+| ------------ | ---------------------------- |
+| 前端         | http://localhost:5173        |
 | BFF 健康檢查 | http://localhost:3000/health |
 
 ---

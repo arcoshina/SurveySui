@@ -1,6 +1,6 @@
 # SurveySui — SurveyPass KYC 設計方案
 
-> 本檔記錄 SurveyPass 身分認證的設計架構，作為 S5.1 拍板輸出與後續版本的設計基線。
+> 本檔記錄 SurveyPass 身分認證的設計架構，作為 V2 S5.1 拍板輸出與後續版本的設計基線。
 > 實作約束見 [V2_TDD.md](V2_TDD.md)，任務追蹤見 [V2_Tasks.md](V2_Tasks.md)。
 
 ---
@@ -8,13 +8,18 @@
 ## 設計目標
 
 最小目標: 人機驗證  
-中期目標:  
-    - 防女巫
-      - 同一真人只能持有一組獨特 ID ，多張有效 Pass  
-      - 同一地址只能持有一張有效 Pass
-    - 基本 KYC（國籍、收入區間等受眾屬性）
-      - 作為一個 Pass 下的子物件  
-長期目標: 與匿名投票方案（nullifier 架構）相容  
+中期目標:
+
+- 防女巫 - 同一真人只能持有一組獨特 ID ，多張有效 Pass
+- 同一地址只能持有一張有效 Pass - 基本 KYC（國籍、收入區間等受眾屬性）- 作為一個 Pass 下的子物件  
+  長期目標: 與匿名投票方案（nullifier 架構）相容
+
+## 空白問卷解密金鑰存取策略（S4.2 延後評估）
+
+- 只對合格的受訪者顯示解密的空白問卷內容，或是由發起者自建密碼
+- 受訪者仍需從連結取得 `contentKey`；若要改為「持有有效 SurveyPass 即可換取」，需引入以下其中一種機制，評估留至下一版：
+  - **BFF 金鑰伺服器**：鏈上驗證 Pass 後由 BFF 回傳 `contentKey`（中心化，實作較簡單）
+  - **Seal（Mysten 閾值加密服務）**：policy 寫在 Move 合約，去中心化，與 SurveyPass 整合後 URL 可完全不攜帶金鑰
 
 **核心設計原則**
 
@@ -27,25 +32,25 @@
 
 ## 一、信任層級（Trust Tier）
 
-| Tier | 驗證來源 | 防女巫強度 | 說明 |
-|------|---------|-----------|------|
-| 2 | **World ID** | 最強 | 虹膜 ZK proof，唯一生物特徵，已生產環境驗證 |
-| 2 | **Self Protocol** | 強 | 政府 ID ZK（護照/身分證 NFC），年齡、國籍可機器驗證 |
-| 1 | **Social Media OAuth** | 中 | Google、X、GitHub 帳號；成本低但多帳號仍可繞 |
-| 0 | **Email OTP** | 弱 | 只做輔助訊號，不單獨作為防女巫依據 |
-| 0 | **自申報** | 無 | 屬性僅供問卷篩選，無法防女巫 |
+| Tier | 驗證來源               | 防女巫強度 | 說明                                                |
+| ---- | ---------------------- | ---------- | --------------------------------------------------- |
+| 2    | **World ID**           | 最強       | 虹膜 ZK proof，唯一生物特徵，已生產環境驗證         |
+| 2    | **Self Protocol**      | 強         | 政府 ID ZK（護照/身分證 NFC），年齡、國籍可機器驗證 |
+| 1    | **Social Media OAuth** | 中         | Google、X、GitHub 帳號；成本低但多帳號仍可繞        |
+| 0    | **Email OTP**          | 弱         | 只做輔助訊號，不單獨作為防女巫依據                  |
+| 0    | **自申報**             | 無         | 屬性僅供問卷篩選，無法防女巫                        |
 
 `effective_tier = max(tier of all non-expired credentials)`
 
 ### 各來源與 Sui 的整合現況
 
-| 來源 | Sui 鏈上直驗 | 目前可行路徑 | 備註 |
-|------|------------|------------|------|
-| **World ID** | 技術可行，官方未支援 | BFF 鏈下驗，簽 ticket 上鏈 | 見下方說明 |
-| **Self Protocol** | 技術可行（亦為 Groth16） | BFF 鏈下驗 或 官方 SDK | Self Protocol 支援非 EVM，整合相對開放 |
-| **Social OAuth** | 不適用（OAuth 非 ZK） | BFF 驗 OAuth token，簽 ticket | 永遠走 BFF，無法去中心化 |
-| **Email OTP** | 不適用 | BFF 驗 OTP，簽 ticket | 同上 |
-| **自申報** | 不適用 | BFF 簽 ticket 即可 | 無外部驗證 |
+| 來源              | Sui 鏈上直驗             | 目前可行路徑                  | 備註                                   |
+| ----------------- | ------------------------ | ----------------------------- | -------------------------------------- |
+| **World ID**      | 技術可行，官方未支援     | BFF 鏈下驗，簽 ticket 上鏈    | 見下方說明                             |
+| **Self Protocol** | 技術可行（亦為 Groth16） | BFF 鏈下驗 或 官方 SDK        | Self Protocol 支援非 EVM，整合相對開放 |
+| **Social OAuth**  | 不適用（OAuth 非 ZK）    | BFF 驗 OAuth token，簽 ticket | 永遠走 BFF，無法去中心化               |
+| **Email OTP**     | 不適用                   | BFF 驗 OTP，簽 ticket         | 同上                                   |
+| **自申報**        | 不適用                   | BFF 簽 ticket 即可            | 無外部驗證                             |
 
 #### World ID 在 Sui 的限制說明
 
@@ -61,11 +66,11 @@ Sui Move 標準庫內建 `sui::groth16` 模組，可在鏈上驗任意 Groth16 Z
   Sui 上沒有官方的 root 來源
 ```
 
-| 解法 | 可行性 | 問題 |
-|------|--------|------|
-| 跨鏈橋（Wormhole / Axelar）同步 root | 可行 | 延遲高，多一個信任假設 |
-| Worldcoin 官方支援 Sui | 目前無路線圖 | — |
-| **BFF 鏈下驗 World ID proof，簽 ticket 上鏈** | **最務實** | 信任集中在 BFF，符合現有 INV-7 架構 |
+| 解法                                          | 可行性       | 問題                                |
+| --------------------------------------------- | ------------ | ----------------------------------- |
+| 跨鏈橋（Wormhole / Axelar）同步 root          | 可行         | 延遲高，多一個信任假設              |
+| Worldcoin 官方支援 Sui                        | 目前無路線圖 | —                                   |
+| **BFF 鏈下驗 World ID proof，簽 ticket 上鏈** | **最務實**   | 信任集中在 BFF，符合現有 INV-7 架構 |
 
 **S6 採用 BFF 鏈下驗**。待 Worldcoin 官方支援 Sui 或跨鏈 root 同步方案成熟後，可升級為鏈上直驗——Pass 資料結構不需改動。
 
@@ -79,12 +84,12 @@ Credential 以 **Dynamic Field** 掛載在 `SurveyPass` 下，key = `source: u8`
 ```move
 use sui::dynamic_field;
 
-// SourceType 常數（= trust tier）
-const SRC_SELF_REPORT:   u8 = 1;
-const SRC_EMAIL:         u8 = 2;
-const SRC_SOCIAL:        u8 = 3;
-const SRC_SELF_PROTOCOL: u8 = 4;
-const SRC_WORLD_ID:      u8 = 5;
+// SourceType 常數 (注意：此為來源編號，非信任等級 Trust Tier)
+const SRC_SELF_REPORT:   u8 = 1; // 對應 Tier 0
+const SRC_EMAIL:         u8 = 2; // 對應 Tier 0
+const SRC_SOCIAL:        u8 = 3; // 對應 Tier 1
+const SRC_SELF_PROTOCOL: u8 = 4; // 對應 Tier 2
+const SRC_WORLD_ID:      u8 = 5; // 對應 Tier 2
 
 // PassStatus 常數
 const STATUS_ACTIVE:    u8 = 0;
@@ -195,20 +200,20 @@ hash("voting_eligible:true" || salt)
 
 ### 支援的屬性類別
 
-| 類別 | 範例屬性 | 可能來源 |
-|------|---------|---------|
-| 人口 | gender, age_range, language | 自申報、Self Protocol |
-| 地理 | country, state, city, zip_code | 自申報、Self Protocol |
-| 法律 | age_verified, voting_eligible, residency | Self Protocol |
-| 財務 | income_range, employment_status | 自申報、Reclaim Protocol（未來） |
+| 類別 | 範例屬性                                 | 可能來源                         |
+| ---- | ---------------------------------------- | -------------------------------- |
+| 人口 | gender, age_range, language              | 自申報、Self Protocol            |
+| 地理 | country, state, city, zip_code           | 自申報、Self Protocol            |
+| 法律 | age_verified, voting_eligible, residency | Self Protocol                    |
+| 財務 | income_range, employment_status          | 自申報、Reclaim Protocol（未來） |
 
 ### 問卷屬性驗證流程
 
-問卷設定 `min_tier: 3, required: [age≥18, gender:male]`：
+問卷設定 `min_tier: 2, required: [age≥18, gender:male]`：
 
 ```
 1. 用戶 → BFF：我要填 #{vault_id}，Pass = #{pass_id}
-2. BFF  → 鏈上確認：pass 存在、status = Active、tier ≥ 3
+2. BFF  → 鏈上確認：pass 存在、status = Active、tier ≥ 2
 3. 用戶 → BFF：提交對應葉節點的 Merkle proof
 4. BFF  → 驗 proof 通過 → 簽發 survey_access_token（短效，5 分鐘）
 5. 用戶 → 合約：填答 + token
@@ -245,13 +250,13 @@ hash("voting_eligible:true" || salt)
 
 ### 狀態轉換觸發
 
-| 轉換 | 觸發者 | 說明 |
-|------|--------|------|
-| → Expired | 時間（合約讀 `expires_at`） | 到期後可透過續期恢復 Active |
-| → Suspended | 管理員 | 詐騙調查、臨時鎖定 |
-| Suspended → Active | 管理員 | 調查結束，清除嫌疑 |
-| → Revoked | 管理員 / 用戶 | 確認違規、帳號刪除、GDPR 請求 |
-| → 物件刪除 | 用戶 / 管理員 | Revoked 後呼叫 `object::delete()`，清除鏈上紀錄 |
+| 轉換               | 觸發者                      | 說明                                            |
+| ------------------ | --------------------------- | ----------------------------------------------- |
+| → Expired          | 時間（合約讀 `expires_at`） | 到期後可透過續期恢復 Active                     |
+| → Suspended        | 管理員                      | 詐騙調查、臨時鎖定                              |
+| Suspended → Active | 管理員                      | 調查結束，清除嫌疑                              |
+| → Revoked          | 管理員 / 用戶               | 確認違規、帳號刪除、GDPR 請求                   |
+| → 物件刪除         | 用戶 / 管理員               | Revoked 後呼叫 `object::delete()`，清除鏈上紀錄 |
 
 ---
 
@@ -287,14 +292,14 @@ IssuanceTicket {
 
 ## 六、資料刪除能力（GDPR / 隱私合規）
 
-| 層 | 資料 | 可刪性 | 刪除機制 |
-|----|------|--------|---------|
-| Off-chain | 原始屬性（性別、年齡…） | **完全可刪** | BFF DB delete |
-| Off-chain | Merkle leaves + salt | **完全可刪** | BFF DB delete（commitment 成孤立，屬性不可再證明） |
-| On-chain | 單一來源 `CredentialSlot` | **可單獨刪** | `remove_credential(pass, SRC_*)` via dynamic_field |
-| On-chain | `encrypted_payload` | **可覆寫為空** | 呼叫 `clear_payload` entry |
-| On-chain | Pass 物件（含全部 credential） | **可刪**（Revoked 後） | 先逐一 `remove_credential` 清空 dynamic fields，再 `object::delete()` |
-| 鏈上歷史 | 交易紀錄、Pass 曾存在的事實 | **不可刪** | 區塊鏈特性；但 nullifier hash 本身不是 PII |
+| 層        | 資料                           | 可刪性                 | 刪除機制                                                              |
+| --------- | ------------------------------ | ---------------------- | --------------------------------------------------------------------- |
+| Off-chain | 原始屬性（性別、年齡…）        | **完全可刪**           | BFF DB delete                                                         |
+| Off-chain | Merkle leaves + salt           | **完全可刪**           | BFF DB delete（commitment 成孤立，屬性不可再證明）                    |
+| On-chain  | 單一來源 `CredentialSlot`      | **可單獨刪**           | `remove_credential(pass, SRC_*)` via dynamic_field                    |
+| On-chain  | `encrypted_payload`            | **可覆寫為空**         | 呼叫 `clear_payload` entry                                            |
+| On-chain  | Pass 物件（含全部 credential） | **可刪**（Revoked 後） | 先逐一 `remove_credential` 清空 dynamic fields，再 `object::delete()` |
+| 鏈上歷史  | 交易紀錄、Pass 曾存在的事實    | **不可刪**             | 區塊鏈特性；但 nullifier hash 本身不是 PII                            |
 
 **GDPR 聲明立場**：鏈上承諾雜湊（Merkle root）和 nullifier hash 屬於假名識別碼，非 PII。原始個人屬性僅存於 BFF，用戶可請求完整刪除。刪除後 Pass 物件仍在鏈上，但屬性不再可證明，用戶可選擇進一步刪除 Pass 物件。
 
@@ -304,16 +309,16 @@ IssuanceTicket {
 
 ```
 S6.1   合約：NullifierRegistry + SurveyPass struct + mint / revoke entry
-       BFF：/auth/issue-ticket（先支援 Email tier2 + Social tier3）
+       BFF：/auth/issue-ticket（先支援 Email (SRC_EMAIL = 2, 對應 Tier 0) + Social (SRC_SOCIAL = 3, 對應 Tier 1)）
        前端：AuthPage + 首次連錢包 pass 檢查（S6.2）
 
-S6.2   World ID 整合（tier 5）
+S6.2   World ID 整合（SRC_WORLD_ID = 5, 對應 Tier 2）
        BFF：/auth/world-id endpoint
 
 S6.3   公鑰寫入 SurveyPass.encryption_pubkey（對接 Seal / 加密公鑰方案）
 
 未來版本
-       Self Protocol（tier 4，政府 ID ZK）
+       Self Protocol（SRC_SELF_PROTOCOL = 4, 對應 Tier 2，政府 ID ZK）
        屬性 ZK proof 替換 BFF Merkle 驗證（純鏈上屬性驗證）
        Reclaim Protocol（財務屬性自主證明）
 ```
@@ -322,13 +327,13 @@ S6.3   公鑰寫入 SurveyPass.encryption_pubkey（對接 Seal / 加密公鑰方
 
 ## 八、與其他模組的依賴
 
-| 依賴點 | 說明 |
-|--------|------|
-| S4.2 / S6.3 加密公鑰 | `encryption_pubkey` 欄位預留，等 Seal 方案確認後填入 |
-| 匿名投票（S5.2） | Pass 需預留 ZK 友善的 commitment 結構，避免未來重大改版 |
-| Gas Station（S4.3） | mint pass 的交易是否走 sponsored 路徑，待 S6.1 確認 |
-| INV-6 Pass 不消耗 | 已在既有 Move 測試中驗證，新欄位加入後需回歸 |
-| INV-7 BFF 無 admin key | ticket-only key 架構確保符合此不變式 |
+| 依賴點                 | 說明                                                    |
+| ---------------------- | ------------------------------------------------------- |
+| S4.2 / S6.3 加密公鑰   | `encryption_pubkey` 欄位預留，等 Seal 方案確認後填入    |
+| 匿名投票（S5.2）       | Pass 需預留 ZK 友善的 commitment 結構，避免未來重大改版 |
+| Gas Station（S4.3）    | mint pass 的交易是否走 sponsored 路徑，待 S6.1 確認     |
+| INV-6 Pass 不消耗      | 已在既有 Move 測試中驗證，新欄位加入後需回歸            |
+| INV-7 BFF 無 admin key | ticket-only key 架構確保符合此不變式                    |
 
 ---
 
@@ -342,5 +347,5 @@ S6.3   公鑰寫入 SurveyPass.encryption_pubkey（對接 Seal / 加密公鑰方
 
 ---
 
-*最後更新：2026-05-20*
-*設計者：S5.1 設計拍板（與 Claude 協作）*
+_最後更新：2026-05-20_
+_設計者：S5.1 設計拍板（與 Claude 協作）_

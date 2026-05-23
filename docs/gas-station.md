@@ -4,13 +4,13 @@
 
 在 Sui 區塊鏈中，Sponsor 代付交易（Sponsored Transactions）是一項原生且極為強大的特性。為了解決受訪者錢包餘額為 0 SUI 也能順暢提交問卷的痛點，我們評估了以下三種代付技術方案：
 
-| 評估維度 | 方案 A：Sui 官方 SDK 原生代付 (推薦) | 方案 B：Mysten Enoki Gas Pool | 方案 C：Shinami Gas Station |
-| :--- | :--- | :--- | :--- |
-| **主導開發方** | Mysten Labs (官方 SDK `@mysten/sui`) | Mysten Labs | Shinami (第三方) |
-| **技術架構** | 極簡無狀態架構。後端使用官方 SDK 載入代付私鑰即可對交易簽名。 | SaaS 平台，需與 Enoki zkLogin 靜默錢包高度綁定。 | 第三方 SaaS 平台，具備預算分析與 Dashboard。 |
-| **CORS 限制** | 後端接口完全自主控制，無 CORS 問題。 | 前端直接集成時受限於 API Key 安全曝光風險。 | 不支援 CORS，必須由後端代理轉發。 |
-| **測試方便性** | **極高**。支援本地離線 Test Scenario 與 Devnet 測試，無需任何 API 金鑰。 | 較低，需於開發者後台配置多種帳戶與證書。 | 較低，需開通第三方帳戶並為 Devnet/Testnet 充值 SUI。 |
-| **計費方式** | 完全依據鏈上真實 Gas 消耗（由代付錢包支付）。 | 支援法幣 (Fiat-only) 支付或 SUI 扣款。 | 依據 Gas 消耗量 + Shinami 服務手續費。 |
+| 評估維度       | 方案 A：Sui 官方 SDK 原生代付 (推薦)                                     | 方案 B：Mysten Enoki Gas Pool                    | 方案 C：Shinami Gas Station                          |
+| :------------- | :----------------------------------------------------------------------- | :----------------------------------------------- | :--------------------------------------------------- |
+| **主導開發方** | Mysten Labs (官方 SDK `@mysten/sui`)                                     | Mysten Labs                                      | Shinami (第三方)                                     |
+| **技術架構**   | 極簡無狀態架構。後端使用官方 SDK 載入代付私鑰即可對交易簽名。            | SaaS 平台，需與 Enoki zkLogin 靜默錢包高度綁定。 | 第三方 SaaS 平台，具備預算分析與 Dashboard。         |
+| **CORS 限制**  | 後端接口完全自主控制，無 CORS 問題。                                     | 前端直接集成時受限於 API Key 安全曝光風險。      | 不支援 CORS，必須由後端代理轉發。                    |
+| **測試方便性** | **極高**。支援本地離線 Test Scenario 與 Devnet 測試，無需任何 API 金鑰。 | 較低，需於開發者後台配置多種帳戶與證書。         | 較低，需開通第三方帳戶並為 Devnet/Testnet 充值 SUI。 |
+| **計費方式**   | 完全依據鏈上真實 Gas 消耗（由代付錢包支付）。                            | 支援法幣 (Fiat-only) 支付或 SUI 扣款。           | 依據 Gas 消耗量 + Shinami 服務手續費。               |
 
 ---
 
@@ -20,13 +20,15 @@
 
 1. **核心技術 (優先使用官方工具)**：
    後端 Fastify 伺服器建立一個 `/api/gas/sponsor` 接口。該接口直接使用 `@mysten/sui` 的原生 `Transaction` 代付屬性：
+
    ```typescript
-   tx.setSender(senderAddress);
-   tx.setGasOwner(sponsorAddress);
+   tx.setSender(senderAddress)
+   tx.setGasOwner(sponsorAddress)
    // 由後端動態分配 sponsor 擁有的 Gas Coin 物件與預算
-   tx.setGasPayment(gasCoins);
-   tx.setGasBudget(gasBudget);
+   tx.setGasPayment(gasCoins)
+   tx.setGasBudget(gasBudget)
    ```
+
    代付人在本地即為 `SUI_ADMIN` (管理員帳號)。此方案 100% 使用官方原生工具，不引入任何額外外部依賴，測試穩定度最高。
 
 2. **第三方 Fallback (Shinami Gas Station)**：

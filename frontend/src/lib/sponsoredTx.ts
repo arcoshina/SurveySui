@@ -36,7 +36,7 @@ function bytesToBase64(bytes: Uint8Array): string {
  */
 export function buildClaimPtb(params: ClaimPtbParams): Transaction {
   const tx = new Transaction()
-  
+
   const encryptedAnswersBytes = hexToBytes(params.encryptedAnswers)
 
   tx.moveCall({
@@ -65,7 +65,7 @@ export async function dryRunAndSponsorTx(params: {
   const { tx, senderAddress, client, backendUrl = '' } = params
 
   tx.setSender(senderAddress)
-  
+
   // Build only the transaction kind so that the backend can attach its own gas payment
   const txBytes = await tx.build({ client, onlyTransactionKind: true })
   const txBase64 = bytesToBase64(txBytes)
@@ -80,7 +80,9 @@ export async function dryRunAndSponsorTx(params: {
   })
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'unknown', message: 'Sponsorship request failed' }))
+    const err = await res
+      .json()
+      .catch(() => ({ error: 'unknown', message: 'Sponsorship request failed' }))
     const msg = err.message || `Sponsorship failed with status ${res.status}`
     // Treat any 422 or server-reported dry-run/move-abort failure as a
     // pre-flight rejection — the user has not paid gas in this branch.
@@ -90,7 +92,7 @@ export async function dryRunAndSponsorTx(params: {
     throw new Error(msg)
   }
 
-  const result = await res.json() as SponsoredTxResult
+  const result = (await res.json()) as SponsoredTxResult
   return result
 }
 
@@ -116,12 +118,15 @@ export async function executeTxWithFallback(params: {
   // Path 1: Try BFF-sponsored
   try {
     const { sponsoredTxBytes, sponsorSignature } = await dryRunAndSponsorTx({
-      tx, senderAddress, client, backendUrl,
+      tx,
+      senderAddress,
+      client,
+      backendUrl,
     })
     return { mode: 'sponsored', sponsoredTxBytes, sponsorSignature }
   } catch (err: any) {
     if (err.message?.startsWith('DRY_RUN_REJECTED')) {
-      throw err  // Contract rejected — do NOT fallback to self-paid
+      throw err // Contract rejected — do NOT fallback to self-paid
     }
     // Any other error (network, 5xx) → BFF unreachable, attempt client dry-run
   }

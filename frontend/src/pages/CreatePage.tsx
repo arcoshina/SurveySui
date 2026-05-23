@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { Trash2, AlertTriangle, Plus } from 'lucide-react'
 import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit'
 import { renderMarkdown } from '../lib/markdown'
 import {
@@ -43,11 +44,11 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   scale: '量表（1-5）',
 }
 
-const TYPE_LABELS_INFO: Record<QuestionType, { label: string; icon: string }> = {
-  single_choice: { label: '單選', icon: '🔘' },
-  multi_choice: { label: '複選', icon: '☑️' },
-  text: { label: '簡答', icon: '📝' },
-  scale: { label: '量表 (1-5)', icon: '📊' },
+const TYPE_LABELS_INFO: Record<QuestionType, { label: string }> = {
+  single_choice: { label: '單選' },
+  multi_choice: { label: '複選' },
+  text: { label: '簡答' },
+  scale: { label: '量表 (1-5)' },
 }
 
 interface DraftEntry {
@@ -73,7 +74,6 @@ export default function CreatePage() {
   const navigate = useNavigate()
   const { draftId } = useParams<{ draftId: string }>()
   const [data, setData] = useState<FullSurveyData>(makeBlankSurveyData)
-  const [activeTab, setActiveTab] = useState<'questions' | 'settings'>('questions')
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -91,10 +91,6 @@ export default function CreatePage() {
 
   // 預覽期鎖定 draftStamp，避免 hash 飄動
   const previewDraftStamp = useMemo(() => new Date().toISOString(), [])
-  const previewMd = useMemo(
-    () => serializeFullSurveyToMarkdown(data, { draftStamp: previewDraftStamp }),
-    [data, previewDraftStamp],
-  )
 
   const account = useCurrentAccount()
   const packageId = import.meta.env.VITE_PACKAGE_ID ?? ''
@@ -103,7 +99,7 @@ export default function CreatePage() {
   const { data: poolData } = useSuiClientQuery(
     'getObject',
     { id: poolId, options: { showContent: true } },
-    { enabled: !!poolId },
+    { enabled: !!poolId }
   )
 
   const { data: coinsData } = useSuiClientQuery(
@@ -112,7 +108,7 @@ export default function CreatePage() {
       owner: account?.address ?? '',
       coinType: `${packageId}::stacked_survey_reward::STACKED_SURVEY_REWARD`,
     },
-    { enabled: !!account && !!packageId },
+    { enabled: !!account && !!packageId }
   )
 
   const totalSuiInvested = useMemo<bigint>(() => {
@@ -157,6 +153,8 @@ export default function CreatePage() {
       try {
         const est = estimateFundCostV2({
           perResponse: BigInt(data.perResponse),
+          repeatReward: BigInt(data.repeatReward),
+          repeatMaxTimes: data.repeatMaxTimes,
           maxResponses: data.maxResponses,
           totalSuiInvested,
           feeConfig,
@@ -169,7 +167,15 @@ export default function CreatePage() {
       }
     }, 200)
     return () => clearTimeout(timer)
-  }, [data.perResponse, data.maxResponses, totalSuiInvested, feeConfig, creatorSsrBalance])
+  }, [
+    data.perResponse,
+    data.repeatReward,
+    data.repeatMaxTimes,
+    data.maxResponses,
+    totalSuiInvested,
+    feeConfig,
+    creatorSsrBalance,
+  ])
 
   // ── 表單更新 helpers ────────────────────────────────────────────────────────
 
@@ -177,6 +183,7 @@ export default function CreatePage() {
     setData((prev) => ({ ...prev, [key]: value }))
   }
 
+  // 預載空字串
   function updateQuestion(index: number, patch: Partial<Question>) {
     setData((prev) => ({
       ...prev,
@@ -192,14 +199,15 @@ export default function CreatePage() {
         {
           id: nextQuestionId(prev.questions),
           type: 'single_choice',
-          prompt: '新題目',
-          options_json: ['選項 A', '選項 B'],
+          prompt: '',
+          options_json: ['', ''],
           required: false,
         },
       ],
     }))
   }
 
+  // 預載空字串
   function deleteQuestion(index: number) {
     setData((prev) => ({ ...prev, questions: prev.questions.filter((_, i) => i !== index) }))
   }
@@ -209,7 +217,7 @@ export default function CreatePage() {
       const target = index + dir
       if (target < 0 || target >= prev.questions.length) return prev
       const next = [...prev.questions]
-      ;[next[index], next[target]] = [next[target], next[index]]
+        ;[next[index], next[target]] = [next[target], next[index]]
       return { ...prev, questions: next }
     })
   }
@@ -219,7 +227,7 @@ export default function CreatePage() {
     updateQuestion(index, {
       type: newType,
       options_json: needsOptions
-        ? data.questions[index].options_json ?? ['選項 A', '選項 B']
+        ? (data.questions[index].options_json ?? ['', ''])
         : null,
     })
   }
@@ -240,9 +248,7 @@ export default function CreatePage() {
     setData((prev) => ({
       ...prev,
       questions: prev.questions.map((q, i) =>
-        i === qIndex && q.options_json
-          ? { ...q, options_json: [...q.options_json, '新選項'] }
-          : q,
+        i === qIndex && q.options_json ? { ...q, options_json: [...q.options_json, ''] } : q
       ),
     }))
   }
@@ -253,7 +259,7 @@ export default function CreatePage() {
       questions: prev.questions.map((q, i) =>
         i === qIndex && q.options_json
           ? { ...q, options_json: q.options_json.filter((_, j) => j !== optIndex) }
-          : q,
+          : q
       ),
     }))
   }
@@ -277,13 +283,6 @@ export default function CreatePage() {
     const date = new Date().toISOString().slice(0, 10)
     const slug = data.title.replace(/[^\w一-龥-]+/g, '-').slice(0, 40) || 'survey'
     downloadMd(md, `survey-${slug}-${date}.md`)
-  }
-
-  function handleDownloadTemplate() {
-    const md = serializeFullSurveyToMarkdown(makeBlankSurveyData(), {
-      draftStamp: new Date().toISOString(),
-    })
-    downloadMd(md, 'survey-template.md')
   }
 
   function handleUploadClick() {
@@ -317,18 +316,23 @@ export default function CreatePage() {
     if (!data.title.trim()) return '請填寫問卷標題'
     if (!Number.isInteger(data.perResponse) || data.perResponse <= 0)
       return 'perResponse 必須為正整數'
+    if (!Number.isInteger(data.repeatReward) || data.repeatReward < 0)
+      return 'repeatReward 必須為非負整數（0 = 禁止重複填答）'
+    if (!Number.isInteger(data.repeatMaxTimes) || data.repeatMaxTimes < 1)
+      return 'repeatMaxTimes 必須為正整數'
     if (!Number.isInteger(data.maxResponses) || data.maxResponses <= 0)
       return 'maxResponses 必須為正整數'
-    if (!data.deadlineMs || isNaN(data.deadlineMs))
-      return 'deadline 格式無效'
+    if (!data.deadlineMs || isNaN(data.deadlineMs)) return 'deadline 格式無效'
     if (data.deadlineMs <= Date.now()) return 'deadline 須為未來時間'
-    if (data.minTier < 0 || data.minTier > 3) return 'minTier 必須為 0-3'
+    if (data.minTier < 0 || data.minTier > 2) return 'minTier 必須為 0-2'
     if (data.questions.length === 0) return '至少需要一題'
     for (const q of data.questions) {
       if (!q.id.trim()) return '題目 id 不可為空'
       if (!q.prompt.trim()) return `題目 ${q.id} prompt 不可為空`
-      if ((q.type === 'single_choice' || q.type === 'multi_choice') &&
-          (!q.options_json || q.options_json.length === 0)) {
+      if (
+        (q.type === 'single_choice' || q.type === 'multi_choice') &&
+        (!q.options_json || q.options_json.length === 0)
+      ) {
         return `題目 ${q.id} 至少需要一個選項`
       }
     }
@@ -357,7 +361,7 @@ export default function CreatePage() {
     const draftId = makeDraftId()
     window.localStorage.setItem(
       `${DRAFT_KEY_PREFIX}${draftId}`,
-      JSON.stringify({ contentMd, encrypt: true, savedAt: Date.now() }),
+      JSON.stringify({ contentMd, encrypt: false, savedAt: Date.now() })
     )
     navigate(`/fund/${draftId}`)
   }
@@ -368,179 +372,319 @@ export default function CreatePage() {
     <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto">
       <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
         <div className="space-y-2">
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            📝 建立問卷
+          <h1 className="text-2xl font-semibold text-slate-800 flex items-center gap-2">
+            建立問卷
           </h1>
           <p className="text-sm text-slate-500">
-            請在下方分頁中設計您的問卷內容與設定。完成後，下一步可進行互動預覽、下載 Markdown 草稿並發佈至 Sui 鏈上。
+            請在下方設計您的問卷內容與設定。完成後，下一步可進行互動預覽、下載 Markdown 草稿並發佈至
+            Sui 鏈上。
           </p>
         </div>
 
-        {/* 雙分頁 Tabs */}
-        <div className="flex border-b border-slate-200">
-          <button
-            type="button"
-            onClick={() => setActiveTab('questions')}
-            className={`flex-1 py-3.5 text-center font-bold text-sm border-b-2 transition-all flex items-center justify-center gap-2 ${
-              activeTab === 'questions'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-slate-400 hover:text-slate-600 hover:border-slate-300'
-            }`}
-          >
-            📋 問題編輯 ({data.questions.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('settings')}
-            className={`flex-1 py-3.5 text-center font-bold text-sm border-b-2 transition-all flex items-center justify-center gap-2 ${
-              activeTab === 'settings'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-slate-400 hover:text-slate-600 hover:border-slate-300'
-            }`}
-          >
-            ⚙️ 問卷設定
-          </button>
-        </div>
-
         <form onSubmit={handleSubmit} noValidate className="space-y-6">
-          {activeTab === 'questions' && (
-            <div className="space-y-6">
-              {/* 基本資訊 */}
-              <section className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 space-y-4">
-                <h2 className="font-bold text-slate-800 text-lg flex items-center gap-1.5 border-b pb-2 border-slate-100">
-                  ℹ️ 基本資訊
-                </h2>
+          <div className="space-y-6">
+            {/* 基本資訊 */}
+            <section className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 space-y-4">
+              <h2 className="text-xl text-slate-800 flex items-center gap-1.5 border-b pb-2 border-slate-100">
+                基本資訊
+              </h2>
 
+              <label className="block">
+                <span className="text-base text-slate-600">問卷標題</span>
+                <input
+                  type="text"
+                  value={data.title}
+                  onChange={(e) => updateField('title', e.target.value)}
+                  className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
+                  placeholder="請輸入問卷標題..."
+                  aria-label="問卷標題"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-base text-slate-600">問卷說明（顯示給填寫者）</span>
+                <textarea
+                  value={data.description}
+                  onChange={(e) => updateField('description', e.target.value)}
+                  rows={4}
+                  className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-mono text-sm text-slate-700 bg-white"
+                  placeholder="請輸入問卷前言、注意事項或說明..."
+                  aria-label="description"
+                />
+              </label>
+            </section>
+
+            {/* 獎勵與限制設定 */}
+            <section className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 space-y-4">
+              <h2 className="text-xl slate-800 flex items-center gap-1.5 border-b pb-2 border-slate-100">
+                獎勵與限制
+              </h2>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <label className="block">
-                  <span className="text-sm font-bold text-slate-600">問卷標題</span>
+                  <span className="text-base text-slate-600">每份填答獎勵 (SSR)</span>
                   <input
-                    type="text"
-                    value={data.title}
-                    onChange={(e) => updateField('title', e.target.value)}
+                    type="number"
+                    min={1}
+                    value={data.perResponse}
+                    onChange={(e) => updateField('perResponse', Number(e.target.value))}
                     className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
-                    placeholder="請輸入問卷標題..."
-                    aria-label="問卷標題"
+                    placeholder="請輸入 SSR 數額"
+                    aria-label="perResponse"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="text-sm font-bold text-slate-600">問卷說明（顯示給填寫者）</span>
-                  <textarea
-                    value={data.description}
-                    onChange={(e) => updateField('description', e.target.value)}
-                    rows={4}
-                    className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-mono text-sm text-slate-700 bg-white"
-                    placeholder="請輸入問卷前言、注意事項或說明..."
-                    aria-label="description"
+                  <span className="text-base text-slate-600">限制名額上限</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={data.maxResponses}
+                    onChange={(e) => updateField('maxResponses', Number(e.target.value))}
+                    className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
+                    placeholder="請輸入最大份數"
+                    aria-label="maxResponses"
                   />
                 </label>
-              </section>
+              </div>
 
-              {/* 題目區 */}
-              <section className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="font-bold text-slate-800 text-lg">💡 題目列表</h2>
-                  <button
-                    type="button"
-                    onClick={addQuestion}
-                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl text-xs font-bold hover:shadow-md hover:brightness-110 transition-all flex items-center gap-1.5"
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="text-base text-slate-600">截止時間</span>
+                  <input
+                    type="datetime-local"
+                    value={deadlineLocal}
+                    onChange={(e) => {
+                      const ms = new Date(e.target.value).getTime()
+                      if (!isNaN(ms)) updateField('deadlineMs', ms)
+                    }}
+                    className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
+                    aria-label="deadline"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-base text-slate-600">身分憑證門檻</span>
+                  <select
+                    value={data.minTier}
+                    onChange={(e) => updateField('minTier', Number(e.target.value))}
+                    className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
+                    aria-label="minTier"
                   >
-                    ➕ 新增題目
-                  </button>
+                    <option value={0}>Tier 0 - Email 認證</option>
+                    <option value={1}>Tier 1 - OAuth 級認證</option>
+                    <option value={2}>Tier 2 - 政府/生物識別</option>
+                  </select>
+                </label>
+              </div>
+
+              {/* 進階：允許重複填答 */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="text-base text-slate-600">每次重填獎勵 (SSR)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={data.repeatReward}
+                    onChange={(e) => updateField('repeatReward', Number(e.target.value))}
+                    className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
+                    placeholder="0 = 禁止重複填答"
+                    aria-label="repeatReward"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-base text-slate-600">每地址最多重填次數</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={data.repeatMaxTimes}
+                    onChange={(e) => updateField('repeatMaxTimes', Number(e.target.value))}
+                    disabled={data.repeatReward <= 0}
+                    className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white disabled:bg-slate-100 disabled:text-slate-400"
+                    aria-label="repeatMaxTimes"
+                  />
+                </label>
+              </div>
+
+              {data.repeatReward > 0 && data.maxResponses > 0 && (
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-sm text-amber-900 space-y-1">
+                  <div className="font-medium flex items-center gap-1.5 text-amber-950">
+                    <AlertTriangle size={14} className="shrink-0 text-amber-600" />
+                    <span>需預注最大獎勵資金</span>
+                  </div>
+                  <div className="font-mono">
+                    {data.perResponse} × {data.maxResponses}
+                    {' + '}
+                    {data.repeatReward} × {data.maxResponses} × {data.repeatMaxTimes}
+                    {' = '}
+                    <span className="font-bold">
+                      {data.perResponse * data.maxResponses +
+                        data.repeatReward * data.maxResponses * data.repeatMaxTimes}{' '}
+                      SSR
+                    </span>
+                  </div>
+                  <div className="text-xs text-amber-700/80">
+                    若預注不足，下一步注資頁將無法發佈。鏈上事件歷史不可抹除，舊版本答卷密文仍可被解出。
+                  </div>
                 </div>
+              )}
 
-                {data.questions.map((q, idx) => (
-                  <div key={idx} className="border border-slate-100 rounded-2xl p-5 space-y-4 bg-slate-50/50 hover:bg-slate-50 transition-colors relative shadow-sm animate-fadeIn" aria-label={`題目 ${q.id}`}>
-                    <div className="flex items-center justify-between border-b pb-2 border-slate-200/60">
-                      <span className="text-sm font-black text-slate-700">第 {idx + 1} 題</span>
-                      <div className="flex gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => moveQuestion(idx, -1)}
-                          disabled={idx === 0}
-                          className="w-7 h-7 flex items-center justify-center text-xs border border-slate-200 bg-white text-slate-600 rounded-lg disabled:opacity-30 disabled:hover:bg-white hover:bg-slate-100 transition-colors"
-                          aria-label={`上移 ${q.id}`}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => moveQuestion(idx, 1)}
-                          disabled={idx === data.questions.length - 1}
-                          className="w-7 h-7 flex items-center justify-center text-xs border border-slate-200 bg-white text-slate-600 rounded-lg disabled:opacity-30 disabled:hover:bg-white hover:bg-slate-100 transition-colors"
-                          aria-label={`下移 ${q.id}`}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (window.confirm('確定要刪除這道題目嗎？')) {
-                              deleteQuestion(idx)
-                            }
-                          }}
-                          className="w-7 h-7 flex items-center justify-center text-xs border border-red-200 bg-white text-red-500 rounded-lg hover:bg-red-50 transition-colors"
-                          aria-label={`刪除 ${q.id}`}
-                        >
-                          🗑️
-                        </button>
-                      </div>
+              {/* 簡易試算卡片 */}
+              {data.perResponse > 0 && data.maxResponses > 0 && costBreakdown && (
+                <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 shadow-sm space-y-2 mt-2">
+                  <div className="flex justify-between items-center text-sm border-b border-blue-100 pb-1.5">
+                    <span className="font-medium text-blue-800 text-base">簡易費用估計</span>
+                    <span className="text-sm text-blue-700 font-medium">基於當前 AMM 曲線</span>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-slate-600 font-medium">既有 SSR 折抵</span>
+                      <span className="font-semibold text-slate-700">
+                        {formatSsr(costBreakdown.offsetIn)} SSR
+                      </span>
                     </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-600 font-medium">新鑄 SSR (AMM)</span>
+                      <span className="font-semibold text-slate-700">
+                        {formatSsr(costBreakdown.minted)} SSR
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-medium">平台手續費 (fee)</span>
+                      <span className="font-bold text-slate-700">
+                        {formatSsr(
+                          (costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n
+                        )}{' '}
+                        SSR
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-t border-slate-200 pt-2 font-bold">
+                      <span className="text-slate-700">預估 SUI 消耗</span>
+                      <span className="text-base text-blue-700 font-mono">
+                        {(Number(costBreakdown.suiToInvest) / 1e9).toFixed(4)} SUI
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
 
-                    <div className="space-y-3">
-                      <div>
-                        <span className="text-xs font-bold text-slate-500">題型</span>
-                        <div className="flex flex-wrap gap-2 mt-1.5">
-                          {(Object.keys(TYPE_LABELS_INFO) as QuestionType[]).map((t) => (
-                            <button
-                              key={t}
-                              type="button"
-                              onClick={() => changeQuestionType(idx, t)}
-                              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 ${
-                                q.type === t
-                                  ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
-                                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                              }`}
-                            >
-                              <span>{TYPE_LABELS_INFO[t].icon}</span>
-                              <span>{TYPE_LABELS_INFO[t].label}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+            {/* 題目區 */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl text-slate-800">題目列表</h2>
+              </div>
 
-                      <div className="flex items-center gap-2 py-1">
+              {data.questions.map((q, idx) => (
+                <div
+                  key={idx}
+                  className="border border-slate-100 rounded-2xl p-5 space-y-4 bg-slate-50/50 hover:bg-slate-50 transition-colors relative shadow-sm animate-fadeIn"
+                  aria-label={`題目 ${q.id}`}
+                >
+                  <div className="flex items-center justify-between border-b pb-2 border-slate-200/60">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-sm font-medium transition-colors ${q.required ? 'text-rose-800' : 'text-slate-700'}`}>
+                        第 {idx + 1} 題
+                      </span>
+                      <div className="flex items-center gap-1.5">
                         <input
                           id={`required-${idx}`}
                           type="checkbox"
                           checked={q.required}
                           onChange={(e) => updateQuestion(idx, { required: e.target.checked })}
-                          className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-slate-300 rounded"
+                          className={`w-4 h-4 rounded transition-colors ${q.required
+                            ? 'text-rose-800 focus:ring-rose-700 border-rose-800 bg-rose-50'
+                            : 'text-blue-600 focus:ring-blue-500 border-slate-300'
+                            }`}
                         />
-                        <label htmlFor={`required-${idx}`} className="text-xs font-bold text-slate-600 cursor-pointer select-none">
-                          設為必填問題
+                        <label
+                          htmlFor={`required-${idx}`}
+                          className={`text-sm font-semibold cursor-pointer select-none transition-colors ${q.required ? 'text-rose-800' : 'text-slate-500'
+                            }`}
+                        >
+                          必填
                         </label>
                       </div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => moveQuestion(idx, -1)}
+                        disabled={idx === 0}
+                        className="w-7 h-7 flex items-center justify-center text-xs border border-slate-200 bg-white text-slate-600 rounded-lg disabled:opacity-30 disabled:hover:bg-white hover:bg-slate-100 transition-colors"
+                        aria-label={`上移 ${q.id}`}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveQuestion(idx, 1)}
+                        disabled={idx === data.questions.length - 1}
+                        className="w-7 h-7 flex items-center justify-center text-xs border border-slate-200 bg-white text-slate-600 rounded-lg disabled:opacity-30 disabled:hover:bg-white hover:bg-slate-100 transition-colors"
+                        aria-label={`下移 ${q.id}`}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm('確定要刪除這道題目嗎？')) {
+                            deleteQuestion(idx)
+                          }
+                        }}
+                        className="w-7 h-7 flex items-center justify-center border border-red-200 bg-white text-red-500 rounded-lg hover:bg-red-50 transition-colors"
+                        aria-label={`刪除 ${q.id}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
 
-                      <label className="block">
-                        <span className="text-xs font-bold text-slate-500">問題內容 (Prompt)</span>
-                        <input
-                          type="text"
-                          value={q.prompt}
-                          onChange={(e) => updateQuestion(idx, { prompt: e.target.value })}
-                          className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-3 py-2 text-sm font-semibold text-slate-800 bg-white"
-                          placeholder="請輸入題目內容..."
-                          aria-label={`prompt ${q.id}`}
-                        />
-                      </label>
+                  <div className="space-y-3">
+                    <div>
+                      <span className="text-sm text-slate-500">題型</span>
+                      <div className="flex flex-wrap gap-2 mt-1.5">
+                        {(Object.keys(TYPE_LABELS_INFO) as QuestionType[]).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => changeQuestionType(idx, t)}
+                            className={`px-3 py-2 rounded-xl border text-sm font-semibold transition-all flex items-center gap-1.5 ${q.type === t
+                              ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                              }`}
+                          >
+                            <span>{TYPE_LABELS_INFO[t].label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-                      {(q.type === 'single_choice' || q.type === 'multi_choice') && q.options_json && (
+                    <label className="block">
+                      <span className="text-sm text-slate-500">問題內容 (Prompt)</span>
+                      <input
+                        type="text"
+                        value={q.prompt}
+                        onChange={(e) => updateQuestion(idx, { prompt: e.target.value })}
+                        className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-3 py-2 text-sm font-medium text-slate-800 bg-white"
+                        placeholder="請輸入題目內容..."
+                        aria-label={`prompt ${q.id}`}
+                      />
+                    </label>
+
+                    {(q.type === 'single_choice' || q.type === 'multi_choice') &&
+                      q.options_json && (
                         <div className="space-y-2 pt-2">
-                          <span className="text-xs font-bold text-slate-500">選項列表 (按 Enter 新增下一項，空值按 Backspace 刪除)</span>
+                          <span className="text-sm text-slate-500">
+                            選項列表 (按 Enter 新增下一項，空值按 Backspace 刪除)
+                          </span>
                           <div className="space-y-1.5">
                             {q.options_json.map((opt, oi) => (
                               <div key={oi} className="flex gap-2 items-center">
-                                <span className="text-slate-400 text-xs font-bold select-none">{oi + 1}.</span>
+                                <span className="text-slate-400 text-sm select-none">
+                                  {oi + 1}.
+                                </span>
                                 <input
                                   type="text"
                                   value={opt}
@@ -549,12 +693,17 @@ export default function CreatePage() {
                                     if (e.key === 'Enter') {
                                       e.preventDefault()
                                       addOption(idx)
-                                    } else if (e.key === 'Backspace' && opt === '' && q.options_json && q.options_json.length > 1) {
+                                    } else if (
+                                      e.key === 'Backspace' &&
+                                      opt === '' &&
+                                      q.options_json &&
+                                      q.options_json.length > 1
+                                    ) {
                                       e.preventDefault()
                                       removeOption(idx, oi)
                                     }
                                   }}
-                                  className="flex-1 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-lg px-3 py-1.5 text-xs font-medium text-slate-700 bg-white"
+                                  className="flex-1 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-lg px-3 py-1.5 text-sm font-medium text-slate-800 bg-white"
                                   placeholder={`選項 ${oi + 1}`}
                                   aria-label={`選項 ${q.id} #${oi + 1}`}
                                 />
@@ -572,194 +721,74 @@ export default function CreatePage() {
                           <button
                             type="button"
                             onClick={() => addOption(idx)}
-                            className="text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors flex items-center gap-1 mt-1"
+                            className="text-sm font-normal text-slate-500 hover:text-slate-700 transition-colors flex items-center gap-1 mt-1"
                           >
-                            ➕ 新增選項
+                            新增選項
                           </button>
                         </div>
                       )}
-                    </div>
                   </div>
-                ))}
-
-                {data.questions.length === 0 && (
-                  <div className="text-center py-10 border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
-                    <p className="text-sm text-slate-400 font-medium mb-3">目前問卷中沒有任何題目</p>
-                    <button
-                      type="button"
-                      onClick={addQuestion}
-                      className="px-4 py-2 bg-white border border-slate-200 text-blue-600 hover:bg-slate-50 transition-all rounded-xl text-xs font-bold shadow-sm"
-                    >
-                      ➕ 新增第一題
-                    </button>
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
-
-          {activeTab === 'settings' && (
-            <div className="space-y-6">
-              {/* 獎勵與限制設定 */}
-              <section className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 space-y-4">
-                <h2 className="font-bold text-slate-800 text-lg flex items-center gap-1.5 border-b pb-2 border-slate-100">
-                  💰 獎勵與限制
-                </h2>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <label className="block">
-                    <span className="text-sm font-bold text-slate-600">每份填答獎勵 (SSR)</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={data.perResponse}
-                      onChange={(e) => updateField('perResponse', Number(e.target.value))}
-                      className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
-                      placeholder="請輸入 SSR 數額"
-                      aria-label="perResponse"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="text-sm font-bold text-slate-600">限制名額上限</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={data.maxResponses}
-                      onChange={(e) => updateField('maxResponses', Number(e.target.value))}
-                      className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
-                      placeholder="請輸入最大份數"
-                      aria-label="maxResponses"
-                    />
-                  </label>
                 </div>
+              ))}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <label className="block">
-                    <span className="text-sm font-bold text-slate-600">截止時間</span>
-                    <input
-                      type="datetime-local"
-                      value={deadlineLocal}
-                      onChange={(e) => {
-                        const ms = new Date(e.target.value).getTime()
-                        if (!isNaN(ms)) updateField('deadlineMs', ms)
-                      }}
-                      className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
-                      aria-label="deadline"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="text-sm font-bold text-slate-600">身分憑證門檻</span>
-                    <select
-                      value={data.minTier}
-                      onChange={(e) => updateField('minTier', Number(e.target.value))}
-                      className="mt-1.5 w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 font-semibold text-slate-800 bg-white"
-                      aria-label="minTier"
-                    >
-                      <option value={0}>0 — 開放所有人填寫</option>
-                      <option value={1}>1 — 需要 Tier 1 身分認證</option>
-                      <option value={2}>2 — 需要 Tier 2 身分認證</option>
-                      <option value={3}>3 — 需要 Tier 3 身分認證</option>
-                    </select>
-                  </label>
+              {/* 虛線框加號按鈕 */}
+              <button
+                type="button"
+                onClick={addQuestion}
+                className="w-full py-8 border-2 border-dashed border-slate-200 hover:border-blue-500 hover:bg-blue-50/30 rounded-2xl flex flex-col items-center justify-center gap-2 group transition-all text-slate-400 hover:text-blue-600"
+              >
+                <div className="w-10 h-10 rounded-full bg-slate-100 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
+                  <Plus size={20} className="text-slate-500 group-hover:text-blue-600" />
                 </div>
-
-                {/* 簡易試算卡片 */}
-                {data.perResponse > 0 && data.maxResponses > 0 && (
-                  <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 shadow-sm space-y-2 mt-2">
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="font-bold text-blue-800 text-base">💰 簡易費用估計</span>
-                      <span className="text-xs text-blue-600 font-medium">基於當前 AMM 曲線</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4 pt-1">
-                      <div>
-                        <p className="text-xs text-slate-500 font-bold">總發放獎勵</p>
-                        <p className="text-lg font-black text-slate-800 font-mono">
-                          {data.perResponse * data.maxResponses} <span className="text-xs font-bold">SSR</span>
-                        </p>
-                      </div>
-                      {costBreakdown && (
-                        <div>
-                          <p className="text-xs text-slate-500 font-bold">預估所需 SUI 總計</p>
-                          <p className="text-lg font-black text-blue-700 font-mono">
-                            {(Number(costBreakdown.suiToInvest) / 1e9).toFixed(4)} <span className="text-xs font-bold">SUI</span>
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              {/* 匯入與範本工具 */}
-              <section className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 space-y-4">
-                <h2 className="font-bold text-slate-800 text-lg flex items-center gap-1.5 border-b pb-2 border-slate-100">
-                  📁 匯入與備份工具
-                </h2>
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={handleUploadClick}
-                    className="px-4 py-2.5 border border-slate-200 bg-white text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-100 transition-colors flex items-center gap-1.5 shadow-sm"
-                  >
-                    📤 匯入 Markdown 草稿 (.md)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDownloadTemplate}
-                    className="px-4 py-2.5 border border-slate-200 bg-white text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-100 transition-colors flex items-center gap-1.5 shadow-sm"
-                  >
-                    📄 下載空白問卷範本
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".md,text/markdown,text/plain"
-                    className="hidden"
-                    onChange={handleFileChange}
-                    aria-label="上傳 markdown 檔案"
-                  />
+                <div className="text-lg font-semibold">新增題目</div>
+                <div className="text-xs text-slate-400 group-hover:text-blue-500/80">
+                  支援單選、複選、簡答及量表（1-5）等題型
                 </div>
-              </section>
-            </div>
-          )}
+              </button>
+            </section>
+          </div>
 
           {error && (
-            <div role="alert" className="text-rose-500 text-xs font-bold bg-rose-50 border border-rose-100 rounded-xl p-3 flex items-center gap-1.5">
-              ⚠️ {error}
+            <div
+              role="alert"
+              className="text-rose-500 text-xs font-bold bg-rose-50 border border-rose-100 rounded-xl p-3 flex items-center gap-1.5"
+            >
+              <AlertTriangle size={14} className="shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-            {activeTab === 'questions' ? (
-              <>
-                <div />
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('settings')}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm px-6 py-3 rounded-2xl hover:shadow-lg transition-all"
-                >
-                  前往設定步驟 ➔
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('questions')}
-                  className="border border-slate-200 hover:bg-slate-100 text-slate-600 font-bold text-sm px-6 py-3 rounded-2xl transition-all"
-                >
-                  ⬅ 回到問題編輯
-                </button>
-                <button
-                  type="submit"
-                  className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold text-sm px-6 py-3 rounded-2xl hover:shadow-lg transition-all"
-                >
-                  下一步：預覽與發佈 ➔
-                </button>
-              </>
-            )}
+          <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex gap-4">
+              <button
+                type="button"
+                onClick={handleDownloadDraft}
+                className="px-4 py-2.5 border border-slate-200 bg-white text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-100 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                匯出
+              </button>
+              <button
+                type="button"
+                onClick={handleUploadClick}
+                className="px-4 py-2.5 border border-slate-200 bg-white text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-100 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                匯入 (.md)
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".md,text/markdown,text/plain"
+                className="hidden"
+                onChange={handleFileChange}
+                aria-label="上傳 markdown 檔案"
+              />
+            </div>
+            <button
+              type="submit"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-white font-medium hover:bg-blue-700 transition-colors"
+            >
+              下一步：預覽問卷 ➔
+            </button>
           </div>
         </form>
       </div>

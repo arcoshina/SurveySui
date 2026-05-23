@@ -43,8 +43,7 @@ export function translateMoveAbort(error: string | null | undefined): string | n
   if (!error) return null
 
   const codeMatch =
-    error.match(/MoveAbort\([\s\S]*?,\s*(\d+)\)/) ??
-    error.match(/,\s*(\d+)\)\s+in command/)
+    error.match(/MoveAbort\([\s\S]*?,\s*(\d+)\)/) ?? error.match(/,\s*(\d+)\)\s+in command/)
   if (!codeMatch) return null
   const code = Number(codeMatch[1])
 
@@ -62,10 +61,25 @@ export function translateMoveAbort(error: string | null | undefined): string | n
     const fnMatch = error.match(/function_name:\s*Some\("(\w+)"\)/)
     if (fnMatch) {
       const fnName = fnMatch[1]
-      if (fnName === 'register' || fnName === 'archive' || fnName === 'new_question') moduleName = 'survey_registry'
-      else if (fnName === 'create' || fnName === 'create_empty' || fnName === 'claim' || fnName === 'close' || fnName === 'merge_balances' || fnName === 'deposit_existing_ssr' || fnName === 'split_fee_to_treasury') moduleName = 'survey_vault'
+      if (fnName === 'register' || fnName === 'archive' || fnName === 'new_question')
+        moduleName = 'survey_registry'
+      else if (
+        fnName === 'create' ||
+        fnName === 'create_empty' ||
+        fnName === 'claim' ||
+        fnName === 'close' ||
+        fnName === 'merge_balances' ||
+        fnName === 'deposit_existing_ssr' ||
+        fnName === 'split_fee_to_treasury'
+      )
+        moduleName = 'survey_vault'
       else if (fnName === 'invest_and_mint' || fnName === 'redeem') moduleName = 'amm_pool'
-      else if (fnName === 'mint_pass' || fnName === 'update_pass_credential' || fnName === 'delete_pass') moduleName = 'survey_pass'
+      else if (
+        fnName === 'mint_pass' ||
+        fnName === 'update_pass_credential' ||
+        fnName === 'delete_pass'
+      )
+        moduleName = 'survey_pass'
     }
   }
   if (!moduleName) return null

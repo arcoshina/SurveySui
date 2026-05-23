@@ -27,7 +27,9 @@ export default defineConfig({
     'import.meta.env.VITE_SR_TREASURY_ID': JSON.stringify(env.SR_TREASURY_ID || ''),
     'import.meta.env.VITE_SURVEY_REGISTRY_ID': JSON.stringify(env.SURVEY_REGISTRY_ID || ''),
     'import.meta.env.VITE_PASS_REGISTRY_ID': JSON.stringify(env.PASS_REGISTRY_ID || ''),
-    'import.meta.env.VITE_NULLIFIER_REGISTRY_ID': JSON.stringify(env.NULLIFIER_REGISTRY_ID || env.PASS_REGISTRY_ID || ''),
+    'import.meta.env.VITE_NULLIFIER_REGISTRY_ID': JSON.stringify(
+      env.NULLIFIER_REGISTRY_ID || env.PASS_REGISTRY_ID || ''
+    ),
     'import.meta.env.VITE_ISSUER_CONFIG_ID': JSON.stringify(env.ISSUER_CONFIG_ID || ''),
     'import.meta.env.VITE_ADMIN_ADDRESS': JSON.stringify(env.SUI_ADMIN_ADDRESS || ''),
   },

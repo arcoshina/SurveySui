@@ -1,10 +1,12 @@
 # SurveySui V2 — TDD 測試規格
 
+**已封存唯讀**
+
 ## 本檔角色
 
 **約束 V2 實作內容的測試契約**。每條任務開工前先在 PR 提失敗的測試（從本檔挑名稱），再提實作把測試打綠。
 
-- 「**改了什麼、為什麼改**」見 [V2_改版目標.md](V2_改版目標.md)。
+- 「**改了什麼、為什麼改**」見 [V2\_改版目標.md](V2_改版目標.md)。
 - 「**勾到哪了**」見 [V2_Tasks.md](V2_Tasks.md)。
 - 本檔**不**重述設計理由；只列：測試名稱、given/when/then、預期 abort code（Move）、預期斷言（FE / BFF）、執行指令。
 - 章節編號與 [V2_Tasks.md](V2_Tasks.md) 的 sprint milestone（`S0.1 / S1.1 / …`）一一對應。
@@ -12,8 +14,8 @@
 ### TDD 紀律
 
 1. 任務認領 → 從本檔挑對應 `test_*` 名稱 → PR #1 提失敗測試（CI 紅）→ PR #2 提實作（CI 綠）。
-2. 測試失敗時：**先確認 expect 是否正確**。要改 expect 必須回 V2_改版目標.md 確認設計意圖、同步改本檔、PR 描述寫理由。**禁止**為了打綠而靜默放寬 expect。
-3. 標 `pending` 的群組（如 S5.1 未拍板前的 S6.*）：在對應設計定案前不寫測試，也不開工。
+2. 測試失敗時：**先確認 expect 是否正確**。要改 expect 必須回 V2\_改版目標.md 確認設計意圖、同步改本檔、PR 描述寫理由。**禁止**為了打綠而靜默放寬 expect。
+3. 標 `pending` 的群組（如 S5.1 未拍板前的 S6.\*）：在對應設計定案前不寫測試，也不開工。
 
 ---
 
@@ -21,32 +23,32 @@
 
 > 工具鏈沿用 [V1_TDD §TDD 策略](History/V1_TDD.md)，本表只列 V2 層級分配與檔案落點。
 
-| 層級 | 工具 | 檔案落點（新增 / 修改） | 跑在哪 |
-| --- | --- | --- | --- |
-| Move 單元 | `sui move test` | `contracts/tests/amm_pool_tests.move`、`survey_registry_tests.move`、`survey_vault_tests.move` | CI + 本機 |
-| Move 整合（test_scenario） | `sui move test` | `contracts/tests/ptb_seven_steps_tests.move`、`surveypass_tests.move`（新增） | CI + 本機 |
-| Frontend unit | Vitest + RTL | `frontend/src/lib/__tests__/ptb.v2.test.ts`、`markdown.test.ts`、`frontend/src/__tests__/*.test.tsx` | CI |
-| Frontend e2e | Vitest（happy-dom + 真 BFF + 真合約 fixture） | `frontend/src/__tests__/e2e.v2.test.ts` | 手動 / pre-demo |
-| Sponsored TX 整合 | Vitest + Devnet sandbox | `frontend/src/lib/__tests__/sponsoredTx.fallback.test.ts` | nightly |
-| BFF unit | Vitest | `bff/src/__tests__/stats.v2.test.ts`、`security.test.ts`、`surveypass.test.ts` | CI |
-| E2E（真合約 + 真錢包） | Playwright + Devnet | `scripts/e2e/*.spec.ts` | 手動 / pre-demo |
-| 開發腳本驗證 | Vitest（純邏輯） | `scripts/__tests__/devAccounts.test.ts` | CI |
+| 層級                       | 工具                                          | 檔案落點（新增 / 修改）                                                                              | 跑在哪          |
+| -------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------- |
+| Move 單元                  | `sui move test`                               | `contracts/tests/amm_pool_tests.move`、`survey_registry_tests.move`、`survey_vault_tests.move`       | CI + 本機       |
+| Move 整合（test_scenario） | `sui move test`                               | `contracts/tests/ptb_seven_steps_tests.move`、`surveypass_tests.move`（新增）                        | CI + 本機       |
+| Frontend unit              | Vitest + RTL                                  | `frontend/src/lib/__tests__/ptb.v2.test.ts`、`markdown.test.ts`、`frontend/src/__tests__/*.test.tsx` | CI              |
+| Frontend e2e               | Vitest（happy-dom + 真 BFF + 真合約 fixture） | `frontend/src/__tests__/e2e.v2.test.ts`                                                              | 手動 / pre-demo |
+| Sponsored TX 整合          | Vitest + Devnet sandbox                       | `frontend/src/lib/__tests__/sponsoredTx.fallback.test.ts`                                            | nightly         |
+| BFF unit                   | Vitest                                        | `bff/src/__tests__/stats.v2.test.ts`、`security.test.ts`、`surveypass.test.ts`                       | CI              |
+| E2E（真合約 + 真錢包）     | Playwright + Devnet                           | `scripts/e2e/*.spec.ts`                                                                              | 手動 / pre-demo |
+| 開發腳本驗證               | Vitest（純邏輯）                              | `scripts/__tests__/devAccounts.test.ts`                                                              | CI              |
 
 ---
 
 ## 全域不變式（每組整合測試都要驗）
 
-| ID | 不變式 | 驗證方式 |
-| --- | --- | --- |
-| INV-1 | **新鑄 SSR 不入發起者錢包**：PTB 跑完後 `balance(creator, SSR) == balance_before − offset_used`（不可 > before） | Move test_scenario 對拍餘額；FE e2e 對拍 dApp Kit 餘額 |
-| INV-2 | **Vault 餘額下限**：step ⑤ 合併後 `vault.ssr ≥ per_response × max`；不滿足必 abort | Move test_scenario abort 路徑 |
-| INV-3 | **費率分拆對帳**：`vault.ssr_after_fee + treasury_delta == offset_in + minted` ± 1 base unit（rounding tolerance） | Move test_scenario |
-| INV-4 | **費率公式一致**：FE `estimateFundCostV2` 算的 `effective_fee_bps == Move FeeConfig.effective()`，公式 `total × discount / 10000` | Vitest 對拍（5 組固定輸入） |
-| INV-5 | **問卷雜湊唯一**：同一 `content_hash` 第二次 register 必 abort `EDuplicateSurvey` | Move 單元 |
-| INV-6 | **SurveyPass 不消耗**：同一 pass 完成多份問卷後仍 `exists(pass.id) && is_valid` | Move test_scenario（保留 V1 測試） |
-| INV-7 | **BFF 無 admin TX key**：BFF 啟動時 `process.env.SUI_ADMIN_PRIVATE_KEY` 未設或為空；若有 ticket 簽發金鑰，啟動 log 標明「ticket-only, cannot sign TX」 | BFF unit |
-| INV-8 | **NullifierRegistry 唯一性**：同一 `nullifier_hash` 只能對應一個 pass owner；第二次 mint 必 abort `EDuplicateNullifier`，NullifierRegistry 不變 | Move test_scenario |
-| INV-9 | **SurveyPass Soulbound**：SurveyPass 型別宣告 `has key`（無 `store`）；任何 transfer 路徑在 Move type system 層拒絕，不需 entry 層防護 | Move 型別宣告審查 |
+| ID    | 不變式                                                                                                                                                 | 驗證方式                                               |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| INV-1 | **新鑄 SSR 不入發起者錢包**：PTB 跑完後 `balance(creator, SSR) == balance_before − offset_used`（不可 > before）                                       | Move test_scenario 對拍餘額；FE e2e 對拍 dApp Kit 餘額 |
+| INV-2 | **Vault 餘額下限**：step ⑤ 合併後 `vault.ssr ≥ per_response × max`；不滿足必 abort                                                                     | Move test_scenario abort 路徑                          |
+| INV-3 | **費率分拆對帳**：`vault.ssr_after_fee + treasury_delta == offset_in + minted` ± 1 base unit（rounding tolerance）                                     | Move test_scenario                                     |
+| INV-4 | **費率公式一致**：FE `estimateFundCostV2` 算的 `effective_fee_bps == Move FeeConfig.effective()`，公式 `total × discount / 10000`                      | Vitest 對拍（5 組固定輸入）                            |
+| INV-5 | **問卷雜湊唯一**：同一 `content_hash` 第二次 register 必 abort `EDuplicateSurvey`                                                                      | Move 單元                                              |
+| INV-6 | **SurveyPass 不消耗**：同一 pass 完成多份問卷後仍 `exists(pass.id) && is_valid`                                                                        | Move test_scenario（保留 V1 測試）                     |
+| INV-7 | **BFF 無 admin TX key**：BFF 啟動時 `process.env.SUI_ADMIN_PRIVATE_KEY` 未設或為空；若有 ticket 簽發金鑰，啟動 log 標明「ticket-only, cannot sign TX」 | BFF unit                                               |
+| INV-8 | **NullifierRegistry 唯一性**：同一 `nullifier_hash` 只能對應一個 pass owner；第二次 mint 必 abort `EDuplicateNullifier`，NullifierRegistry 不變        | Move test_scenario                                     |
+| INV-9 | **SurveyPass Soulbound**：SurveyPass 型別宣告 `has key`（無 `store`）；任何 transfer 路徑在 Move type system 層拒絕，不需 entry 層防護                 | Move 型別宣告審查                                      |
 
 ---
 
@@ -95,7 +97,7 @@
 
 ### S1.3 發起問卷 PTB 七步驟整合
 
-> 對應 [V2_改版目標.md §發起問卷 PTB 七步驟](V2_改版目標.md)。所有測試都是「七步打成一筆 PTB」的整合測試，跑在 `test_scenario`。前置：S1.1 + S1.2。
+> 對應 [V2\_改版目標.md §發起問卷 PTB 七步驟](V2_改版目標.md)。所有測試都是「七步打成一筆 PTB」的整合測試，跑在 `test_scenario`。前置：S1.1 + S1.2。
 
 #### Happy path
 
@@ -218,17 +220,17 @@
 
 ### S5.1 SurveyPass 認證簽發設計拍板（done by doc）
 
-> 對應 [V2_改版目標.md §SurveyPass 認證簽發](V2_改版目標.md)。  
+> 對應 [V2\_改版目標.md §SurveyPass 認證簽發](V2_改版目標.md)。  
 > 完整架構見 [docs/專案 KYC方案.md](專案%20KYC方案.md)。
 
 **MVP 設計決策（已拍板）**
 
-| 問題 | MVP 決策 |
-|------|---------|
-| Q1：zkLogin / Google OAuth 定位 | MVP 不使用 zkLogin。驗證源為 **Email OTP**（`SRC_EMAIL`）；Social OAuth / zkLogin 留 V3 評估。 |
-| Q2：驗證階段是否要求連錢包 | **是**。IssuanceTicket 綁定 `owner: address`，用戶需先連錢包才能啟動驗證流程。 |
-| Q3：真人驗證訊號組合 | **Email OTP only**；nullifier = `hash("email" \|\| email_address)`；一個 email 只能對應一張有效 Pass（INV-8）。 |
-| Q4：BFF 角色 | **ticket-only**（INV-7）。BFF 負責：① 發 OTP 信、② 驗 OTP、③ 算 nullifier_hash、④ 簽 Ed25519 IssuanceTicket、⑤ 回傳 ticket JSON。不送 TX，不持 admin key。 |
+| 問題                            | MVP 決策                                                                                                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1：zkLogin / Google OAuth 定位 | MVP 不使用 zkLogin。驗證源為 **Email OTP**（`SRC_EMAIL`）；Social OAuth / zkLogin 留 V3 評估。                                                             |
+| Q2：驗證階段是否要求連錢包      | **是**。IssuanceTicket 綁定 `owner: address`，用戶需先連錢包才能啟動驗證流程。                                                                             |
+| Q3：真人驗證訊號組合            | **Email OTP only**；nullifier = `hash("email" \|\| email_address)`；一個 email 只能對應一張有效 Pass（INV-8）。                                            |
+| Q4：BFF 角色                    | **ticket-only**（INV-7）。BFF 負責：① 發 OTP 信、② 驗 OTP、③ 算 nullifier_hash、④ 簽 Ed25519 IssuanceTicket、⑤ 回傳 ticket JSON。不送 TX，不持 admin key。 |
 
 Done Criteria（全部完成才算綠燈）：
 
@@ -236,18 +238,18 @@ Done Criteria（全部完成才算綠燈）：
 - [x] 問題 2 拍板：驗證前必須連錢包
 - [x] 問題 3 拍板：Email OTP，nullifier = hash("email"||email_address)
 - [x] 問題 4 拍板：BFF ticket-only，符合 INV-7
-- [x] V2_改版目標.md §SurveyPass 認證簽發章節從「待規劃」改為「定稿版」（另行更新）
-- [x] V2_TDD.md S6.1 / S6.2 / S6.3 具體 `test_*` 名稱已回填
+- [x] V2\_改版目標.md §SurveyPass 認證簽發章節從「待規劃」改為「定稿版」（另行更新）
+- [x] V2*TDD.md S6.1 / S6.2 / S6.3 具體 `test*\*` 名稱已回填
 
 ### S5.2 匿名投票初步方案設計交付（done by doc）
 
-> 對應 [V2_改版目標.md §匿名投票](V2_改版目標.md)。  
+> 對應 [V2\_改版目標.md §匿名投票](V2_改版目標.md)。  
 > 完整設計見 [docs/V2_AnonymousVoting_Sketch.md](V2_AnonymousVoting_Sketch.md)。
 
 Done Criteria：
 
 - [x] `docs/V2_AnonymousVoting_Sketch.md` 成形，涵蓋：威脅模型（CoE/愛沙尼亞標準對照）、Semaphore-style ZKP nullifier 結構、與 SurveyPass 雙 nullifier 衝突解法、三期工作量預估、V3 啟動條件清單
-- [x] V2_改版目標.md §匿名投票章節從「初步方案」改為「設計交付完成」
+- [x] V2\_改版目標.md §匿名投票章節從「初步方案」改為「設計交付完成」
 
 ---
 
@@ -358,24 +360,24 @@ pnpm -r test && pnpm move test
 
 每組測試清單視為一個 milestone，必須**全綠 + INV 不變式守住**才視為該組完成。
 
-| Milestone | 完成條件 |
-| --- | --- |
-| S0.1 同助記詞測試帳號 | `test_devAccounts_*` 三條綠 |
-| S0.2 contract drift 修對齊 | `test_e2e_harness_*` / `test_e2e_happy_path_no_mock` / `test_ci_e2e_runs_nightly` 綠 |
-| S0.3 BFF 啟動權限檢查 | `test_bff_*` 三條綠；INV-7 守住 |
-| S1.1 AMM / FeeConfig | `test_fee_config_*` + `test_initial_ssr_per_sui_one_thousand` 5 條綠 |
-| S1.2 registry 驗證 + 去重 | `test_register_*` 6 條綠；INV-5 守住 |
-| S1.3 PTB 七步驟 | happy 3 + abort 6 + invariant 2 共 11 條綠；INV-1 / INV-2 / INV-3 守住 |
-| S2.1 estimateFundCostV2 對拍 | `test_estimateFundCostV2_*` 3 條綠；INV-4 守住 |
-| S2.2 PTB FE 整合 | 4 條 Vitest 綠 + e2e happy path 綠（依賴 S0.2 harness） |
-| S2.3 答案結果-only | 4 條綠 |
-| S3.1 / S3.2 / S3.3 / S3.4 | 各群組所有 test 綠 |
-| S4.1 / S4.2 / S4.3 | 各群組所有 test 綠 |
-| S4.4 首頁 | 手動驗收勾選 |
-| S5.1 SurveyPass 設計拍板 | 4 項決策全勾 + S6 test_* 已回填（V2_改版目標.md 更新待補） |
-| S5.2 匿名投票設計 | AnonymousVoting_Sketch.md 成形 + 改版目標章節更新；V3 啟動條件 T1–T4 / D1–D4 / P1–P3 全部評估完成 |
-| S6.1 SurveyPass 簽發 | Move 9 條 + BFF 6 條 + FE 6 條全綠；INV-6 / INV-8 / INV-9 守住 |
-| S6.2 首次連錢包檢查 | FE 5 條全綠 |
-| S6.3 公鑰寫入 Pass | Move 2 條 + FE 2 條全綠 |
+| Milestone                    | 完成條件                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| S0.1 同助記詞測試帳號        | `test_devAccounts_*` 三條綠                                                                       |
+| S0.2 contract drift 修對齊   | `test_e2e_harness_*` / `test_e2e_happy_path_no_mock` / `test_ci_e2e_runs_nightly` 綠              |
+| S0.3 BFF 啟動權限檢查        | `test_bff_*` 三條綠；INV-7 守住                                                                   |
+| S1.1 AMM / FeeConfig         | `test_fee_config_*` + `test_initial_ssr_per_sui_one_thousand` 5 條綠                              |
+| S1.2 registry 驗證 + 去重    | `test_register_*` 6 條綠；INV-5 守住                                                              |
+| S1.3 PTB 七步驟              | happy 3 + abort 6 + invariant 2 共 11 條綠；INV-1 / INV-2 / INV-3 守住                            |
+| S2.1 estimateFundCostV2 對拍 | `test_estimateFundCostV2_*` 3 條綠；INV-4 守住                                                    |
+| S2.2 PTB FE 整合             | 4 條 Vitest 綠 + e2e happy path 綠（依賴 S0.2 harness）                                           |
+| S2.3 答案結果-only           | 4 條綠                                                                                            |
+| S3.1 / S3.2 / S3.3 / S3.4    | 各群組所有 test 綠                                                                                |
+| S4.1 / S4.2 / S4.3           | 各群組所有 test 綠                                                                                |
+| S4.4 首頁                    | 手動驗收勾選                                                                                      |
+| S5.1 SurveyPass 設計拍板     | 4 項決策全勾 + S6 test*\* 已回填（V2*改版目標.md 更新待補）                                       |
+| S5.2 匿名投票設計            | AnonymousVoting_Sketch.md 成形 + 改版目標章節更新；V3 啟動條件 T1–T4 / D1–D4 / P1–P3 全部評估完成 |
+| S6.1 SurveyPass 簽發         | Move 9 條 + BFF 6 條 + FE 6 條全綠；INV-6 / INV-8 / INV-9 守住                                    |
+| S6.2 首次連錢包檢查          | FE 5 條全綠                                                                                       |
+| S6.3 公鑰寫入 Pass           | Move 2 條 + FE 2 條全綠                                                                           |
 
-> **S7 總驗收**：上述所有非 pending milestone 全綠 + INV-1～INV-9 全守住 + [V2_改版目標.md §驗收方向](V2_改版目標.md) 的 demo 動作 5 分鐘內手動跑完無 regression。
+> **S7 總驗收**：上述所有非 pending milestone 全綠 + INV-1～INV-9 全守住 + [V2\_改版目標.md §驗收方向](V2_改版目標.md) 的 demo 動作 5 分鐘內手動跑完無 regression。

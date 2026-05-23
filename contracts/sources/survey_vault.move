@@ -17,14 +17,16 @@ const STATUS_CLOSED: u8 = 1;
 /// Vault deposit fee (0.3% in basis points).
 const VAULT_FEE_BPS: u64 = 30;
 
-const ENotCreator: u64     = 0;
-const ENoQuota: u64        = 1;
-const EExpired: u64        = 2;
-const EAlreadyClaimed: u64 = 3;
-const EInvalidPass: u64    = 4;
-const EVaultClosed: u64    = 5;
-const EEmptyAnswers: u64   = 6;
+const ENotCreator: u64           = 0;
+const ENoQuota: u64              = 1;
+const EExpired: u64              = 2;
+const EAlreadyClaimed: u64       = 3;
+const EInvalidPass: u64          = 4;
+const EVaultClosed: u64          = 5;
+const EEmptyAnswers: u64         = 6;
 const EInsufficientVaultBalance: u64 = 7;
+const EInvalidRewardConfig: u64  = 8;
+const ERepeatLimitReached: u64   = 9;
 
 public struct SurveyClaimed has copy, drop {
     vault_id: ID,
@@ -47,10 +49,12 @@ public struct SurveyVault has key {
     id: UID,
     balance: Balance<STACKED_SURVEY_REWARD>,
     per_response: u64,
+    repeat_reward: u64,
+    repeat_max_times: u64,
     max_responses: u64,
     deadline_ms: u64,
     claimed_count: u64,
-    claimed_subs: Table<vector<u8>, bool>,
+    claim_counts: Table<vector<u8>, u64>,
     admin_treasury: address,
     creator: address,
     status: u8,
@@ -64,19 +68,27 @@ public struct SurveyVault has key {
 public fun create(
     ssr_coin: Coin<STACKED_SURVEY_REWARD>,
     per_response: u64,
+    repeat_reward: u64,
+    repeat_max_times: u64,
     max_responses: u64,
     deadline_ms: u64,
     admin_treasury: address,
     ctx: &mut TxContext,
 ): SurveyVault {
+    assert!(per_response >= 1, EInvalidRewardConfig);
+    assert!(repeat_max_times >= 1, EInvalidRewardConfig);
+    // repeat_reward is u64, naturally non-negative; 0 means "no repeat allowed"
+
     SurveyVault {
         id: object::new(ctx),
         balance: coin::into_balance(ssr_coin),
         per_response,
+        repeat_reward,
+        repeat_max_times,
         max_responses,
         deadline_ms,
         claimed_count: 0,
-        claimed_subs: table::new(ctx),
+        claim_counts: table::new(ctx),
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
@@ -94,8 +106,9 @@ public fun fund(vault: &mut SurveyVault, ssr_coin: Coin<STACKED_SURVEY_REWARD>, 
     balance::join(&mut vault.balance, coin::into_balance(ssr_coin));
 }
 
-/// Respondent claims per_response SSR from vault.
-/// Validates SurveyPass, deduplicates by sub_hash, checks quota and deadline.
+/// Respondent claims SSR from vault.
+/// Validates SurveyPass, applies per-address repeat policy via `claim_counts`,
+/// checks quota and deadline.
 public fun claim(
     vault: &mut SurveyVault,
     pass: &SurveyPass,
@@ -105,16 +118,36 @@ public fun claim(
 ) {
     assert!(vault.status == STATUS_OPEN, EVaultClosed);
     assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
-    assert!(vault.claimed_count < vault.max_responses, ENoQuota);
     assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
     assert!(survey_pass::owner(pass) == ctx.sender(), EInvalidPass);
     assert!(!vector::is_empty(&encrypted_answers), EEmptyAnswers);
 
     let key = bcs::to_bytes(&ctx.sender());
-    assert!(!table::contains(&vault.claimed_subs, key), EAlreadyClaimed);
+    let prior = if (table::contains(&vault.claim_counts, key)) {
+        *table::borrow(&vault.claim_counts, key)
+    } else {
+        0
+    };
 
-    table::add(&mut vault.claimed_subs, key, true);
-    vault.claimed_count = vault.claimed_count + 1;
+    let reward_amount: u64;
+    if (prior == 0) {
+        // First claim by this address.
+        assert!(vault.claimed_count < vault.max_responses, ENoQuota);
+        reward_amount = vault.per_response;
+        vault.claimed_count = vault.claimed_count + 1;
+        table::add(&mut vault.claim_counts, key, 1);
+    } else {
+        // Repeat claim. Disabled when repeat_reward == 0 → behaves like the
+        // legacy single-shot guard (EAlreadyClaimed) so frontends/tests that
+        // expect the old error code keep working.
+        assert!(vault.repeat_reward > 0, EAlreadyClaimed);
+        // `prior` already counts the initial submission; we allow up to
+        // `repeat_max_times` additional submissions, i.e. prior ∈ [1, repeat_max_times].
+        assert!(prior <= vault.repeat_max_times, ERepeatLimitReached);
+        reward_amount = vault.repeat_reward;
+        let count_ref = table::borrow_mut(&mut vault.claim_counts, key);
+        *count_ref = prior + 1;
+    };
 
     event::emit(SurveyClaimed {
         vault_id: object::id(vault),
@@ -124,11 +157,13 @@ public fun claim(
         claimed_at_ms: clock::timestamp_ms(clock),
     });
 
-    let reward = coin::from_balance(
-        balance::split(&mut vault.balance, vault.per_response),
-        ctx,
-    );
-    transfer::public_transfer(reward, ctx.sender());
+    if (reward_amount > 0) {
+        let reward = coin::from_balance(
+            balance::split(&mut vault.balance, reward_amount),
+            ctx,
+        );
+        transfer::public_transfer(reward, ctx.sender());
+    };
 }
 
 /// Creator closes vault and recovers remaining SSR.
@@ -157,19 +192,26 @@ public fun close(vault: &mut SurveyVault, clock: &Clock, ctx: &mut TxContext) {
 
 public fun create_empty(
     per_response: u64,
+    repeat_reward: u64,
+    repeat_max_times: u64,
     max_responses: u64,
     deadline_ms: u64,
     admin_treasury: address,
     ctx: &mut TxContext,
 ): SurveyVault {
+    assert!(per_response >= 1, EInvalidRewardConfig);
+    assert!(repeat_max_times >= 1, EInvalidRewardConfig);
+
     SurveyVault {
         id: object::new(ctx),
         balance: balance::zero(),
         per_response,
+        repeat_reward,
+        repeat_max_times,
         max_responses,
         deadline_ms,
         claimed_count: 0,
-        claimed_subs: table::new(ctx),
+        claim_counts: table::new(ctx),
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
@@ -189,7 +231,9 @@ public fun merge_balances(
     new_ssr: Coin<STACKED_SURVEY_REWARD>,
 ) {
     balance::join(&mut vault.balance, coin::into_balance(new_ssr));
-    assert!(balance::value(&vault.balance) >= vault.per_response * vault.max_responses, EInsufficientVaultBalance);
+    let required = vault.per_response * vault.max_responses
+        + vault.repeat_reward * vault.max_responses * vault.repeat_max_times;
+    assert!(balance::value(&vault.balance) >= required, EInsufficientVaultBalance);
 }
 
 public fun split_fee_to_treasury(
@@ -211,18 +255,32 @@ public fun split_fee_to_treasury(
 
 // ── view functions ────────────────────────────────────────────────────────────
 
-public fun per_response(vault: &SurveyVault): u64  { vault.per_response }
-public fun max_responses(vault: &SurveyVault): u64 { vault.max_responses }
-public fun deadline_ms(vault: &SurveyVault): u64   { vault.deadline_ms }
-public fun claimed_count(vault: &SurveyVault): u64 { vault.claimed_count }
-public fun balance_value(vault: &SurveyVault): u64 { balance::value(&vault.balance) }
-public fun status(vault: &SurveyVault): u8         { vault.status }
-public fun closed_at_ms(vault: &SurveyVault): u64  { vault.closed_at_ms }
-public fun creator(vault: &SurveyVault): address   { vault.creator }
+public fun per_response(vault: &SurveyVault): u64     { vault.per_response }
+public fun repeat_reward(vault: &SurveyVault): u64    { vault.repeat_reward }
+public fun repeat_max_times(vault: &SurveyVault): u64 { vault.repeat_max_times }
+public fun max_responses(vault: &SurveyVault): u64    { vault.max_responses }
+public fun deadline_ms(vault: &SurveyVault): u64      { vault.deadline_ms }
+public fun claimed_count(vault: &SurveyVault): u64    { vault.claimed_count }
+public fun balance_value(vault: &SurveyVault): u64    { balance::value(&vault.balance) }
+public fun status(vault: &SurveyVault): u8            { vault.status }
+public fun closed_at_ms(vault: &SurveyVault): u64     { vault.closed_at_ms }
+public fun creator(vault: &SurveyVault): address      { vault.creator }
 public fun admin_treasury(vault: &SurveyVault): address { vault.admin_treasury }
+
 public fun has_claimed(vault: &SurveyVault, respondent: address): bool {
     let key = bcs::to_bytes(&respondent);
-    table::contains(&vault.claimed_subs, key)
+    table::contains(&vault.claim_counts, key)
+}
+
+/// Returns how many submissions this address has made (0 if none).
+/// Used by SurveyPage to display "you submitted N times, X more allowed".
+public fun claim_count_of(vault: &SurveyVault, respondent: address): u64 {
+    let key = bcs::to_bytes(&respondent);
+    if (table::contains(&vault.claim_counts, key)) {
+        *table::borrow(&vault.claim_counts, key)
+    } else {
+        0
+    }
 }
 
 public fun fee_bps(): u64 { VAULT_FEE_BPS }

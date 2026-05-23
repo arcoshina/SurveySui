@@ -8,13 +8,9 @@ vi.mock('@mysten/sui/client')
 const mockQueryEvents = vi.fn()
 const mockSuiClient = { queryEvents: mockQueryEvents } as unknown as SuiClient
 
-function makeFakePage(
-  vaultId: string,
-  respondents: string[],
-  hasNextPage = false,
-) {
+function makeFakePage(vaultId: string, respondents: string[], hasNextPage = false) {
   return {
-    data: respondents.map(r => ({
+    data: respondents.map((r) => ({
       parsedJson: {
         vault_id: vaultId,
         sub_hash: [1],

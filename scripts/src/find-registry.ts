@@ -9,15 +9,15 @@ async function main() {
   // Let's query by package type using a general search if possible, or querying objects.
   // Wait, we can get the transaction block that published this package, but since we know the admin address:
   const adminAddress = '0x0b459e39bd7553e28c5641ab90ba8b015e4cdf153877791e0222e11695348a87'
-  
+
   const txs = await client.queryTransactionBlocks({
     filter: {
-      InputObject: packageId
+      InputObject: packageId,
     },
     options: {
-      showObjectChanges: true
+      showObjectChanges: true,
     },
-    limit: 10
+    limit: 10,
   })
 
   console.log(`Found ${txs.data.length} transactions associated with package.`)
@@ -33,12 +33,12 @@ async function main() {
   // Fallback: search transactions sent by admin
   const adminTxs = await client.queryTransactionBlocks({
     filter: {
-      FromAddress: adminAddress
+      FromAddress: adminAddress,
     },
     options: {
-      showObjectChanges: true
+      showObjectChanges: true,
     },
-    limit: 50
+    limit: 50,
   })
 
   for (const tx of adminTxs.data) {
