@@ -35,7 +35,7 @@ export function parseFrontmatter(md: string): FrontmatterResult {
 
   const perResponse = Number(perResponseStr)
   if (!Number.isInteger(perResponse) || perResponse <= 0)
-    return { ok: false, error: 'perResponse 必須為正整數（RWD 數量）' }
+    return { ok: false, error: 'perResponse 必須為正整數（SSR 數量）' }
 
   const maxResponses = Number(maxResponsesStr)
   if (!Number.isInteger(maxResponses) || maxResponses <= 0)

@@ -1,5 +1,7 @@
 @import 'tailwindcss';
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-blue-50: oklch(0.990 0.0091 254.604);
   --color-blue-100: oklch(0.990 0.0208 255.585);
@@ -29,9 +31,79 @@
 @layer base {
   body {
     font-family: 'Noto Sans TC', ui-sans-serif, system-ui, sans-serif;
+    @apply bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-100 transition-colors duration-200;
   }
   input:focus::placeholder,
   textarea:focus::placeholder {
     color: transparent;
   }
 }
+
+@utility text-h1 {
+  @apply text-2xl font-normal text-slate-900 dark:text-white;
+}
+
+@utility text-h2 {
+  @apply text-xl font-normal text-slate-900 dark:text-neutral-200;
+}
+
+@utility text-h3 {
+  @apply text-lg font-normal text-slate-900 dark:text-neutral-200;
+}
+
+@utility text-body {
+  @apply text-base font-normal text-slate-800 dark:text-neutral-300;
+}
+
+@utility text-muted {
+  @apply text-sm font-normal text-slate-600 dark:text-neutral-400;
+}
+
+@utility btn-primary {
+  @apply bg-blue-700 hover:bg-blue-800 text-neutral-100 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply dark:bg-blue-800 dark:hover:bg-blue-600 dark:text-neutral-200;
+  @apply disabled:bg-blue-700/50 disabled:text-neutral-200 disabled:cursor-not-allowed dark:disabled:bg-blue-900/30 dark:disabled:text-neutral-600 dark:disabled:cursor-not-allowed;
+}
+
+@utility btn-secondary {
+  @apply bg-slate-100 hover:bg-slate-200 text-slate-700 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply dark:bg-neutral-700 dark:hover:bg-neutral-600 dark:text-neutral-300;
+  @apply disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600;
+}
+
+@utility btn-outline {
+  @apply border border-slate-200 hover:bg-slate-100 text-slate-600 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply dark:border-0 dark:bg-neutral-800 dark:hover:bg-neutral-600 dark:text-neutral-300;
+  @apply disabled:border-slate-100 disabled:text-slate-300 disabled:cursor-not-allowed dark:disabled:bg-neutral-800/70 dark:disabled:text-neutral-700;
+}
+
+@utility btn-danger {
+  @apply bg-rose-800 hover:bg-rose-600 text-white font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply dark:bg-rose-800 dark:hover:bg-rose-700 dark:text-neutral-200;
+}
+
+@utility form-label {
+  @apply block text-sm font-normal text-slate-600 dark:text-neutral-300 uppercase tracking-wider mb-1;
+}
+
+@utility form-input {
+  @apply w-full border border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2 text-sm font-normal bg-white text-slate-800 transition-all;
+  @apply dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-200 dark:placeholder:text-neutral-500 dark:focus:ring-1 dark:focus:ring-blue-300;
+  @apply disabled:border-slate-100 disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed dark:disabled:border-neutral-800 dark:disabled:bg-neutral-800/50 dark:disabled:text-neutral-500;
+}
+
+@utility alert-success {
+  @apply flex items-start gap-3 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-xl p-4 text-sm font-semibold transition-all;
+  @apply dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-900/30;
+}
+
+@utility alert-error {
+  @apply flex items-start gap-3 bg-rose-50 text-rose-800 border border-rose-100 rounded-xl p-4 text-sm font-semibold transition-all;
+  @apply dark:bg-rose-950/20 dark:text-rose-300 dark:border-rose-900/30;
+}
+
+@utility alert-info {
+  @apply flex items-start gap-3 bg-blue-50 text-blue-800 border border-blue-100 rounded-xl p-4 text-sm font-semibold transition-all;
+  @apply dark:bg-blue-950/20 dark:text-blue-300 dark:border-blue-900/30;
+}
+

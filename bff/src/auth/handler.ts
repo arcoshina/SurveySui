@@ -58,7 +58,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         const nullifierHash = computeNullifierHash(email)
         const source = 2 // SRC_EMAIL
         const commitment = new Uint8Array(0)
-        const expiresAtMs = Date.now() + 3600000 // 1 hour TTL
+        const ttlMs = Number(process.env.BFF_PASS_TTL_MS) || 7 * 24 * 60 * 60 * 1000
+        const expiresAtMs = Date.now() + ttlMs
 
         const ticket = await signTicket(owner, source, nullifierHash, commitment, expiresAtMs)
 

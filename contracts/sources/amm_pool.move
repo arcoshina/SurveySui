@@ -2,6 +2,7 @@ module surveysui::amm_pool;
 
 use sui::balance::{Self, Balance};
 use sui::coin::{Self, Coin};
+use sui::event;
 use sui::sui::SUI;
 use surveysui::stacked_survey_reward::{Self, SsrTreasury, STACKED_SURVEY_REWARD};
 use surveysui::survey_reward::{Self, SrTreasury, SURVEY_REWARD};
@@ -13,11 +14,9 @@ const EZeroAmount: u64           = 1;
 const EInsufficientOutput: u64   = 2;
 const EInsufficientLiquidity: u64 = 3;
 const EInvalidFeeConfig: u64     = 4;
+const EUnequalBurnAmount: u64    = 5;
 
 // ── bonding curve constants ───────────────────────────────────────────────────
-
-/// Redemption fee: 0.3% in basis points.
-const REDEEM_FEE_BPS: u64 = 30;
 
 /// Bonding curve: ssr_base = sui_mist * INITIAL_SSR_PER_SUI * DECAY / (DECAY + total_sui_mist)
 /// Initial ratio: 1 SUI → 1000 SSR (price halves after DECAY MIST = 1000 SUI invested).
@@ -113,33 +112,6 @@ public fun invest_and_mint(
     stacked_survey_reward::mint(ssr_treasury, ssr_amount, ctx)
 }
 
-/// Respondent redeems SSR → SR. Deducts REDEEM_FEE_BPS; fee goes to admin.
-public fun redeem(
-    pool: &mut Pool,
-    ssr_treasury: &mut SsrTreasury,
-    ssr_in: Coin<STACKED_SURVEY_REWARD>,
-    ctx: &mut TxContext,
-): Coin<SURVEY_REWARD> {
-    let amount = coin::value(&ssr_in);
-    assert!(amount > 0, EZeroAmount);
-    assert!(balance::value(&pool.sr_reserve) >= amount, EInsufficientLiquidity);
-
-    let fee = amount * REDEEM_FEE_BPS / 10_000;
-    let sr_out_amount = amount - fee;
-
-    stacked_survey_reward::burn(ssr_treasury, ssr_in);
-
-    if (fee > 0) {
-        let fee_coin = coin::from_balance(
-            balance::split(&mut pool.sr_reserve, fee),
-            ctx,
-        );
-        transfer::public_transfer(fee_coin, pool.admin);
-    };
-
-    coin::from_balance(balance::split(&mut pool.sr_reserve, sr_out_amount), ctx)
-}
-
 /// Admin-only: withdraw SUI from pool.
 public fun admin_withdraw_sui(
     pool: &mut Pool,
@@ -151,13 +123,41 @@ public fun admin_withdraw_sui(
     coin::from_balance(balance::split(&mut pool.sui_reserve, amount), ctx)
 }
 
-/// Any SR holder may burn via pool (pool holds no SR burn cap; just passes through).
-/// Note: SR holders can also call survey_reward::burn directly.
-public fun burn_sr(
+/// Admin-only paired burn: admin must supply equal amounts of SR and SSR,
+/// both of which are burned together to preserve the 1:1 reserve↔certificate
+/// invariant between locked SR and circulating SSR.
+/// Low-frequency maintenance tool (typically ≤ once per week); emits SrSsrBurned.
+public fun admin_burn_pair(
+    pool: &Pool,
     sr_treasury: &mut SrTreasury,
-    coin: Coin<SURVEY_REWARD>,
+    ssr_treasury: &mut SsrTreasury,
+    sr_in: Coin<SURVEY_REWARD>,
+    ssr_in: Coin<STACKED_SURVEY_REWARD>,
+    ctx: &TxContext,
 ) {
-    survey_reward::burn(sr_treasury, coin);
+    assert!(ctx.sender() == pool.admin, ENotAdmin);
+    let sr_amount = coin::value(&sr_in);
+    let ssr_amount = coin::value(&ssr_in);
+    assert!(sr_amount > 0, EZeroAmount);
+    assert!(sr_amount == ssr_amount, EUnequalBurnAmount);
+
+    survey_reward::burn(sr_treasury, sr_in);
+    stacked_survey_reward::burn(ssr_treasury, ssr_in);
+
+    event::emit(SrSsrBurned {
+        admin: pool.admin,
+        amount: sr_amount,
+        sr_supply_after: survey_reward::total_supply(sr_treasury),
+        ssr_supply_after: stacked_survey_reward::total_supply(ssr_treasury),
+    });
+}
+
+/// Emitted when admin burns an equal pair of SR and SSR via admin_burn_pair.
+public struct SrSsrBurned has copy, drop {
+    admin: address,
+    amount: u64,
+    sr_supply_after: u64,
+    ssr_supply_after: u64,
 }
 
 // ── view functions ────────────────────────────────────────────────────────────

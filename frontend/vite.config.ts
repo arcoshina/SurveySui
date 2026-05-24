@@ -38,9 +38,33 @@ export default defineConfig({
       '@': '/src',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('@mysten/')) return 'sui-vendor'
+          if (id.includes('@tanstack/react-query')) return 'query-vendor'
+          if (
+            id.includes('react-router') ||
+            /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)
+          ) {
+            return 'react-vendor'
+          }
+        },
+      },
+    },
+  },
   server: {
     proxy: {
-      '/auth': 'http://localhost:3100',
+      '/auth': {
+        target: 'http://localhost:3100',
+        bypass: (req) => {
+          if (req.headers.accept?.includes('html')) {
+            return '/index.html'
+          }
+        },
+      },
       '/stats': 'http://localhost:3100',
       '/og': 'http://localhost:3100',
       '/api': 'http://localhost:3100',

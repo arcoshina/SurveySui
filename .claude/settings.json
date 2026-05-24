@@ -176,7 +176,18 @@
       "Bash(tee /tmp/publish.json)",
       "Bash(python3 -c ' *)",
       "Bash(awk '/^{/{p=1} p' publish.json)",
-      "Bash(tee /tmp/init_pool.json)"
+      "Bash(tee /tmp/init_pool.json)",
+      "Bash(xargs grep -l \"close\\\\|Close\")",
+      "Bash(npm test *)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Users\\\\Arco_asus\\\\Documents\\\\GitHub\\\\SurveySui\" -Recurse -Filter \"*.move\")",
+      "Bash(xargs grep -l \"invest_and_mint\\\\|redeem\\\\|claim\\\\|amm_pool\")",
+      "Bash(xargs grep -l \"buildCreateSurveyPtb\\\\|buildClaimPtb\\\\|buildMintPassPtb\")",
+      "Bash(xargs ls -1)",
+      "PowerShell(pnpm --filter @surveysui/frontend typecheck)",
+      "PowerShell(pnpm --filter @surveysui/frontend build)",
+      "Bash(pnpm --filter @surveysui/frontend typecheck)",
+      "Bash(pnpm --filter @surveysui/frontend build)",
+      "Bash(echo \"EXIT=$?\")"
     ],
     "additionalDirectories": [
       "d:\\d\\Users\\Arco_asus\\Documents\\GitHub\\SurveySui",

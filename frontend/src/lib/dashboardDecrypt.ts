@@ -77,9 +77,12 @@ export async function fetchClaimedEvents(
     })
 
     for (const ev of page.data) {
-      const parsed = ev.parsedJson as SurveyClaimedEvent
-      if (parsed.vault_id === vaultId) {
-        events.push(parsed)
+      const parsed = ev.parsedJson as any
+      if (parsed && parsed.vault_id === vaultId) {
+        events.push({
+          ...parsed,
+          claimed_at_ms: Number(parsed.claimed_at_ms),
+        })
       }
     }
 
@@ -115,7 +118,7 @@ export async function decryptAllResponses(
         respondent: ev.respondent,
         sub_hash: ev.sub_hash,
         answers,
-        claimed_at_ms: ev.claimed_at_ms,
+        claimed_at_ms: Number(ev.claimed_at_ms),
       })
     } catch {
       failed++

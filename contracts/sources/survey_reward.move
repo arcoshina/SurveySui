@@ -41,8 +41,10 @@ public(package) fun mint(
     coin::mint(&mut treasury.cap, amount, ctx)
 }
 
-/// Burn SR. Open to any holder.
-public fun burn(treasury: &mut SrTreasury, coin: Coin<SURVEY_REWARD>) {
+/// Burn SR. Package-only — must be called via amm_pool::admin_burn_pair
+/// to guarantee an equal amount of SSR is burned in the same call,
+/// preserving the SR↔SSR 1:1 reserve invariant.
+public(package) fun burn(treasury: &mut SrTreasury, coin: Coin<SURVEY_REWARD>) {
     coin::burn(&mut treasury.cap, coin);
 }
 

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit'
 import { Sun, Moon, Languages, Menu, X } from 'lucide-react'
+import { useLanguage } from '../context/LanguageContext'
+import { useTheme } from '../context/ThemeContext'
 
 export default function Navbar() {
   const account = useCurrentAccount()
@@ -9,29 +11,11 @@ export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  // 1. Language Toggle (Mock ZH/EN state, persisting to localStorage)
-  const [lang, setLang] = useState(() => localStorage.getItem('surveysui:lang') || 'ZH')
-  const toggleLang = () => {
-    const nextLang = lang === 'ZH' ? 'EN' : 'ZH'
-    setLang(nextLang)
-    localStorage.setItem('surveysui:lang', nextLang)
-  }
+  // 1. Language Toggle (using global LanguageContext)
+  const { lang, toggleLang } = useLanguage()
 
-  // 2. Dark/Light Theme Toggle (toggling 'dark' class on documentElement)
-  const [isDark, setIsDark] = useState(() => {
-    return (
-      document.documentElement.classList.contains('dark') ||
-      localStorage.getItem('surveysui:theme') === 'dark'
-    )
-  })
-
-  useEffect(() => {
-    if (isDark) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-  }, [isDark])
+  // 2. Dark/Light Theme Toggle (using global ThemeContext)
+  const { isDark, toggleTheme } = useTheme()
 
   // 點選選單外部時關閉
   useEffect(() => {
@@ -49,12 +33,6 @@ export default function Navbar() {
     setMenuOpen(false)
   }, [location.pathname])
 
-  const toggleTheme = () => {
-    const nextDark = !isDark
-    setIsDark(nextDark)
-    localStorage.setItem('surveysui:theme', nextDark ? 'dark' : 'light')
-  }
-
   const isActive = (path: string) => {
     if (path === '/dashboard') {
       return location.pathname.startsWith('/dashboard')
@@ -63,17 +41,17 @@ export default function Navbar() {
   }
 
   const linkClass = (path: string) =>
-    `text-sm font-semibold transition-colors py-2 px-3 rounded-lg ${
+    `text-sm font-normal transition-colors py-2 px-3 rounded-lg ${
       isActive(path)
-        ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 font-bold'
-        : 'text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
+        ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+        : 'text-neutral-650 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
     }`
 
   const menuItemClass = (path: string) =>
-    `block w-full text-left text-sm font-semibold transition-colors py-2 px-3 rounded-lg ${
+    `block w-full text-left text-sm font-normal transition-colors py-2 px-3 rounded-lg ${
       isActive(path)
-        ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
-        : 'text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
+        ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+        : 'text-neutral-650 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
     }`
 
   return (
@@ -82,7 +60,7 @@ export default function Navbar() {
         {/* Left Side: Brand */}
         <Link
           to="/"
-          className="flex items-center gap-2 h-full text-xl font-bold tracking-tight text-neutral-900 dark:text-white hover:opacity-90"
+          className="flex items-center gap-2 h-full text-xl font-normal tracking-tight text-neutral-900 dark:text-white hover:opacity-90"
         >
           <img src="/logo.svg" alt="SurveySui logo" className="h-full w-auto" />
           <span>SurveySui</span>

@@ -7,6 +7,7 @@ import { Transaction } from '@mysten/sui/transactions'
 import '@mysten/dapp-kit/dist/index.css'
 import './index.css'
 import App from './App'
+import { ThemeProvider, useTheme, darkTheme } from './context/ThemeContext'
 
 const queryClient = new QueryClient()
 
@@ -18,13 +19,22 @@ if (typeof window !== 'undefined') {
   ;(window as any).suiSdkForTesting = { SuiClient, Transaction }
 }
 
+function WalletProviderWithTheme() {
+  const { isDark } = useTheme()
+  return (
+    <WalletProvider autoConnect theme={isDark ? darkTheme : undefined}>
+      <App />
+    </WalletProvider>
+  )
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <SuiClientProvider networks={networks} defaultNetwork="devnet">
-        <WalletProvider autoConnect>
-          <App />
-        </WalletProvider>
+        <ThemeProvider>
+          <WalletProviderWithTheme />
+        </ThemeProvider>
       </SuiClientProvider>
     </QueryClientProvider>
   </React.StrictMode>

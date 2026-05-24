@@ -22,7 +22,7 @@ fun init(witness: STACKED_SURVEY_REWARD, ctx: &mut TxContext) {
         DECIMALS,
         b"SSR",
         b"Stacked Surveysui Reward",
-        b"Stacked survey reward — redeem at AMM pool for SR",
+        b"Stacked survey reward — circulating reward token",
         option::none(),
         ctx,
     );
@@ -41,7 +41,8 @@ public(package) fun mint(
     coin::mint(&mut treasury.cap, amount, ctx)
 }
 
-/// Burn SSR. Only callable within the surveysui package (amm_pool::redeem calls this).
+/// Burn SSR. Package-only — called by amm_pool::admin_burn_pair, paired with
+/// an equal SR burn to preserve the SR↔SSR 1:1 reserve invariant.
 public(package) fun burn(treasury: &mut SsrTreasury, coin: Coin<STACKED_SURVEY_REWARD>) {
     coin::burn(&mut treasury.cap, coin);
 }
