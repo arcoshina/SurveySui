@@ -6,6 +6,7 @@ export interface FrontmatterData {
   repeatMaxTimes: number
   maxResponses: number
   deadlineMs: number
+  encryptAnswers: boolean
 }
 
 export type FrontmatterResult = { ok: true; data: FrontmatterData } | { ok: false; error: string }
@@ -28,6 +29,7 @@ export function parseFrontmatter(md: string): FrontmatterResult {
   const deadlineStr = getVal('deadline')
   const repeatRewardStr = getVal('repeatReward')
   const repeatMaxTimesStr = getVal('repeatMaxTimes')
+  const encryptAnswersStr = getVal('encryptAnswers')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -55,7 +57,9 @@ export function parseFrontmatter(md: string): FrontmatterResult {
     return { ok: false, error: 'repeatMaxTimes 必須為正整數' }
   }
 
-  return { ok: true, data: { perResponse, repeatReward, repeatMaxTimes, maxResponses, deadlineMs } }
+  const encryptAnswers = encryptAnswersStr === 'false' ? false : true
+
+  return { ok: true, data: { perResponse, repeatReward, repeatMaxTimes, maxResponses, deadlineMs, encryptAnswers } }
 }
 
 export type QuestionType = 'single_choice' | 'multi_choice' | 'text' | 'scale'
@@ -79,6 +83,7 @@ export interface FullSurveyData {
   deadlineMs: number
   /** 0 = 無門檻；1/2 對應 KYC tier */
   minTier: number
+  encryptAnswers: boolean
   /** 問卷說明文字（純 markdown，frontmatter 與 questions 程式碼區塊之間） */
   description: string
   questions: Question[]
@@ -148,6 +153,7 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   const minTierStr = getVal('minTier')
   const repeatRewardStr = getVal('repeatReward')
   const repeatMaxTimesStr = getVal('repeatMaxTimes')
+  const encryptAnswersStr = getVal('encryptAnswers')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -179,6 +185,8 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
     return { ok: false, error: 'repeatMaxTimes 必須為正整數' }
   }
 
+  const encryptAnswers = encryptAnswersStr === 'false' ? false : true
+
   // 2) yaml code block (questions)
   const codeBlockMatch = /^([\s\S]*?)\r?\n```yaml\r?\n([\s\S]*?)\r?\n```/m.exec(afterFm)
   if (!codeBlockMatch) {
@@ -204,6 +212,7 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
       maxResponses,
       deadlineMs,
       minTier,
+      encryptAnswers,
       description,
       questions: questionsResult.questions,
     },
@@ -320,6 +329,7 @@ export function serializeFullSurveyToMarkdown(
     `maxResponses: ${data.maxResponses}`,
     `deadline: ${quoteString(deadlineIso)}`,
     `minTier: ${data.minTier}`,
+    `encryptAnswers: ${data.encryptAnswers !== false ? 'true' : 'false'}`,
     `draftStamp: ${quoteString(draftStamp)}`,
     '---',
   ]
@@ -366,6 +376,7 @@ export function makeBlankSurveyData(): FullSurveyData {
     maxResponses: 5,
     deadlineMs: future.getTime(),
     minTier: 0,
+    encryptAnswers: true,
     description: '',
     questions: [],
   }

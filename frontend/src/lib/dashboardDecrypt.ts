@@ -128,6 +128,37 @@ export async function decryptAllResponses(
   return { responses, failed }
 }
 
+/**
+ * Decode all plain (unencrypted) responses from on-chain event list.
+ */
+export function decodeAllPlainResponses(
+  events: SurveyClaimedEvent[],
+  questions: Question[],
+  vaultSchemaHash: string | Uint8Array
+): { responses: DecryptedResponse[]; failed: number } {
+  const responses: DecryptedResponse[] = []
+  let failed = 0
+
+  for (const ev of events) {
+    try {
+      const bytes = new Uint8Array(ev.encrypted_answers)
+      const plaintext = new TextDecoder().decode(bytes)
+      const answers = decodeAnswers(plaintext, questions, vaultSchemaHash)
+      responses.push({
+        respondent: ev.respondent,
+        sub_hash: ev.sub_hash,
+        answers,
+        claimed_at_ms: Number(ev.claimed_at_ms),
+      })
+    } catch {
+      failed++
+    }
+  }
+
+  return { responses, failed }
+}
+
+
 // ── aggregateStats ────────────────────────────────────────────────────────────
 
 /**
@@ -147,8 +178,15 @@ export function aggregateStats(
       if (!questions[key]) {
         questions[key] = { counts: {} }
       }
-      const label = String(value)
-      questions[key].counts[label] = (questions[key].counts[label] ?? 0) + 1
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const label = String(item)
+          questions[key].counts[label] = (questions[key].counts[label] ?? 0) + 1
+        }
+      } else {
+        const label = String(value)
+        questions[key].counts[label] = (questions[key].counts[label] ?? 0) + 1
+      }
     }
   }
 

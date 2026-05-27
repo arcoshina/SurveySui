@@ -41,7 +41,7 @@ export default function Navbar() {
   }
 
   const linkClass = (path: string) =>
-    `text-sm font-normal transition-colors py-2 px-3 rounded-lg ${
+    `inline-flex items-center h-9 text-sm font-normal transition-colors px-3 rounded-lg ${
       isActive(path)
         ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
         : 'text-neutral-650 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
@@ -73,7 +73,7 @@ export default function Navbar() {
             {account && (
               <>
                 <Link to="/auth" className={linkClass('/auth')}>
-                  {lang === 'ZH' ? '真人認證' : 'SurveyPass'}
+                  {lang === 'ZH' ? '誰位通證' : 'SurveyPass'}
                 </Link>
                 <Link to="/dashboard" className={linkClass('/dashboard')}>
                   {lang === 'ZH' ? '儀表板' : 'Dashboard'}
@@ -83,7 +83,7 @@ export default function Navbar() {
           </nav>
 
           {/* Wallet Connect Button (always visible) */}
-          <div className="[&_button]:shadow-none!">
+          <div className="[&_button]:shadow-none! [&_button]:h-9 [&_button]:py-0 [&_button]:px-3 [&_button]:text-sm [&_button]:leading-none">
             <ConnectButton />
           </div>
 
@@ -91,7 +91,7 @@ export default function Navbar() {
           <button
             type="button"
             onClick={toggleLang}
-            className="hidden sm:flex p-2 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
+            className="hidden sm:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
             aria-label={lang === 'ZH' ? '切換為英文' : 'Switch to Chinese'}
             title={lang === 'ZH' ? '切換為英文' : 'Switch to Chinese'}
           >
@@ -100,7 +100,7 @@ export default function Navbar() {
           <button
             type="button"
             onClick={toggleTheme}
-            className="hidden sm:flex p-2 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
+            className="hidden sm:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
             aria-label={isDark ? '切換為亮色模式' : 'Switch to Dark Mode'}
             title={isDark ? '切換為亮色模式' : 'Switch to Dark Mode'}
           >
@@ -112,7 +112,7 @@ export default function Navbar() {
             <button
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
-              className="p-2 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
+              className="flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
               aria-label="開啟選單"
             >
               {menuOpen ? <X size={18} /> : <Menu size={18} />}
@@ -123,7 +123,7 @@ export default function Navbar() {
                 {account && (
                   <>
                     <Link to="/auth" className={menuItemClass('/auth')}>
-                      {lang === 'ZH' ? '真人認證' : 'SurveyPass'}
+                      {lang === 'ZH' ? '誰位通證' : 'SurveyPass'}
                     </Link>
                     <Link to="/dashboard" className={menuItemClass('/dashboard')}>
                       {lang === 'ZH' ? '儀表板' : 'Dashboard'}

@@ -44,16 +44,16 @@ async function main() {
   const adminKeypair = adminPrivKey.startsWith('suiprivkey')
     ? Ed25519Keypair.fromSecretKey(adminPrivKey)
     : Ed25519Keypair.fromSecretKey(
-        Buffer.from(adminPrivKey.startsWith('0x') ? adminPrivKey.slice(2) : adminPrivKey, 'hex')
-      )
+      Buffer.from(adminPrivKey.startsWith('0x') ? adminPrivKey.slice(2) : adminPrivKey, 'hex')
+    )
   const adminAddress = adminKeypair.getPublicKey().toSuiAddress()
 
   // Get Issuer keypair
   const issuerKeypair = issuerPrivKey.startsWith('suiprivkey')
     ? Ed25519Keypair.fromSecretKey(issuerPrivKey)
     : Ed25519Keypair.fromSecretKey(
-        Buffer.from(issuerPrivKey.startsWith('0x') ? issuerPrivKey.slice(2) : issuerPrivKey, 'hex')
-      )
+      Buffer.from(issuerPrivKey.startsWith('0x') ? issuerPrivKey.slice(2) : issuerPrivKey, 'hex')
+    )
   const issuerAddress = issuerKeypair.getPublicKey().toSuiAddress()
 
   console.log('Admin Address:', adminAddress)
@@ -66,15 +66,15 @@ async function main() {
     `Admin SUI Balance: ${BigInt(adminBal.totalBalance) / 1000000000n} SUI (${adminBal.totalBalance} MIST)`
   )
   console.log(
-    `Issuer SUI Balance: ${BigInt(issuerBal.totalBalance) / 1000000000n} SUI (${issuerBal.totalBalance} MIST)`
+    `Gas station SUI Balance: ${BigInt(issuerBal.totalBalance) / 1000000000n} SUI (${issuerBal.totalBalance} MIST)`
   )
 
   const minFunding = 2_000_000_000n // 2 SUI
-  const fundAmount = 10_000_000_000n // 10 SUI
+  const fundAmount = 1_000_000_000n // 10 SUI
 
   if (BigInt(issuerBal.totalBalance) < minFunding) {
     console.log(
-      `Issuer balance is low. Transferring ${fundAmount / 1000000000n} SUI from Admin to Issuer...`
+      `Gas station balance is low. Transferring ${fundAmount / 1000000000n} SUI from Admin to Issuer...`
     )
     const tx = new Transaction()
     const [coin] = tx.splitCoins(tx.gas, [fundAmount])

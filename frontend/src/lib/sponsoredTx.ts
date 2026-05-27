@@ -102,9 +102,43 @@ export type FallbackResult =
   | { mode: 'sponsored'; sponsoredTxBytes: string; sponsorSignature: string }
   | { mode: 'self_paid'; digest: string }
 
+export interface GasHealth {
+  available: boolean
+  reason?: 'no_key' | 'low_balance' | 'unknown' | 'bff_down'
+}
+
+/**
+ * Probe whether the BFF gas sponsor is available.
+ * Resolves with `available: false` on any network/server failure (never throws).
+ */
+export async function probeGasSponsorHealth(params: {
+  backendUrl?: string
+  timeoutMs?: number
+} = {}): Promise<GasHealth> {
+  const { backendUrl = '', timeoutMs = 3000 } = params
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(`${backendUrl}/api/gas/health`, { signal: controller.signal })
+    if (!res.ok) return { available: false, reason: 'bff_down' }
+    const data = (await res.json()) as GasHealth
+    return data
+  } catch {
+    return { available: false, reason: 'bff_down' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export const USER_DECLINED_SELF_PAID = 'USER_DECLINED_SELF_PAID'
+
 /**
  * Try BFF-sponsored path; fall back to self-paid gas when BFF is unreachable.
  * Throws without fallback when the dry-run is rejected by the contract (DRY_RUN_REJECTED).
+ *
+ * When fallback is about to switch to self-paid, `onSelfPaidFallback` (if provided)
+ * is consulted with the estimated gas cost in MIST. Returning false aborts with
+ * USER_DECLINED_SELF_PAID so the UI can recover gracefully.
  */
 export async function executeTxWithFallback(params: {
   tx: Transaction
@@ -112,8 +146,9 @@ export async function executeTxWithFallback(params: {
   client: SuiClient
   backendUrl?: string
   signAndExecute: SignAndExecuteFn
+  onSelfPaidFallback?: (gasEstimateMist: bigint) => Promise<boolean>
 }): Promise<FallbackResult> {
-  const { tx, senderAddress, client, backendUrl = '', signAndExecute } = params
+  const { tx, senderAddress, client, backendUrl = '', signAndExecute, onSelfPaidFallback } = params
 
   // Path 1: Try BFF-sponsored
   try {
@@ -145,6 +180,19 @@ export async function executeTxWithFallback(params: {
   console.warn('[gas-fallback] BFF unreachable, switching to self-paid gas mode')
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('gas-fallback', { detail: { reason: 'bff_unreachable' } }))
+  }
+
+  // Ask the UI for explicit user consent before charging gas
+  if (onSelfPaidFallback) {
+    const gasUsed = dryRunResult.effects.gasUsed
+    const estimate =
+      BigInt(gasUsed.computationCost) +
+      BigInt(gasUsed.storageCost) -
+      BigInt(gasUsed.storageRebate)
+    const approved = await onSelfPaidFallback(estimate > 0n ? estimate : 0n)
+    if (!approved) {
+      throw new Error(USER_DECLINED_SELF_PAID)
+    }
   }
 
   // Execute with self-paid gas via wallet

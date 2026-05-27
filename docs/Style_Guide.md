@@ -2,8 +2,15 @@
 
 本文件定義了 SurveySui 平台的前端樣式系統與設計規範。為了維持平台視覺的一致性與高品質的使用者體驗（UX），所有開發的頁面或元件均應遵循此規範。
 
+題號文字
+${q.required ? 'text-rose-800 dark:text-rose-400/80' 
 
-**CSS 顏色數值需以100為單位變化，否則會報錯**
+必填徽章
+
+必填徽章
+
+
+**CSS 色階數值需以100為單位變化，否則會報錯**
 ---
 
 ## 1. 字型與文字層級 (Typography)
@@ -105,3 +112,94 @@
 *   **按鈕系列**: `btn-primary`, `btn-secondary`, `btn-outline`, `btn-danger`
 *   **表單元件**: `form-label`, `form-input`
 *   **反饋狀態**: `alert-success`, `alert-error`, `alert-info`
+
+---
+
+## 6. 身分驗證相關詞彙標準 (Auth Vocabulary)
+
+為避免「身分驗證」相關文案在不同頁面出現多種寫法，所有新增 / 修改文案請依本詞彙表撰寫。歷史文件（`docs/History/*`、`docs/專案 *.md`、`docs/改版備忘.md`）保留原稱呼，不追溯改動。
+
+### 中文標準
+
+| 概念 | 標準用語 | 不可使用 |
+| :--- | :--- | :--- |
+| 品牌名稱（導覽列、頁面標題） | **誰位通證** | 真人認證、真人憑證 |
+| 「Identity Center」中文 | **誰位通證中心** | 真人憑證認證中心 |
+| 動作「身分驗證」（動詞/名詞） | **驗證** | 認證（僅可出現在品牌複合詞「誰位通證」） |
+| Tier 0 | `Tier 0 - Email 驗證` | Email 認證 |
+| Tier 1 | `Tier 1 - OAuth 驗證` | OAuth 級認證、社交帳號驗證 |
+| Tier 2 | `Tier 2 - 真人驗證` | 政府/生物識別、高階驗證 |
+| 認證等級欄位 label | `驗證等級` / `驗證等級門檻` | 身分憑證門檻 |
+| Connect Wallet 提示 | `請連接錢包` | 請先連接錢包、請連結錢包 |
+
+### 英文標準
+
+| 概念 | 標準用語 | 不可使用 |
+| :--- | :--- | :--- |
+| 導覽列 link 文字 | `SurveyPass` | — |
+| AuthPage 大標題 | `SurveyPass Identity Center` | — |
+| 「身分驗證」動作 | `Verification` | Authentication、Identity verification |
+| 驗證失敗訊息 | `Verification or transaction send failed` | Authentication or transaction send failed |
+| 驗證 required 提示 | `Verification required` | Identity verification required |
+| 認證等級欄位 label | `Verification level` / `Verification level threshold` | Identity level、Identity Pass Threshold |
+| Tier 0 | `Tier 0 - Email` | Email Verified |
+| Tier 1 | `Tier 1 - OAuth` | OAuth Verified、Social Account Verified |
+| Tier 2 | `Tier 2 - Individual` | Gov/Biometric、Government/Biometric、Advanced Verification |
+| Connect Wallet 提示句 | `Please connect your wallet` | Please Connect Wallet First |
+| Connect Wallet 區塊標題 | `Wallet connection required` | Wallet Connection Required |
+| 「Pass」單獨用 | 一律改為 `SurveyPass` 全名 | Update Pass、Delete Pass |
+
+### SurveyPass 動詞區分（語意不同，請保留）
+
+| 場景 | 標準動詞 |
+| :--- | :--- |
+| 首次取得 | `Claim SurveyPass` |
+| 已過期重新驗證 | `Renew SurveyPass` |
+| 升級 Tier | `Upgrade SurveyPass` |
+| 一般更新 | `Update SurveyPass` |
+| 管理員吊銷 | `Revoke SurveyPass` |
+| GDPR 刪除 | `Delete SurveyPass` |
+
+---
+
+## 7. 必填 / 選填標示 (Required / Optional Indicator)
+
+問卷題目在「填寫」與「確認」階段都會於題首顯示一個小型徽章 (chip) 標示題目是否為必填。為避免使用者誤判題目重要程度,**填寫與確認兩階段必須使用相同色系**,不可在其中一階段降為中性灰。
+
+### 推薦用法:使用 utility class
+
+色票已封裝為 `.chip-required` 與 `.chip-optional` 兩個 utility(定義於 [index.css](../frontend/src/index.css)),日後調色只需改 utility 一處即可全站同步:
+
+```tsx
+{/* 二分支:必填與選填 chip */}
+<span className={q.required ? 'chip-required' : 'chip-optional'}>
+  {q.required ? '必填' : '選填'}
+</span>
+
+{/* 單分支:僅必填出現時 */}
+{q.required && <span className="chip-required">必填</span>}
+```
+
+### Utility class 對應的 Tailwind 色票
+
+| Utility | 亮色模式 | 暗色模式 |
+| :--- | :--- | :--- |
+| **`.chip-required`** | `bg-rose-50 border-rose-100 text-rose-800` | `dark:bg-rose-600/20 dark:border-rose-400/70 dark:text-rose-400/80` |
+| **`.chip-optional`** | `bg-slate-100 border-slate-200 text-slate-500` | `dark:bg-neutral-800 dark:border-neutral-700 dark:text-neutral-400` |
+
+兩者共用結構:`px-2 py-0.5 rounded-full text-[10px] font-bold border`。
+
+### 題號文字配色
+
+題號文字採與徽章一致的紅/灰雙模式:
+
+| 狀態 | 亮色模式 | 暗色模式 |
+| :--- | :--- | :--- |
+| **必填** | `text-rose-800` | `dark:text-rose-400/80` |
+| **選填** | `text-slate-700` | `dark:text-neutral-200`(或 `dark:text-neutral-300`) |
+
+### 與 §4 alert-error 的關係
+
+alert-error 暗模式底色為 `bg-rose-950/20`,本節 chip 改用更實心的 `bg-rose-600/20` 並搭配高不透明度邊框 `dark:border-rose-400/70`。原因:徽章面積小,需要稍亮一階的紅才能在 `dark:bg-neutral-900` 卡片上被清楚看見;`alert-error` 為佔位較大的提示框,維持 §4 規範不變。
+
+實作參考:[SurveyPage.tsx](../frontend/src/pages/SurveyPage.tsx) 填寫與確認兩階段均使用上述 utility。

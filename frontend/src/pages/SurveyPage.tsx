@@ -4,12 +4,19 @@ import { IdCard, AlertTriangle, Check } from 'lucide-react'
 import {
   ConnectButton,
   useCurrentAccount,
+  useCurrentWallet,
   useSignTransaction,
   useSignAndExecuteTransaction,
   useSuiClient,
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
-import { buildClaimPtb, executeSponsoredTx, executeTxWithFallback } from '../lib/sponsoredTx'
+import {
+  buildClaimPtb,
+  executeSponsoredTx,
+  executeTxWithFallback,
+  probeGasSponsorHealth,
+  USER_DECLINED_SELF_PAID,
+} from '../lib/sponsoredTx'
 import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
 import { parseFullSurveyMarkdown, type QuestionType } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
@@ -18,6 +25,7 @@ import { buildMintPassPtb } from '../lib/ptb'
 import { fetchActivePass, SurveyPassData } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useLanguage } from '../context/LanguageContext'
+import { formatSui } from '../lib/format'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 
@@ -41,15 +49,15 @@ const content = {
     errTxExecFailed: '交易執行失敗',
     errUnknown: '未知錯誤',
     errTxOnchain: (raw: string) => `鏈上交易執行失敗: ${raw}`,
-    errAuthOrTxFailed: '認證或交易發送失敗',
+    errAuthOrTxFailed: '驗證或交易發送失敗',
     errNeedConnectSign: '請連接錢包以進行簽名!',
     errPassRevokedShort: '您的 SurveyPass 已被吊銷 (Revoked)',
     errPassExpiredShort: '您的 SurveyPass 已過期',
     errNoCreatorKey: '未載入問卷建立者金鑰,無法加密答案',
     errSubmitFailed: '提交填答與領取獎勵失敗',
-    errRequiredPrefix: (qs: string) => `請回答必填題:${qs}`,
-    errPassRevokedFull: '您的 SurveyPass 已被吊銷 (Revoked),無法填寫問卷。請先前往真人認證重新發行。',
-    errPassExpiredFull: '您的 SurveyPass 已過期,請先前往真人認證更新驗證。',
+    errRequired: '請回答所有必填題',
+    errPassRevokedFull: '您的 SurveyPass 已被吊銷 (Revoked),無法填寫問卷。請先前往誰位通證重新發行。',
+    errPassExpiredFull: '您的 SurveyPass 已過期,請先前往誰位通證更新驗證。',
     notFilled: '（未填寫)',
     multiSep: '、',
     connectWalletTitle: '請連接錢包',
@@ -61,7 +69,7 @@ const content = {
     surveyClosedDesc: '發起人已結束此問卷活動,目前已無法再填寫。',
     backHome: '返回首頁',
     needPassTitle: '首次填答,請先領取通行證',
-    needPassDesc: '本系統需要真人憑證 (SurveyPass) 以防範女巫攻擊。請輸入 Email 獲取驗證碼以鑄造您專屬的 SBT 憑證卡。',
+    needPassDesc: '本系統需要誰位通證 (SurveyPass) 以防範女巫攻擊。請輸入 Email 獲取驗證碼以鑄造您專屬的 SBT 憑證卡。',
     needPassConnectHint: '要獲取或鑄造您的 SurveyPass,您必須先連結您的 Sui 錢包。',
     backToSurvey: '返回問卷',
     emailLabel: '電子郵件地址',
@@ -76,6 +84,12 @@ const content = {
     submitSuccessTitle: '提交成功!',
     selfPaidNotice: (prefix: string) => `${prefix}本次以自付 gas 模式完成（Gas Station 暫時不可用)`,
     selfPaidPrefix: '提示:',
+    gasSelfPaidWarning: '⚠ Gas 代付目前失效中,請稍後再試',
+    gasSelfPaidConfirmTitle: 'Gas 代付失效中',
+    gasSelfPaidConfirmDesc: (estSui: string) => `提交本問卷需由您支付鏈上手續費 (預估 ${estSui} SUI)。是否繼續?`,
+    gasSelfPaidContinue: '確認自付',
+    gasSelfPaidCancel: '取消',
+    confirmSubmitSelfPaid: '自付 Gas 提交 ➔',
     submitSuccessDesc: '感謝您的熱心參與,填答完成驗證已在鏈上通過,RWD 獎勵已發放至您的錢包!',
     txHashLabel: '交易雜湊（TX Hash)',
     reviewTitle: '確認您的答案',
@@ -88,10 +102,10 @@ const content = {
     confirmSubmit: '確認提交並領取獎勵 ➔',
     connectWalletShort: '請先連結錢包:',
     connectWalletShortDesc: ' 填寫此問卷需要連結錢包並檢測您的身分憑證 (SurveyPass)。',
-    tier0: 'Email 驗證',
-    tier1: '社交帳號驗證',
-    tier2: '高階驗證',
-    submissionLimitReached: '已達填答次數上限:',
+    tier0: 'Tier 0 - Email 驗證',
+    tier1: 'Tier 1 - OAuth 驗證',
+    tier2: 'Tier 2 - 真人驗證',
+    submissionLimitReached: '已達填答次數上限：',
     submissionLimitMsg: (n: number, max: string) => `您此地址已填過 ${n} 次${max},無法再次提交。`,
     submissionLimitSuffix: (m: number) => `（上限 ${m} 次)`,
     youHaveFilled: (n: number) => `您已填過 ${n} 次。`,
@@ -104,14 +118,24 @@ const content = {
     textPlaceholder: '請輸入您的回答...',
     needPassPrompt: '需要 SurveyPass 憑證:',
     needPassPromptDesc: ' 填寫此問卷要求經過身分驗證。',
+    verifyingPass: '正在驗證身分憑證…',
     getPassBtn: '獲取 SurveyPass 憑證',
+    passExpiredPrompt: 'SurveyPass 已過期:',
+    passExpiredDesc: ' 您的憑證已逾有效期限,請重新驗證以更新效期。',
+    passRevokedPrompt: 'SurveyPass 已被吊銷:',
+    passRevokedDesc: ' 您的憑證已被管理員吊銷,請重新驗證取得新憑證。',
+    renewPassBtn: '重新驗證更新',
     tierTooLowPrompt: '憑證等級不足:',
     tierTooLowDesc: (req: number, curr: number) => ` 本問卷要求 Tier ${req},但您的憑證等級為 Tier ${curr}。`,
     upgradePassBtn: '升級 SurveyPass 憑證',
     submitLabelLimit: '已達填答次數上限',
     submitLabelNeedAuth: '需要身分驗證才能填答',
+    submitLabelExpired: 'Pass 已過期,請先重新驗證',
+    submitLabelRevoked: 'Pass 已被吊銷,請先重新驗證',
     submitLabelPreviewRepeat: '預覽答案（重複填答)',
     submitLabelPreview: '預覽答案',
+    warnUnencryptedAnswers: '⚠️ 安全提示：此問卷完全公開，任何人均可檢視您的填答內容。請勿填寫個人隱私資訊。',
+    viewResultsBtn: '查看即時統計結果',
     locale: 'zh-TW',
   },
   EN: {
@@ -133,13 +157,13 @@ const content = {
     errTxExecFailed: 'Transaction execution failed',
     errUnknown: 'Unknown error',
     errTxOnchain: (raw: string) => `On-chain transaction failed: ${raw}`,
-    errAuthOrTxFailed: 'Authentication or transaction send failed',
+    errAuthOrTxFailed: 'Verification or transaction send failed',
     errNeedConnectSign: 'Please connect your wallet to sign!',
     errPassRevokedShort: 'Your SurveyPass has been revoked',
     errPassExpiredShort: 'Your SurveyPass has expired',
     errNoCreatorKey: 'Survey creator key not loaded, cannot encrypt answers',
     errSubmitFailed: 'Failed to submit response and claim reward',
-    errRequiredPrefix: (qs: string) => `Please answer the required questions: ${qs}`,
+    errRequired: 'Please answer all required questions.',
     errPassRevokedFull: 'Your SurveyPass has been revoked. Please re-verify identity to issue a new one.',
     errPassExpiredFull: 'Your SurveyPass has expired. Please re-verify identity to update.',
     notFilled: '(unanswered)',
@@ -168,6 +192,12 @@ const content = {
     submitSuccessTitle: 'Submitted successfully!',
     selfPaidNotice: (prefix: string) => `${prefix}Completed with self-paid gas mode (Gas Station temporarily unavailable)`,
     selfPaidPrefix: 'Notice: ',
+    gasSelfPaidWarning: '⚠ Gas sponsorship is currently unavailable. Please try again later.',
+    gasSelfPaidConfirmTitle: 'Gas Sponsorship Unavailable',
+    gasSelfPaidConfirmDesc: (estSui: string) => `Submitting this survey will require you to pay the on-chain gas fee (~${estSui} SUI). Continue?`,
+    gasSelfPaidContinue: 'Pay Gas & Submit',
+    gasSelfPaidCancel: 'Cancel',
+    confirmSubmitSelfPaid: 'Self-paid Gas Submit ➔',
     submitSuccessDesc: 'Thank you for participating! Your response has been verified on-chain, and the RWD reward has been sent to your wallet!',
     txHashLabel: 'Transaction Hash',
     reviewTitle: 'Confirm your answers',
@@ -180,10 +210,10 @@ const content = {
     confirmSubmit: 'Confirm submission and claim reward ➔',
     connectWalletShort: 'Please connect your wallet:',
     connectWalletShortDesc: ' Filling out this survey requires connecting your wallet and verifying your SurveyPass.',
-    tier0: 'Email Verified',
-    tier1: 'Social Account Verified',
-    tier2: 'Advanced Verification',
-    submissionLimitReached: 'Submission limit reached:',
+    tier0: 'Tier 0 - Email',
+    tier1: 'Tier 1 - OAuth',
+    tier2: 'Tier 2 - Individual',
+    submissionLimitReached: 'Submission Limit Reached: ',
     submissionLimitMsg: (n: number, max: string) => `Your address has submitted ${n} times${max}. You cannot submit again.`,
     submissionLimitSuffix: (m: number) => ` (limit ${m})`,
     youHaveFilled: (n: number) => `You have submitted ${n} times.`,
@@ -196,14 +226,24 @@ const content = {
     textPlaceholder: 'Enter your answer...',
     needPassPrompt: 'SurveyPass credential required:',
     needPassPromptDesc: ' This survey requires identity verification.',
-    getPassBtn: 'Get SurveyPass',
-    tierTooLowPrompt: 'Credential tier too low:',
-    tierTooLowDesc: (req: number, curr: number) => ` This survey requires Tier ${req}, but your credential is Tier ${curr}.`,
+    verifyingPass: 'Verifying identity credential…',
+    getPassBtn: 'Claim SurveyPass',
+    passExpiredPrompt: 'SurveyPass expired:',
+    passExpiredDesc: ' Your credential is past its expiry. Re-verify your identity to renew it.',
+    passRevokedPrompt: 'SurveyPass revoked:',
+    passRevokedDesc: ' Your credential has been revoked by an admin. Re-verify to obtain a new one.',
+    renewPassBtn: 'Renew SurveyPass',
+    tierTooLowPrompt: 'Low SurveyPass level:',
+    tierTooLowDesc: (req: number, curr: number) => ` This survey requires Tier ${req}, but your SurveyPass is Tier ${curr}.`,
     upgradePassBtn: 'Upgrade SurveyPass',
     submitLabelLimit: 'Submission limit reached',
-    submitLabelNeedAuth: 'Identity verification required',
+    submitLabelNeedAuth: 'Verification required',
+    submitLabelExpired: 'Pass expired — please re-verify',
+    submitLabelRevoked: 'Pass revoked — please re-verify',
     submitLabelPreviewRepeat: 'Preview answers (repeat submission)',
     submitLabelPreview: 'Preview answers',
+    warnUnencryptedAnswers: '⚠️ Privacy Alert: The creator set "Unencrypted Answers" for this survey. Once submitted, your answers will be publicly visible to anyone on the dashboard. Please DO NOT enter sensitive personal information.',
+    viewResultsBtn: 'View Real-time Results',
     locale: 'en-US',
   },
 }
@@ -248,6 +288,7 @@ interface Survey {
   vaultObjectId: string // Add vaultObjectId for claiming
   questions: Question[]
   schemaHash: string
+  encryptAnswers?: boolean
 }
 
 type Answers = Record<string, string | string[]>
@@ -285,10 +326,17 @@ export default function SurveyPage() {
 
   // Wallet & Client integration
   const account = useCurrentAccount()
+  const { connectionStatus } = useCurrentWallet()
+  const isWalletConnecting = connectionStatus === 'connecting'
   const suiClient = useSuiClient()
   const { mutateAsync: signTransaction } = useSignTransaction()
   const { mutateAsync: signAndExecuteWallet } = useSignAndExecuteTransaction()
   const [selfPaidMode, setSelfPaidMode] = useState(false)
+  const [gasMode, setGasMode] = useState<'unknown' | 'sponsored' | 'self_paid_warning'>('unknown')
+  const [selfPaidConfirm, setSelfPaidConfirm] = useState<{
+    estSui: string
+    resolve: (ok: boolean) => void
+  } | null>(null)
 
   // SurveyPass SBT & Verification States
   const registryId =
@@ -303,7 +351,7 @@ export default function SurveyPage() {
   const [issuingError, setIssuingError] = useState<string | null>(null)
 
   const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
-  const [isPassLoading, setIsPassLoading] = useState(false)
+  const [isPassLoading, setIsPassLoading] = useState(true)
 
   /** How many times the connected wallet has already claimed for this survey. */
   const [myClaimCount, setMyClaimCount] = useState(0)
@@ -311,6 +359,7 @@ export default function SurveyPage() {
   const fetchPass = async () => {
     if (!account?.address || !registryId) {
       setActivePass(null)
+      setIsPassLoading(false)
       return
     }
     setIsPassLoading(true)
@@ -339,6 +388,19 @@ export default function SurveyPage() {
       phase,
     })
   }, [account?.address, activePass, surveyMinTier, phase])
+
+  // Probe BFF gas sponsor health when entering review phase
+  useEffect(() => {
+    if (phase !== 'review' || gasMode !== 'unknown') return
+    let cancelled = false
+    void probeGasSponsorHealth().then((res) => {
+      if (cancelled) return
+      setGasMode(res.available ? 'sponsored' : 'self_paid_warning')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [phase, gasMode])
 
   useEffect(() => {
     if (!id) return
@@ -504,6 +566,7 @@ export default function SurveyPage() {
           vaultObjectId: vault_id,
           questions: parsed.data.questions,
           schemaHash: schemaHashHex,
+          encryptAnswers: parsed.data.encryptAnswers !== false,
         })
 
         // Count this wallet's prior claims on this vault (events filtered client-side).
@@ -702,7 +765,7 @@ export default function SurveyPage() {
       return ans.trim() === ''
     })
     if (missing.length > 0) {
-      setValidationError(t.errRequiredPrefix(missing.map((q) => q.prompt).join(t.multiSep)))
+      setValidationError(t.errRequired)
       return
     }
     setValidationError(null)
@@ -743,17 +806,26 @@ export default function SurveyPage() {
 
     try {
       // 1. Encrypt answers using ECIES
-      if (!creatorPubKey) {
-        throw new Error(t.errNoCreatorKey)
-      }
       const encodedPayload = encodeAnswers(answers, survey.questions, survey.schemaHash)
-      const encryptedAnswersBytes = await encryptAnswers(
-        JSON.stringify(encodedPayload),
-        creatorPubKey
-      )
-      const encryptedAnswersHex = Array.from(encryptedAnswersBytes)
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('')
+      const payloadStr = JSON.stringify(encodedPayload)
+      let encryptedAnswersHex: string
+
+      if (survey.encryptAnswers === false) {
+        // 公開不加密：直接將 payload 轉成 UTF-8 bytes 再轉成 hex
+        const bytes = new TextEncoder().encode(payloadStr)
+        encryptedAnswersHex = Array.from(bytes)
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('')
+      } else {
+        // 加密：使用原有的 ECIES 加密
+        if (!creatorPubKey) {
+          throw new Error(t.errNoCreatorKey)
+        }
+        const encryptedAnswersBytes = await encryptAnswers(payloadStr, creatorPubKey)
+        encryptedAnswersHex = Array.from(encryptedAnswersBytes)
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('')
+      }
 
       // 2. Build Claim PTB
       const tx = buildClaimPtb({
@@ -763,7 +835,8 @@ export default function SurveyPage() {
         encryptedAnswers: encryptedAnswersHex,
       })
 
-      // 3. Try sponsored path; auto-fallback to self-paid if BFF unreachable
+      // 3. Try sponsored path; auto-fallback to self-paid if BFF unreachable.
+      // When fallback would charge the user, surface a confirm dialog first.
       const fallbackResult = await executeTxWithFallback({
         tx,
         senderAddress: account.address,
@@ -772,6 +845,11 @@ export default function SurveyPage() {
           const res = await signAndExecuteWallet({ transaction: t as any })
           return { digest: res.digest }
         },
+        onSelfPaidFallback: (estMist) =>
+          new Promise<boolean>((resolve) => {
+            const estSui = formatSui(estMist)
+            setSelfPaidConfirm({ estSui, resolve })
+          }),
       })
 
       let digest: string
@@ -816,6 +894,12 @@ export default function SurveyPage() {
       setTxHash(digest)
       setPhase('success')
     } catch (err: any) {
+      if (err?.message === USER_DECLINED_SELF_PAID) {
+        // User cancelled the self-paid confirmation — keep their answers, surface the warning
+        setGasMode('self_paid_warning')
+        setPhase('review')
+        return
+      }
       const friendly = translateMoveAbort(err.message)
       setSubmitError(friendly || err.message || t.errSubmitFailed)
       setPhase('review')
@@ -830,7 +914,7 @@ export default function SurveyPage() {
   if (!account && phase !== 'loading' && phase !== 'closed') {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <h1 className="text-h1">{t.connectWalletTitle}</h1>
           <p className="text-muted leading-relaxed">
             {t.connectWalletDesc}
@@ -838,7 +922,7 @@ export default function SurveyPage() {
           <div className="my-3 scale-110">
             <ConnectButton />
           </div>
-          <p className="text-xs text-slate-400">{t.connectWalletHint}</p>
+          <p className="text-xs text-slate-400 dark:text-neutral-500">{t.connectWalletHint}</p>
         </div>
       </main>
     )
@@ -847,9 +931,9 @@ export default function SurveyPage() {
   if (phase === 'loading') {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
-          <p aria-live="polite" className="text-sm text-slate-500 font-medium">
+          <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
             {t.loadingSurvey}
           </p>
         </div>
@@ -860,7 +944,7 @@ export default function SurveyPage() {
   if ((phase === 'error' || !survey) && phase !== 'closed') {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
             <AlertTriangle size={24} />
           </div>
@@ -875,8 +959,8 @@ export default function SurveyPage() {
   if (phase === 'closed') {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 text-slate-400">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500">
             <svg
               className="w-6 h-6"
               fill="none"
@@ -908,9 +992,9 @@ export default function SurveyPage() {
   if (phase === 'need_pass') {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 animate-fadeIn w-full">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 animate-fadeIn w-full">
           <div className="text-center">
-            <div className="w-12 h-12 bg-blue-50 border border-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <div className="w-12 h-12 bg-blue-200 border border-blue-200 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <IdCard size={24} />
             </div>
             <h2 className="text-h2">
@@ -923,7 +1007,7 @@ export default function SurveyPage() {
 
           {!account ? (
             <div className="text-center space-y-4">
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-slate-500 dark:text-neutral-400">
                 {t.needPassConnectHint}
               </p>
               <div className="flex justify-center my-2">
@@ -932,7 +1016,7 @@ export default function SurveyPage() {
               <button
                 type="button"
                 onClick={() => setPhase('filling')}
-                className="text-xs text-slate-400 hover:text-slate-600 transition-colors underline block mx-auto"
+                className="text-xs text-slate-400 dark:text-neutral-500 hover:text-slate-600 dark:text-neutral-300 transition-colors underline block mx-auto"
               >
                 {t.backToSurvey}
               </button>
@@ -994,7 +1078,7 @@ export default function SurveyPage() {
                   required
                 />
                 {debugOtp && (
-                  <p className="text-[10px] text-blue-700 mt-2 bg-blue-50/50 p-2.5 rounded-xl border border-blue-105 font-medium leading-relaxed">
+                  <p className="text-[10px] text-blue-700 dark:text-blue-300 mt-2 bg-blue-50/50 dark:bg-blue-950/30 p-2.5 rounded-xl border border-blue-100 dark:border-blue-900 font-medium leading-relaxed">
                     {t.devOtpHintPrefix}<span className="font-bold font-mono">{debugOtp}</span>{t.devOtpHintSuffix}
                   </p>
                 )}
@@ -1036,8 +1120,8 @@ export default function SurveyPage() {
   if (phase === 'success') {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 mb-1 animate-scaleIn">
+        <div className="bg-white dark:bg-neutral-900 rounded-xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 border border-emerald-100 mb-1 animate-scaleIn">
             <svg
               className="w-8 h-8"
               fill="none"
@@ -1055,19 +1139,27 @@ export default function SurveyPage() {
           </div>
           <h1 className="text-h1">{t.submitSuccessTitle}</h1>
           {selfPaidMode && (
-            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 leading-relaxed w-full">
-              <strong>{t.selfPaidPrefix}</strong>{t.selfPaidNotice('')}
+            <div className="text-sm warning-box rounded-xl px-4 py-3 leading-relaxed w-full">
+              <span>{t.selfPaidPrefix}</span>{t.selfPaidNotice('')}
             </div>
           )}
           <p className="text-muted leading-relaxed">
             {t.submitSuccessDesc}
           </p>
-          <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 text-left w-full space-y-1 shadow-inner">
-            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{t.txHashLabel}</p>
+          <div className="bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 text-left w-full space-y-1 shadow-inner">
+            <p className="text-xs text-slate-400 dark:text-neutral-500 font-bold uppercase tracking-wider">{t.txHashLabel}</p>
             <p aria-label="tx-hash" className="font-mono text-xs break-all text-blue-600 font-semibold">
               {txHash}
             </p>
           </div>
+          {survey?.encryptAnswers === false && (
+            <Link
+              to={`/results/${survey.vaultObjectId}`}
+              className="btn-primary w-full inline-flex items-center justify-center"
+            >
+              {t.viewResultsBtn}
+            </Link>
+          )}
           <Link
             to="/"
             className="btn-secondary w-full"
@@ -1082,24 +1174,35 @@ export default function SurveyPage() {
   if (phase === 'review' || phase === 'submitting') {
     if (!survey) return null
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto">
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
-          <div className="border-b pb-4 border-slate-100">
+      <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
+          <div className="border-b pb-4 border-slate-100 dark:border-neutral-800">
             <h1 className="text-h1">{t.reviewTitle}</h1>
             <p className="text-muted mt-1">{t.reviewDesc}</p>
+            {gasMode === 'self_paid_warning' && (
+              <div role="alert" className="alert-error mt-3">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                <span>{t.gasSelfPaidWarning}</span>
+              </div>
+            )}
+            {survey.encryptAnswers === false && (
+              <div className="warning-box rounded-2xl p-4 text-sm leading-relaxed mt-3">
+                {t.warnUnencryptedAnswers}
+              </div>
+            )}
           </div>
 
           <div className="space-y-4 max-h-[450px] overflow-y-auto pr-1">
             {survey.questions.map((q, i) => (
-              <div key={q.id} className="bg-slate-50/50 border border-slate-100 rounded-2xl p-5 space-y-3 shadow-sm transition-colors hover:bg-slate-50">
-                <div className="flex items-center justify-between border-b pb-2 border-slate-200/60">
-                  <span className="text-sm font-semibold text-slate-700">{t.questionNum(i + 1)}</span>
-                  <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
+              <div key={q.id} className="bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-3 shadow-sm transition-colors hover:bg-slate-50 dark:hover:bg-neutral-800/40">
+                <div className="flex items-center justify-between border-b pb-2 border-slate-200/60 dark:border-neutral-700/60">
+                  <span className="text-sm font-semibold text-slate-700 dark:text-neutral-200">{t.questionNum(i + 1)}</span>
+                  <span className={q.required ? 'chip-required' : 'chip-optional'}>
                     {q.required ? t.required : t.optional}
                   </span>
                 </div>
                 <p className="text-body leading-relaxed">{q.prompt}</p>
-                <div className="bg-white border border-slate-100 rounded-xl px-4 py-2.5 shadow-inner">
+                <div className="bg-white dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800 rounded-xl px-4 py-2.5 shadow-inner">
                   <p className="text-blue-700 font-bold text-sm">{getAnswerDisplay(q)}</p>
                 </div>
               </div>
@@ -1126,21 +1229,85 @@ export default function SurveyPage() {
               type="button"
               onClick={() => void handleSubmit()}
               disabled={phase === 'submitting'}
-              className="w-full sm:w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 text-sm shadow-md flex items-center justify-center gap-1.5"
+              className={
+                gasMode === 'self_paid_warning'
+                  ? 'btn-danger w-full sm:w-2/3 flex items-center justify-center gap-1.5 disabled:opacity-50'
+                  : 'w-full sm:w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 text-sm shadow-md flex items-center justify-center gap-1.5'
+              }
             >
-              {phase === 'submitting' ? t.submitting : t.confirmSubmit}
+              {phase === 'submitting'
+                ? t.submitting
+                : gasMode === 'self_paid_warning'
+                  ? t.confirmSubmitSelfPaid
+                  : t.confirmSubmit}
             </button>
           </div>
         </div>
+        {selfPaidConfirm && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+            onClick={() => {
+              selfPaidConfirm.resolve(false)
+              setSelfPaidConfirm(null)
+            }}
+          >
+            <div
+              className="bg-white dark:bg-neutral-900 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-2xl max-w-md w-full p-6 space-y-4 animate-fadeIn"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start gap-3">
+                <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-rose-50 text-rose-600 border border-rose-100 dark:bg-rose-600/20 dark:border-rose-400/70 dark:text-rose-400 shrink-0">
+                  <AlertTriangle size={20} />
+                </div>
+                <div className="flex-1">
+                  <h2 className="text-base font-semibold text-slate-900 dark:text-neutral-100">
+                    {t.gasSelfPaidConfirmTitle}
+                  </h2>
+                  <p className="text-sm text-slate-600 dark:text-neutral-400 mt-1 leading-relaxed">
+                    {t.gasSelfPaidConfirmDesc(selfPaidConfirm.estSui)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                <button
+                  type="button"
+                  className="btn-outline w-full sm:w-1/2"
+                  onClick={() => {
+                    selfPaidConfirm.resolve(false)
+                    setSelfPaidConfirm(null)
+                  }}
+                >
+                  {t.gasSelfPaidCancel}
+                </button>
+                <button
+                  type="button"
+                  className="btn-danger w-full sm:w-1/2"
+                  onClick={() => {
+                    selfPaidConfirm.resolve(true)
+                    setSelfPaidConfirm(null)
+                  }}
+                >
+                  {t.gasSelfPaidContinue}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     )
   }
 
   // ── filling ───────────────────────────────────────────────────────────────
+  const isPassResolving = isWalletConnecting || isPassLoading
+  const isPassRevoked = !!activePass && activePass.status === 3
+  const isPassExpired =
+    !!activePass && activePass.expiresAt > 0 && activePass.expiresAt <= Date.now()
+  const isTierInsufficient =
+    !!activePass && !isPassRevoked && !isPassExpired && activePass.effectiveTier < surveyMinTier
   const isPassValid =
-    !!activePass &&
-    activePass.status !== 3 &&
-    (activePass.expiresAt === 0 || activePass.expiresAt > Date.now())
+    !isPassResolving && !!activePass && !isPassRevoked && !isPassExpired
 
   // Repeat-submission gate
   const repeatsEnabled = !!survey && survey.repeat_reward > 0
@@ -1150,28 +1317,33 @@ export default function SurveyPage() {
 
   const submitDisabled =
     (phase as string) === 'submitting' ||
+    isPassResolving ||
     !isPassValid ||
-    (activePass && activePass.effectiveTier < surveyMinTier) ||
+    isTierInsufficient ||
     atSubmissionLimit
 
   const submitLabel = atSubmissionLimit
     ? t.submitLabelLimit
-    : !isPassValid || (activePass && activePass.effectiveTier < surveyMinTier)
-      ? t.submitLabelNeedAuth
-      : myClaimCount > 0
-        ? t.submitLabelPreviewRepeat
-        : t.submitLabelPreview
+    : isPassRevoked
+      ? t.submitLabelRevoked
+      : isPassExpired
+        ? t.submitLabelExpired
+        : !isPassValid || isTierInsufficient
+          ? t.submitLabelNeedAuth
+          : myClaimCount > 0
+            ? t.submitLabelPreviewRepeat
+            : t.submitLabelPreview
 
   if (!survey) return null
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto">
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
-        
+    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
+      <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
+
         {/* 頂部問卷標題與說明區 */}
-        <div className="space-y-3 bg-slate-50/50 border border-slate-100 p-5 rounded-2xl animate-fadeIn">
-          <h1 className="text-h1">{survey.title}</h1>
-          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-bold text-slate-500 border-b border-slate-200/60 pb-3">
+        <div className="space-y-3 bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 p-5 rounded-2xl animate-fadeIn">
+          <h1 className="text-h1 overflow-x-auto whitespace-nowrap pb-1.5">{survey.title}</h1>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-bold text-slate-500 dark:text-neutral-400 border-b border-slate-200/60 dark:border-neutral-700/60 pb-3">
             <span>{t.deadlineLabel(new Date(survey.deadline).toLocaleDateString(t.locale))}</span>
             <span>{t.rewardPerLabel(survey.per_response)}</span>
             {survey.repeat_reward > 0 && (
@@ -1181,15 +1353,54 @@ export default function SurveyPage() {
           {survey.description && (
             <div
               aria-label={t.surveyDescriptionAria}
-              className="prose max-w-none text-sm text-slate-600 leading-relaxed pt-1"
+              className="prose max-w-none text-sm text-slate-600 dark:text-neutral-300 leading-relaxed pt-1"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(survey.description) }}
             />
           )}
         </div>
 
-        {!account && (
-          <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
-            <div className="text-blue-800 text-left font-semibold">
+        {(survey.encryptAnswers === false || (account && myClaimCount > 0)) && (
+          <div className="flex flex-col gap-3">
+            {survey.encryptAnswers === false && (
+              <div className="warning-box rounded-2xl p-4 text-sm leading-relaxed shadow-sm">
+                {t.warnUnencryptedAnswers}
+              </div>
+            )}
+
+            {/* Repeat-submission status banner */}
+            {account && myClaimCount > 0 && (
+              <div
+                data-testid="repeat-banner"
+                className={`rounded-2xl px-5 py-3.5 text-sm shadow-sm ${atSubmissionLimit
+                  ? 'warning-box'
+                  : 'border border-blue-100 bg-blue-50/50 text-blue-900 dark:bg-blue-950/30 dark:border-blue-900 dark:text-blue-200'
+                  }`}
+              >
+                {atSubmissionLimit ? (
+                  <p className="font-normal">
+                    <span>{t.submissionLimitReached}</span>{t.submissionLimitMsg(myClaimCount, repeatsEnabled ? t.submissionLimitSuffix(maxTotalSubmissions) : '')}
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    <p className="font-normal"><span>{t.youHaveFilled(myClaimCount)}</span></p>
+                    {repeatsEnabled && (
+                      <p className="text-xs text-blue-700 font-semibold">
+                        {t.repeatRewardInfo(survey.repeat_reward, remainingSubmissions)}
+                      </p>
+                    )}
+                    <p className="text-xs text-slate-400 dark:text-neutral-500">
+                      {t.permanentNotice}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!account && !isWalletConnecting && (
+          <div className="bg-blue-50/50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
+            <div className="text-blue-800 dark:text-blue-200 text-left font-semibold">
               <strong>{t.connectWalletShort}</strong>{t.connectWalletShortDesc}
             </div>
             <ConnectButton />
@@ -1199,7 +1410,7 @@ export default function SurveyPage() {
         {isPassValid && (
           <span
             data-testid="tier-badge"
-            className="inline-flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-3 py-1 mb-2 font-bold"
+            className="inline-flex items-center gap-1.5 text-xs text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-full px-3 py-1 mb-2 font-bold w-fit"
           >
             <Check size={14} />
             {activePass!.effectiveTier === 0
@@ -1210,42 +1421,6 @@ export default function SurveyPage() {
           </span>
         )}
 
-        {/* Repeat-submission status banner */}
-        {account && myClaimCount > 0 && (
-          <div
-            data-testid="repeat-banner"
-            className={`mb-2 rounded-2xl border px-5 py-3.5 text-sm shadow-sm ${
-              atSubmissionLimit
-                ? 'bg-amber-50/70 border-amber-200 text-amber-900'
-                : 'bg-blue-50/50 border-blue-100 text-blue-900'
-            }`}
-          >
-            {atSubmissionLimit ? (
-              <p className="font-semibold">
-                <strong>{t.submissionLimitReached}</strong>{t.submissionLimitMsg(myClaimCount, repeatsEnabled ? t.submissionLimitSuffix(maxTotalSubmissions) : '')}
-              </p>
-            ) : (
-              <div className="space-y-1">
-                <p className="font-semibold"><strong>{t.youHaveFilled(myClaimCount)}</strong></p>
-                {repeatsEnabled && (
-                  <p className="text-xs text-blue-700 font-semibold">
-                    {t.repeatRewardInfo(survey.repeat_reward, remainingSubmissions)}
-                  </p>
-                )}
-                <p className="text-xs text-slate-400">
-                  {t.permanentNotice}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {validationError && (
-          <div role="alert" className="alert-error">
-            <AlertTriangle size={14} className="shrink-0" />
-            <span>{validationError}</span>
-          </div>
-        )}
 
         <form
           onSubmit={(e) => {
@@ -1258,20 +1433,20 @@ export default function SurveyPage() {
           {survey.questions.map((q, i) => (
             <div
               key={q.id}
-              className="bg-white border border-slate-100 rounded-2xl p-5 space-y-4 shadow-sm hover:border-slate-250 transition-colors animate-fadeIn"
+              className="bg-white dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-4 shadow-sm hover:border-slate-200 dark:hover:border-neutral-700 transition-colors animate-fadeIn"
             >
-              <div className="flex items-center justify-between border-b pb-2 border-slate-200/60">
+              <div className="flex items-center justify-between border-b pb-2 border-slate-200/60 dark:border-neutral-700/60">
                 <div className="flex items-center gap-3">
-                  <span className={`text-sm font-semibold transition-colors ${q.required ? 'text-rose-800' : 'text-slate-700'}`}>
+                  <span className={`text-sm font-semibold transition-colors ${q.required ? 'text-rose-800 dark:text-rose-400/80' : 'text-slate-700 dark:text-neutral-200'}`}>
                     {t.questionNum(i + 1)}
                   </span>
                   {q.required && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 border border-rose-100 text-rose-800">
+                    <span className="chip-required">
                       {t.required}
                     </span>
                   )}
                 </div>
-                <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
+                <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 dark:bg-neutral-800 text-slate-500 dark:text-neutral-400 rounded-full">
                   {typeLabel(q.type as QuestionType)}
                 </span>
               </div>
@@ -1286,11 +1461,10 @@ export default function SurveyPage() {
                       return (
                         <label
                           key={opt}
-                          className={`flex items-center gap-2.5 text-sm font-medium cursor-pointer border rounded-xl px-3.5 py-2.5 transition-all w-full ${
-                            isChecked
-                              ? 'bg-blue-50/50 border-blue-200 text-blue-800 font-semibold'
-                              : 'bg-slate-50/50 border-slate-100 hover:bg-slate-50 text-slate-650'
-                          }`}
+                          className={`flex items-center gap-2.5 text-sm font-medium cursor-pointer border rounded-xl px-3.5 py-2.5 transition-all w-full ${isChecked
+                            ? 'bg-blue-50/50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 font-semibold'
+                            : 'bg-slate-50/50 dark:bg-neutral-900/30 border-slate-100 dark:border-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/40 text-slate-600 dark:text-neutral-300'
+                            }`}
                         >
                           <input
                             type="radio"
@@ -1298,7 +1472,7 @@ export default function SurveyPage() {
                             value={opt}
                             checked={isChecked}
                             onChange={() => handleAnswerChange(q.id, opt)}
-                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-slate-300 transition-colors"
+                            className="radio-dark"
                             aria-label={opt}
                           />
                           <span>{opt}</span>
@@ -1316,11 +1490,10 @@ export default function SurveyPage() {
                       return (
                         <label
                           key={opt}
-                          className={`flex items-center gap-2.5 text-sm font-medium cursor-pointer border rounded-xl px-3.5 py-2.5 transition-all w-full ${
-                            isChecked
-                              ? 'bg-blue-50/50 border-blue-200 text-blue-800 font-semibold'
-                              : 'bg-slate-50/50 border-slate-100 hover:bg-slate-50 text-slate-650'
-                          }`}
+                          className={`flex items-center gap-2.5 text-sm font-medium cursor-pointer border rounded-xl px-3.5 py-2.5 transition-all w-full ${isChecked
+                            ? 'bg-blue-50/50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 font-semibold'
+                            : 'bg-slate-50/50 dark:bg-neutral-900/30 border-slate-100 dark:border-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/40 text-slate-600 dark:text-neutral-300'
+                            }`}
                         >
                           <input
                             type="checkbox"
@@ -1332,7 +1505,7 @@ export default function SurveyPage() {
                                 : selected.filter((s) => s !== opt)
                               handleAnswerChange(q.id, next)
                             }}
-                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-slate-300 rounded transition-colors"
+                            className="checkbox-dark checked:bg-blue-600 checked:border-blue-600"
                             aria-label={opt}
                           />
                           <span>{opt}</span>
@@ -1344,7 +1517,7 @@ export default function SurveyPage() {
 
                 {q.type === 'text' && (
                   <textarea
-                    className="w-full border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 text-sm text-slate-800 bg-white placeholder:text-slate-400 font-mono transition-all"
+                    className="w-full border border-slate-200 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-xl px-4 py-2.5 text-sm text-slate-800 dark:text-neutral-100 bg-white dark:bg-neutral-900 placeholder:text-slate-400 dark:placeholder:text-neutral-500 font-mono transition-all"
                     rows={3}
                     value={(answers[q.id] as string | undefined) ?? ''}
                     onChange={(e) => handleAnswerChange(q.id, e.target.value)}
@@ -1360,20 +1533,19 @@ export default function SurveyPage() {
                       return (
                         <label
                           key={n}
-                          className={`flex flex-col items-center justify-center gap-1.5 cursor-pointer border rounded-xl p-3 w-12 h-14 transition-all ${
-                            isChecked
-                              ? 'bg-blue-50/50 border-blue-200 text-blue-800 ring-2 ring-blue-500/20'
-                              : 'bg-slate-50/50 border-slate-100 hover:bg-slate-50 text-slate-600'
-                          }`}
+                          className={`flex flex-col items-center justify-center gap-1.5 cursor-pointer border rounded-xl p-3 w-12 h-14 transition-all ${isChecked
+                            ? 'bg-blue-50/50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 ring-2 ring-blue-500/20 dark:ring-blue-400/30'
+                            : 'bg-slate-50/50 dark:bg-neutral-900/30 border-slate-100 dark:border-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/40 text-slate-600 dark:text-neutral-300'
+                            }`}
                         >
-                          <span className={`text-xs font-bold ${isChecked ? 'text-blue-700' : 'text-slate-400'}`}>{n}</span>
+                          <span className={`text-xs font-bold ${isChecked ? 'text-blue-700 dark:text-blue-300' : 'text-slate-400 dark:text-neutral-500'}`}>{n}</span>
                           <input
                             type="radio"
                             name={q.id}
                             value={String(n)}
                             checked={isChecked}
                             onChange={() => handleAnswerChange(q.id, String(n))}
-                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-slate-300 transition-colors"
+                            className="radio-dark"
                             aria-label={String(n)}
                           />
                         </label>
@@ -1385,52 +1557,121 @@ export default function SurveyPage() {
             </div>
           ))}
 
-          {(!isPassValid || (activePass && activePass.effectiveTier < surveyMinTier)) && (
+          {isPassResolving ? (
             <div className="mt-4">
-              {!isPassValid ? (
-                <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-                  <div className="text-blue-850 text-left font-semibold">
-                    <strong>{t.needPassPrompt}</strong>{t.needPassPromptDesc}
+              <div className="bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 text-sm flex items-center justify-center gap-3 text-slate-500 dark:text-neutral-400 animate-pulse">
+                {t.verifyingPass}
+              </div>
+            </div>
+          ) : !account ? null : (
+            (!isPassValid || isTierInsufficient) && (
+              <div className="mt-4">
+                {isPassRevoked ? (
+                  <div className="bg-rose-50/50 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-rose-800 dark:text-rose-200 text-left">
+                      <span>{t.passRevokedPrompt}</span>{t.passRevokedDesc}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOtpStep('input')
+                        setPhase('need_pass')
+                      }}
+                      className="bg-rose-600 hover:bg-rose-700 dark:bg-rose-700 dark:hover:bg-rose-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap"
+                    >
+                      {t.renewPassBtn}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOtpStep('input')
-                      setPhase('need_pass')
-                    }}
-                    className="bg-blue-600 hover:bg-blue-750 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap animate-pulse"
-                  >
-                    {t.getPassBtn}
-                  </button>
-                </div>
-              ) : (
-                <div className="bg-amber-50/50 border border-amber-100 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-                  <div className="text-amber-850 text-left font-semibold">
-                    <strong>{t.tierTooLowPrompt}</strong>{t.tierTooLowDesc(surveyMinTier, activePass!.effectiveTier)}
+                ) : isPassExpired ? (
+                  <div className="warning-box rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-left">
+                      <span>{t.passExpiredPrompt}</span>{t.passExpiredDesc}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOtpStep('input')
+                        setPhase('need_pass')
+                      }}
+                      className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-700 dark:hover:bg-amber-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap animate-pulse"
+                    >
+                      {t.renewPassBtn}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOtpStep('input')
-                      setPhase('need_pass')
-                    }}
-                    className="bg-amber-600 hover:bg-amber-750 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap"
-                  >
-                    {t.upgradePassBtn}
-                  </button>
-                </div>
-              )}
+                ) : !activePass ? (
+                  <div className="bg-blue-50/50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-blue-800 dark:text-blue-200 text-left">
+                      <span>{t.needPassPrompt}</span>{t.needPassPromptDesc}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOtpStep('input')
+                        setPhase('need_pass')
+                      }}
+                      className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap animate-pulse"
+                    >
+                      {t.getPassBtn}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="warning-box rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-left">
+                      <span>{t.tierTooLowPrompt}</span>{t.tierTooLowDesc(surveyMinTier, activePass.effectiveTier)}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOtpStep('input')
+                        setPhase('need_pass')
+                      }}
+                      className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-700 dark:hover:bg-amber-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-all shadow-md whitespace-nowrap"
+                    >
+                      {t.upgradePassBtn}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          )}
+
+          {validationError && (
+            <div role="alert" className="alert-error">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span>{validationError}</span>
             </div>
           )}
 
-          <button
-            type="submit"
-            disabled={submitDisabled}
-            className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3.5 rounded-xl transition-all shadow-md w-full disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            {submitLabel}
-          </button>
+          {survey.encryptAnswers === false && atSubmissionLimit ? (
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <button
+                type="submit"
+                disabled={submitDisabled}
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold py-3.5 rounded-xl transition-all w-full sm:w-1/2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-md"
+              >
+                {submitLabel}
+              </button>
+              <Link
+                to={`/results/${survey.vaultObjectId}`}
+                className="btn-primary w-full sm:w-1/2 inline-flex items-center justify-center py-3.5 text-sm font-semibold rounded-xl transition-all shadow-md"
+              >
+                {t.viewResultsBtn}
+              </Link>
+            </div>
+          ) : (
+            <button
+              type="submit"
+              disabled={submitDisabled}
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3.5 rounded-xl transition-all shadow-md w-full disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            >
+              {submitLabel}
+            </button>
+          )}
         </form>
+        {/* Footer */}
+        <footer className="py-8 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
+          © 2026 SurveySui
+        </footer>
       </div>
     </main>
   )

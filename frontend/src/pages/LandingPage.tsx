@@ -10,7 +10,7 @@ const content = {
     heroTitle: '讓問卷調查，真正公平透明',
     heroDesc: '填答免費、獎勵自動發放、資料不可竄改——SurveySui 是建立在公開區塊鏈上的問卷平台。',
     btnCreate: '建立問卷',
-    btnAuth: '真人驗證 SurveyPass',
+    btnAuth: '前往誰位通證',
     stepsTitle: '三步驟，完成一份問卷',
     stepLabel: '步驟',
     steps: [
@@ -153,7 +153,7 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="py-8 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
-        © 2025 SurveySui · Built on Sui
+        © 2026 SurveySui
       </footer>
     </div>
   )

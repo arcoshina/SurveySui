@@ -18,52 +18,57 @@ function hexToBytes(hex: string): Uint8Array {
 
 const content = {
   ZH: {
-    title: 'SurveyPass 真人認證',
-    subtitle: '透過去中心化身份驗證（KYC），取得專屬 SurveyPass。解鎖高等級問卷，防範女巫攻擊與虛假填答。',
-    connectWalletTitle: '請先連接錢包',
+    title: 'SurveyPass 誰位通證',
+    subtitle: '透過身份驗證（KYC），取得專屬 SurveyPass。解鎖高等級問卷，防範女巫攻擊與虛假填答。',
+    connectWalletTitle: '請連接錢包',
     connectWalletDesc: '要鑄造、更新或查看您的 SurveyPass，您需要連接您的 Sui 錢包以進行簽章。',
     txDigestLabel: '交易哈希 (Digest)：',
     txSuccess: '執行成功',
     passStatusTitle: '您的 SurveyPass 狀態',
-    loadingPass: '正在查詢鏈上憑證...',
-    trustTier: '有效等級 (Trust Tier)',
-    certSource: '認證來源',
-    noPass: '無憑證',
-    ownerAddress: '憑證對象 (Owner Address)',
-    expires: '有效期限 (Expires)',
+    loadingPass: '正在查詢鏈上通證...',
+    trustTier: '有效等級',
+    certSource: '驗證來源',
+    noPass: '查無通證',
+    ownerAddress: 'Object ID',
+    expires: '有效期限',
     neverExpire: '永不過期',
     noPassTitle: '您尚未擁有 SurveyPass',
-    noPassDesc: '您需要至少經過一種途徑（如 Email OTP）驗證以向 BFF 取得憑證 Ticket，並在鏈上鑄造您的 SurveyPass。',
-    gdprTitle: 'GDPR 隱私與憑證管理',
-    gdprDesc: '本系統設計遵循 GDPR 隱私標準。已被吊銷的憑證可由 Owner 一鍵銷毀。一經銷毀，鏈上所有 PII 映射與憑證欄位將被完全移除。',
+    noPassDesc: '您需要至少經過一種途徑（如 Email OTP）驗證以向 BFF 取得通證 Ticket，並在鏈上鑄造您的 SurveyPass。',
+    gdprTitle: 'GDPR 隱私與通證管理',
+    gdprDesc: '本系統設計遵循 GDPR 隱私標準。已被吊銷的通證可由 Owner 一鍵銷毀。一經銷毀，鏈上所有 PII 映射與通證欄位將被完全移除。',
     btnDeletePass: '完全銷毀 (Delete Pass)',
     btnRevokePass: '模擬 Admin 吊銷 (Revoke)',
     revokeNotice: '* 註：必須先執行「模擬 Admin 吊銷」將 Status 變為 Revoked 後，Owner 方能點擊「完全銷毀」。',
-    upgradeTitle: '憑證更新與升級',
+    upgradeTitle: '通證更新與升級',
     mintTitle: '申請全新 SurveyPass',
-    emailVerification: '電子郵件驗證 (Email Verification)',
+    verifyMethodLabel: '驗證方法',
+    comingSoon: '即將推出',
+    emailVerification: '電子郵件驗證',
     sendingOtp: '正在發送驗證碼...',
     btnGetOtp: '獲取驗證碼 →',
     otpCodeLabel: '驗證碼 (6 位數字)',
     devTip: '開發者提示（免登收信）：輸入 {code} 即可。',
     btnBack: '返回修改',
     submitting: '提交中...',
-    btnUpdatePass: '更新憑證',
+    btnUpdatePass: '更新驗證',
     btnVerifyAndMint: '驗證並鑄造',
-    footer: 'SurveySui 去中心化真人憑證認證中心',
-    selfReport: '自我申報 (Self Report)',
-    emailOtp: '郵件認證 (Email OTP)',
+    footer: 'SurveySui 去中心化誰位通證中心',
+    selfReport: '自我申報',
+    emailOtp: '電子郵件 OTP',
     socialAuth: '社群媒體 (OAuth/Social)',
     selfProtocol: '自我協議 (Self Protocol)',
     worldId: 'World ID',
     unknown: '未知',
+    statusActive: '● Active',
+    statusRevoked: '● Revoked',
+    statusExpired: '● Expired',
     revokeSuccess: 'SurveyPass 吊銷成功（限 Admin 發送）',
     deleteSuccess: 'SurveyPass 已成功從鏈上銷毀，個人隱私資料已完全移除！',
     revokeFailed: '吊銷失敗（請確認您是否使用 Admin 錢包）',
     deleteFailed: '只有已被吊銷 (Revoked) 的 Pass 才能被完全銷毀',
     txFailed: '交易執行失敗',
-    authFailed: '認證或交易發送失敗',
-    upgradeSuccess: '憑證更新成功！',
+    authFailed: '驗證或交易發送失敗',
+    upgradeSuccess: '通證更新成功！',
     mintSuccess: 'SurveyPass 鑄造成功！',
     destroyFailed: '銷毀失敗',
     ptbBuildFailed: 'PTB 建構失敗',
@@ -77,7 +82,7 @@ const content = {
   EN: {
     title: 'SurveyPass Identity Center',
     subtitle: 'Claim your unique SurveyPass through decentralized identity verification (KYC) to unlock higher-tier surveys and prevent Sybil attacks.',
-    connectWalletTitle: 'Please Connect Wallet First',
+    connectWalletTitle: 'Please connect your wallet',
     connectWalletDesc: 'To mint, update, or view your SurveyPass, connect your Sui wallet for signature verification.',
     txDigestLabel: 'Transaction Digest:',
     txSuccess: 'Success',
@@ -86,18 +91,20 @@ const content = {
     trustTier: 'Trust Tier',
     certSource: 'Verification Source',
     noPass: 'No Credential',
-    ownerAddress: 'Owner Address',
+    ownerAddress: 'Object ID',
     expires: 'Expires',
     neverExpire: 'Never Expires',
     noPassTitle: 'No SurveyPass Found',
     noPassDesc: 'You need at least one verification method (e.g. Email OTP) to get a ticket from the BFF and mint your SurveyPass on chain.',
     gdprTitle: 'GDPR Privacy & Credential Management',
     gdprDesc: 'This system follows GDPR privacy standards. Revoked passes can be deleted permanently by the owner. Once deleted, all PII mappings and credential fields will be removed.',
-    btnDeletePass: 'Delete Pass (GDPR)',
+    btnDeletePass: 'Delete SurveyPass (GDPR)',
     btnRevokePass: 'Simulate Admin Revocation',
     revokeNotice: '* Note: The status must be Revoked before the owner can delete the pass.',
     upgradeTitle: 'Update & Upgrade Pass',
     mintTitle: 'Claim New SurveyPass',
+    verifyMethodLabel: 'Verification Method',
+    comingSoon: 'Coming Soon',
     emailVerification: 'Email Verification',
     sendingOtp: 'Sending code...',
     btnGetOtp: 'Get Code →',
@@ -105,7 +112,7 @@ const content = {
     devTip: 'Dev Tip: Enter {code} to verify.',
     btnBack: 'Go Back',
     submitting: 'Submitting...',
-    btnUpdatePass: 'Update Pass',
+    btnUpdatePass: 'Update SurveyPass',
     btnVerifyAndMint: 'Verify & Mint',
     footer: 'SurveySui Decentralized Identity Center',
     selfReport: 'Self Report',
@@ -114,12 +121,15 @@ const content = {
     selfProtocol: 'Self Protocol',
     worldId: 'World ID',
     unknown: 'Unknown',
+    statusActive: '● Active',
+    statusRevoked: '● Revoked',
+    statusExpired: '● Expired',
     revokeSuccess: 'SurveyPass Revoked (Admin only)',
     deleteSuccess: 'SurveyPass deleted from chain. All PII has been removed!',
     revokeFailed: 'Revocation failed (Check if you are using the admin wallet)',
     deleteFailed: 'Only revoked passes can be deleted',
     txFailed: 'Transaction failed',
-    authFailed: 'Verification or transaction failed',
+    authFailed: 'Verification or transaction send failed',
     upgradeSuccess: 'Pass updated successfully!',
     mintSuccess: 'SurveyPass minted successfully!',
     destroyFailed: 'Failed to destroy pass',
@@ -157,6 +167,7 @@ export default function AuthPage() {
 
   const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
   const [isPassLoading, setIsPassLoading] = useState(false)
+  const [verifyMethod, setVerifyMethod] = useState<'email' | 'selfReport' | 'social' | 'selfProtocol' | 'worldId'>('email')
 
   const fetchPass = async () => {
     if (!account?.address || !registryId) {
@@ -433,7 +444,7 @@ export default function AuthPage() {
             <h1 className="text-3xl font-normal tracking-tight sm:text-4xl text-slate-900 dark:text-white bg-gradient-to-r from-blue-700 to-indigo-700 bg-clip-text text-transparent">
               {t.title}
             </h1>
-            <p className="mt-2 text-base sm:text-lg text-slate-600 dark:text-neutral-350 font-normal">
+            <p className="mt-2 text-base sm:text-lg text-slate-600 dark:text-neutral-300 font-normal">
               {t.subtitle}
             </p>
           </div>
@@ -442,9 +453,9 @@ export default function AuthPage() {
         {/* Global Warnings & Success States */}
         <div className="space-y-4 mb-8">
           {!account && (
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/30 rounded-2xl p-6 shadow-sm text-center">
-              <h3 className="text-lg font-normal text-amber-800 dark:text-amber-400 mb-2">{t.connectWalletTitle}</h3>
-              <p className="text-sm text-amber-700 dark:text-amber-400 mb-4 max-w-md mx-auto font-normal">
+            <div className="warning-box rounded-2xl p-6 shadow-sm text-center">
+              <h3 className="text-lg mb-2">{t.connectWalletTitle}</h3>
+              <p className="text-sm opacity-90 max-w-md mx-auto">
                 {t.connectWalletDesc}
               </p>
             </div>
@@ -463,8 +474,8 @@ export default function AuthPage() {
               </h3>
               <p className="text-sm text-emerald-700 dark:text-emerald-400 font-normal">{successMsg}</p>
               {txDigest && (
-                <div className="bg-white/80 dark:bg-neutral-950/40 border border-emerald-100 dark:border-emerald-900/30 rounded-lg p-3 text-xs font-mono break-all mt-2 w-full text-left text-emerald-800 dark:text-emerald-350 font-normal">
-                  <span className="font-semibold text-emerald-750 dark:text-emerald-405">{t.txDigestLabel}</span>
+                <div className="bg-white/80 dark:bg-neutral-900/40 border border-emerald-100 dark:border-emerald-900/30 rounded-lg p-3 text-xs font-mono break-all mt-2 w-full text-left text-emerald-800 dark:text-emerald-350 font-normal">
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-400">{t.txDigestLabel}</span>
                   {txDigest}
                 </div>
               )}
@@ -483,13 +494,14 @@ export default function AuthPage() {
         </div>
 
         {account && (
-          <div className="grid gap-8 md:grid-cols-12">
-            {/* Left Column: User Pass Information */}
-            <div className="md:col-span-7 space-y-6">
-              <h2 className="text-h2">{t.passStatusTitle}</h2>
+          <div className="grid gap-x-8 gap-y-6 md:grid-cols-12">
+            {/* Row 1: Status heading only — Update card title moved back inside its card */}
+            <h2 className="text-h2 md:col-span-7 md:col-start-1 md:row-start-1">{t.passStatusTitle}</h2>
 
+            {/* Row 2 left: Pass status / loading / no-pass */}
+            <div className="md:col-span-7 md:col-start-1 md:row-start-2">
               {isPassLoading ? (
-                <div className="flex flex-col items-center justify-center py-12 space-y-3">
+                <div className="flex flex-col items-center justify-center py-12 space-y-3 min-h-80">
                   <div className="w-8 h-8 border-4 border-blue-700 border-t-transparent rounded-full animate-spin"></div>
                   <p className="text-sm text-slate-400 dark:text-neutral-500">{t.loadingPass}</p>
                 </div>
@@ -502,64 +514,99 @@ export default function AuthPage() {
                   <div className="space-y-6 z-10">
                     <div className="flex justify-between items-start">
                       <div>
-                        <span className="text-xs font-normal uppercase tracking-widest text-indigo-400">
-                          SURVEYSUI IDENTITY
+                        <span className="text-sm font-normal uppercase tracking-widest text-indigo-400">
+                          SurveyPass IDENTITY
                         </span>
-                        <h3 className="text-2xl font-normal mt-1 tracking-tight">SurveyPass V2</h3>
+                        <h3 className="text-2xl font-normal mt-1 tracking-tight">SurveySui</h3>
                       </div>
-                      <span
-                        className={`text-xs font-normal px-3 py-1.5 rounded-full ${
-                          activePass.status === 0
-                            ? 'bg-emerald-500/20 dark:bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-rose-500/20 dark:bg-rose-500/10 text-rose-300 border border-rose-500/30'
-                        }`}
-                      >
-                        {activePass.status === 0 ? '● Active' : '● Revoked'}
-                      </span>
+                      {(() => {
+                        const isRevoked = activePass.status === 3
+                        const isExpired =
+                          !isRevoked &&
+                          activePass.expiresAt > 0 &&
+                          activePass.expiresAt <= Date.now()
+                        const badgeClass = isRevoked
+                          ? 'bg-rose-500/20 dark:bg-rose-500/10 text-rose-300 border border-rose-500/30'
+                          : isExpired
+                            ? 'bg-amber-500/20 dark:bg-amber-500/10 text-amber-300 border border-amber-500/30'
+                            : 'bg-emerald-500/20 dark:bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+                        const label = isRevoked
+                          ? t.statusRevoked
+                          : isExpired
+                            ? t.statusExpired
+                            : t.statusActive
+                        return (
+                          <span className={`text-xs font-normal px-3 py-1.5 rounded-full ${badgeClass}`}>
+                            {label}
+                          </span>
+                        )
+                      })()}
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <span className="text-xs text-indigo-300 block uppercase tracking-wider font-normal">
+                        <span className="text-sm text-indigo-300 block uppercase tracking-wider font-normal">
                           {t.trustTier}
                         </span>
-                        <span className="text-3xl font-normal text-white">
+                        <span className="text-2xl font-normal text-indigo-200">
                           Tier {activePass.effectiveTier}
                         </span>
                       </div>
                       <div>
-                        <span className="text-xs text-indigo-300 block uppercase tracking-wider font-normal">
-                          {t.certSource}
+                        <span className="text-sm text-indigo-300 block uppercase tracking-wider font-normal">
+                          {t.expires}
                         </span>
-                        <span className="text-sm font-normal text-white">
-                          {activePass.credentialSources.length > 0
-                            ? activePass.credentialSources
-                                .map((src: number) => getSourceLabel(src))
-                                .join(', ')
-                            : t.noPass}
-                        </span>
+                        {activePass.expiresAt > 0 ? (
+                          (() => {
+                            const d = new Date(activePass.expiresAt)
+                            const pad = (n: number) => String(n).padStart(2, '0')
+                            const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+                            const timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+                            const offsetMin = -d.getTimezoneOffset()
+                            const sign = offsetMin >= 0 ? '+' : '-'
+                            const oh = Math.floor(Math.abs(offsetMin) / 60)
+                            const om = Math.abs(offsetMin) % 60
+                            const tz = om === 0 ? `UTC${sign}${oh}` : `UTC${sign}${oh}:${pad(om)}`
+                            return (
+                              <span className="block font-normal text-indigo-200">
+                                <span className="block text-base">{dateStr}</span>
+                                <span className="block text-sm">{timeStr} {tz}</span>
+                              </span>
+                            )
+                          })()
+                        ) : (
+                          <span className="text-base font-normal text-indigo-200">{t.neverExpire}</span>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="mt-8 pt-6 border-t border-white/10 flex flex-col sm:flex-row justify-between gap-4 text-xs text-indigo-200 z-10">
-                    <div>
+                  <div className="mt-8 pt-6 border-t border-white/10 flex flex-col sm:flex-row sm:items-end justify-between gap-4 text-sm text-indigo-200 z-10">
+                    <div className="min-w-0 flex-1">
                       <span className="block font-normal">{t.ownerAddress}</span>
-                      <span className="font-mono text-white select-all">{activePass.objectId}</span>
+                      <span
+                        className="font-mono text-indigo-200 select-all flex items-center max-w-full"
+                        title={activePass.objectId}
+                      >
+                        <span className="truncate">{activePass.objectId.slice(0, -6)}</span>
+                        <span className="flex-none">{activePass.objectId.slice(-6)}</span>
+                      </span>
                     </div>
-                    <div className="sm:text-right">
-                      <span className="block font-normal">{t.expires}</span>
-                      <span className="text-white font-normal">
-                        {activePass.expiresAt > 0
-                          ? new Date(activePass.expiresAt).toLocaleString()
-                          : t.neverExpire}
+                    <div className="sm:text-right flex-none">
+                      <span className="block font-normal">{t.certSource}</span>
+                      <span className="text-indigo-200 font-normal">
+                        {activePass.credentialSources.length > 0
+                          ? activePass.credentialSources
+                              .map((src: number) => getSourceLabel(src))
+                              .join(', ')
+                          : t.noPass}
                       </span>
                     </div>
                   </div>
                 </div>
               ) : (
                 /* No Pass State */
-                <div className="bg-slate-50 dark:bg-neutral-900/50 border border-slate-200 dark:border-neutral-800/80 rounded-3xl p-8 text-center shadow-inner">
+                <div className="bg-slate-50 dark:bg-neutral-900/50 border border-slate-200 dark:border-neutral-800/80 rounded-3xl p-8 text-center shadow-inner min-h-80 flex flex-col justify-center">
                   <div className="w-16 h-16 bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500 rounded-full flex items-center justify-center mx-auto mb-4">
                     <IdCard size={32} />
                   </div>
@@ -569,128 +616,156 @@ export default function AuthPage() {
                   </p>
                 </div>
               )}
-
-              {/* GDPR Controls */}
-              {activePass && (
-                <div className="bg-slate-50 dark:bg-neutral-900/50 border border-slate-200 dark:border-neutral-800/80 rounded-3xl p-6 space-y-4 shadow-sm">
-                  <h3 className="text-lg font-normal text-slate-900 dark:text-white flex items-center gap-2">
-                    {t.gdprTitle}
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-neutral-400 leading-relaxed font-normal">
-                    {t.gdprDesc}
-                  </p>
-
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      disabled={loading || activePass.status !== 3}
-                      onClick={handleDeletePass}
-                      className={activePass.status === 3 ? 'btn-danger' : 'btn-secondary'}
-                    >
-                      {t.btnDeletePass}
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={loading || activePass.status === 3}
-                      onClick={handleRevokePass}
-                      className={
-                        activePass.status === 0
-                          ? 'bg-amber-700 hover:bg-amber-600 text-white font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm dark:bg-amber-800 dark:hover:bg-amber-600 dark:text-neutral-200'
-                          : 'btn-secondary'
-                      }
-                    >
-                      {t.btnRevokePass}
-                    </button>
-                  </div>
-                  {activePass.status !== 3 && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400 font-normal">
-                      {t.revokeNotice}
-                    </p>
-                  )}
-                </div>
-              )}
             </div>
 
-            {/* Right Column: Verification & Update Flow */}
-            <div className="md:col-span-5">
+            {/* Row 2 right: Update card — title back inside the card, top-aligned with Status card */}
+            <div className="md:col-span-5 md:col-start-8 md:row-start-2">
               <div className="bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800/80 rounded-3xl p-6 shadow-xl space-y-6 transition-colors">
-                <h3 className="text-h2">
+                <h3 className="text-lg font-normal text-slate-900 dark:text-white">
                   {activePass ? t.upgradeTitle : t.mintTitle}
                 </h3>
 
-                {step === 'input' ? (
-                  <form onSubmit={handleRequestOtp} className="space-y-4">
-                    <div>
-                      <label
-                        htmlFor="email"
-                        className="form-label"
-                      >
-                        {t.emailVerification}
-                      </label>
-                      <input
-                        id="email"
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="example@email.com"
-                        className="form-input"
-                        required
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="btn-primary w-full flex items-center justify-center"
-                    >
-                      {loading ? t.sendingOtp : t.btnGetOtp}
-                    </button>
-                  </form>
-                ) : (
-                  <form onSubmit={handleVerifyAndMint} className="space-y-4">
-                    <div>
-                      <span className="form-label">
-                        {t.otpCodeLabel}
-                      </span>
-                      <input
-                        type="text"
-                        value={otpCode}
-                        onChange={(e) => setOtpCode(e.target.value)}
-                        placeholder="123456"
-                        maxLength={6}
-                        className="form-input text-center font-mono font-normal tracking-widest"
-                        required
-                      />
-                      {debugOtp && (
-                        <p className="text-xs text-blue-700 dark:text-blue-400 mt-2 bg-blue-50/50 dark:bg-blue-900/20 p-2.5 rounded-xl border border-blue-105 dark:border-blue-900/30 font-normal leading-relaxed">
-                          {t.devTip.replace('{code}', debugOtp)}
-                        </p>
-                      )}
-                    </div>
+                {/* Verification method selector */}
+                <div>
+                  <label htmlFor="verifyMethod" className="form-label">
+                    {t.verifyMethodLabel}
+                  </label>
+                  <select
+                    id="verifyMethod"
+                    value={verifyMethod}
+                    onChange={(e) => setVerifyMethod(e.target.value as typeof verifyMethod)}
+                    className="form-input"
+                  >
+                    {([
+                      { value: 'email', label: t.emailOtp, available: true },
+                      { value: 'selfReport', label: t.selfReport, available: false },
+                      { value: 'social', label: t.socialAuth, available: false },
+                      { value: 'selfProtocol', label: t.selfProtocol, available: false },
+                      { value: 'worldId', label: t.worldId, available: false },
+                    ] as const).map((m) => (
+                      <option key={m.value} value={m.value} disabled={!m.available}>
+                        {m.available ? m.label : `${m.label} (${t.comingSoon})`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStep('input')
-                          setDebugOtp(null)
-                        }}
-                        className="btn-secondary flex-1"
-                      >
-                        {t.btnBack}
-                      </button>
+                {/* Email OTP form (only when email method selected) */}
+                {verifyMethod === 'email' && (
+                  step === 'input' ? (
+                    <form onSubmit={handleRequestOtp} className="space-y-4">
+                      <div>
+                        <label
+                          htmlFor="email"
+                          className="form-label"
+                        >
+                          {t.emailVerification}
+                        </label>
+                        <input
+                          id="email"
+                          type="email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="example@email.com"
+                          className="form-input"
+                          required
+                        />
+                      </div>
                       <button
                         type="submit"
                         disabled={loading}
-                        className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 text-white py-3 px-4 rounded-xl text-sm font-semibold transition-all"
+                        className="btn-primary w-full flex items-center justify-center"
                       >
-                        {loading ? t.submitting : (activePass ? t.btnUpdatePass : t.btnVerifyAndMint)}
+                        {loading ? t.sendingOtp : t.btnGetOtp}
                       </button>
-                    </div>
-                  </form>
+                    </form>
+                  ) : (
+                    <form onSubmit={handleVerifyAndMint} className="space-y-4">
+                      <div>
+                        <span className="form-label">
+                          {t.otpCodeLabel}
+                        </span>
+                        <input
+                          type="text"
+                          value={otpCode}
+                          onChange={(e) => setOtpCode(e.target.value)}
+                          placeholder="123456"
+                          maxLength={6}
+                          className="form-input text-center font-mono font-normal tracking-widest"
+                          required
+                        />
+                        {debugOtp && (
+                          <p className="text-xs text-blue-700 dark:text-blue-400 mt-2 bg-blue-50/50 dark:bg-blue-900/20 p-2.5 rounded-xl border border-blue-105 dark:border-blue-900/30 font-normal leading-relaxed">
+                            {t.devTip.replace('{code}', debugOtp)}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStep('input')
+                            setDebugOtp(null)
+                          }}
+                          className="btn-secondary flex-1"
+                        >
+                          {t.btnBack}
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 text-white py-3 px-4 rounded-xl text-sm font-semibold transition-all"
+                        >
+                          {loading ? t.submitting : (activePass ? t.btnUpdatePass : t.btnVerifyAndMint)}
+                        </button>
+                      </div>
+                    </form>
+                  )
                 )}
               </div>
             </div>
+
+            {/* Row 3 right: GDPR Controls — flows directly below Update card */}
+            {activePass && (
+              <div className="md:col-span-5 md:col-start-8 md:row-start-3 bg-slate-50 dark:bg-neutral-900/50 border border-slate-200 dark:border-neutral-800/80 rounded-3xl p-6 space-y-4 shadow-sm">
+                <h3 className="text-lg font-normal text-slate-900 dark:text-white flex items-center gap-2">
+                  {t.gdprTitle}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-neutral-400 leading-relaxed font-normal">
+                  {t.gdprDesc}
+                </p>
+
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    disabled={loading || activePass.status !== 3}
+                    onClick={handleDeletePass}
+                    className={activePass.status === 3 ? 'btn-danger' : 'btn-secondary'}
+                  >
+                    {t.btnDeletePass}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={loading || activePass.status === 3}
+                    onClick={handleRevokePass}
+                    className={
+                      activePass.status === 0
+                        ? 'bg-amber-700 hover:bg-amber-600 text-white font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm dark:bg-amber-800 dark:hover:bg-amber-600 dark:text-neutral-200'
+                        : 'btn-secondary'
+                    }
+                  >
+                    {t.btnRevokePass}
+                  </button>
+                </div>
+                {activePass.status !== 3 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 font-normal">
+                    {t.revokeNotice}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

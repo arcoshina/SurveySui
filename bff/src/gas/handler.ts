@@ -8,7 +8,40 @@ interface GasSponsorRequestBody {
   senderAddress: string
 }
 
+const GAS_BUDGET_MIST = 10_000_000n
+const HEALTH_MIN_BALANCE_MIST = GAS_BUDGET_MIST * 5n
+
+export interface GasHealthResponse {
+  available: boolean
+  reason?: 'no_key' | 'low_balance' | 'unknown'
+}
+
 export function registerGasRoutes(app: FastifyInstance, deps: { suiClient: SuiClient }): void {
+  app.get('/api/gas/health', async (_req, reply): Promise<GasHealthResponse> => {
+    try {
+      const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
+      if (!privKeyHex) {
+        return { available: false, reason: 'no_key' }
+      }
+      const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
+      const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
+      const keypair = Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
+      const sponsorAddress = keypair.getPublicKey().toSuiAddress()
+
+      const balance = await deps.suiClient.getBalance({
+        owner: sponsorAddress,
+        coinType: '0x2::sui::SUI',
+      })
+      if (BigInt(balance.totalBalance) < HEALTH_MIN_BALANCE_MIST) {
+        return { available: false, reason: 'low_balance' }
+      }
+      return { available: true }
+    } catch (err: any) {
+      reply.log.warn({ err: err?.message }, '[GasStation] health probe failed')
+      return { available: false, reason: 'unknown' }
+    }
+  })
+
   app.post(
     '/api/gas/sponsor',
     async (req: FastifyRequest<{ Body: GasSponsorRequestBody }>, reply: FastifyReply) => {

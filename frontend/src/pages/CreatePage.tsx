@@ -12,7 +12,7 @@ import {
   serializeFullSurveyToMarkdown,
 } from '../lib/frontmatter'
 import { estimateFundCostV2 } from '../lib/ptb'
-import { formatSsr } from '../lib/format'
+import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
 import { useLanguage } from '../context/LanguageContext'
 
 const DRAFT_KEY_PREFIX = 'surveysui:draft:'
@@ -36,6 +36,15 @@ function deadlineMsToLocalInput(ms: number): string {
   const d = new Date(ms)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function getLocalUtcOffsetLabel(): string {
+  const offsetMin = -new Date().getTimezoneOffset()
+  const sign = offsetMin >= 0 ? '+' : '-'
+  const abs = Math.abs(offsetMin)
+  const h = Math.floor(abs / 60)
+  const m = abs % 60
+  return m === 0 ? `UTC${sign}${h}` : `UTC${sign}${h}:${String(m).padStart(2, '0')}`
 }
 
 interface DraftEntry {
@@ -76,11 +85,11 @@ const content = {
     placeholderSsr: '請輸入 SSR 數額',
     maxResponses: '限制名額上限',
     placeholderMaxResponses: '請輸入最大份數',
-    deadline: '截止時間',
-    identityThreshold: '身分憑證門檻',
-    tier0: 'Tier 0 - Email 認證',
-    tier1: 'Tier 1 - OAuth 級認證',
-    tier2: 'Tier 2 - 政府/生物識別',
+    deadline: '截止時間 ({tz})',
+    identityThreshold: '驗證等級門檻',
+    tier0: 'Tier 0 - Email 驗證',
+    tier1: 'Tier 1 - OAuth 驗證',
+    tier2: 'Tier 2 - 真人驗證',
     repeatReward: '每次重填獎勵 (SSR)',
     placeholderRepeatSsr: '0 = 禁止重複填答',
     maxRepeatTimes: '每地址最多重填次數',
@@ -118,10 +127,11 @@ const content = {
     errMinTierInvalid: 'minTier 必須為 0-2',
     errQuestionRequired: '至少需要一題',
     errQuestionIdRequired: '題目 id 不可為空',
-    errQuestionPromptRequired: '題目 {id} prompt 不可為空',
+    errQuestionPromptRequired: '題目 {id} 不可為空',
     errOptionRequired: '題目 {id} 至少需要一個選項',
     errQuestionIdDuplicate: '題目 id 重複：{id}',
     confirmOverwrite: '將以上傳檔案覆蓋目前內容，確定嗎？',
+    confirmNoRequired: '沒有「必填」題目，這樣受訪者可以交白卷。確定要繼續嗎？',
     errReadFileFailed: '讀取檔案失敗',
     errUploadParseFailed: '上傳檔案解析失敗：{error}'
   },
@@ -143,11 +153,11 @@ const content = {
     placeholderSsr: 'Enter SSR amount',
     maxResponses: 'Max Responses Limit',
     placeholderMaxResponses: 'Enter max responses count',
-    deadline: 'Deadline',
-    identityThreshold: 'Identity Pass Threshold',
-    tier0: 'Tier 0 - Email Verified',
-    tier1: 'Tier 1 - OAuth Verified',
-    tier2: 'Tier 2 - Government/Biometric',
+    deadline: 'Deadline (your timezone: {tz})',
+    identityThreshold: 'Verification level threshold',
+    tier0: 'Tier 0 - Email',
+    tier1: 'Tier 1 - OAuth',
+    tier2: 'Tier 2 - Individual',
     repeatReward: 'Repeat Reward (SSR)',
     placeholderRepeatSsr: '0 = Disable repeat submissions',
     maxRepeatTimes: 'Max Repeats per Wallet',
@@ -189,6 +199,7 @@ const content = {
     errOptionRequired: 'Question {id} needs at least one option',
     errQuestionIdDuplicate: 'Duplicate question ID: {id}',
     confirmOverwrite: 'This will overwrite your current progress with the uploaded file. Are you sure?',
+    confirmNoRequired: '"Required" question not found. Respondents can submit blank answers. Continue anyway?',
     errReadFileFailed: 'Failed to read file',
     errUploadParseFailed: 'Failed to parse uploaded file: {error}'
   }
@@ -486,6 +497,10 @@ export default function CreatePage() {
       setError(errMsg)
       return
     }
+    const requiredCount = data.questions.filter((q) => q.required).length
+    if (requiredCount === 0 && !window.confirm(t.confirmNoRequired)) {
+      return
+    }
     setError(null)
 
     // submit 時用「當下時間」刷新 draftStamp，避免長時間預覽後 hash 衝突
@@ -504,7 +519,7 @@ export default function CreatePage() {
   const deadlineLocal = deadlineMsToLocalInput(data.deadlineMs)
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto text-slate-800 dark:text-neutral-200 transition-colors">
+    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-200 transition-colors">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800/80 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn transition-colors">
         <div className="space-y-2">
           <h1 className="text-h1 flex items-center gap-2">
@@ -558,10 +573,14 @@ export default function CreatePage() {
                 <label className="block">
                   <span className="form-label">{t.perResponseReward}</span>
                   <input
-                    type="number"
-                    min={1}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={data.perResponse}
-                    onChange={(e) => updateField('perResponse', Number(e.target.value))}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '')
+                      updateField('perResponse', v === '' ? 0 : Number(v))
+                    }}
                     className="mt-1.5 form-input"
                     placeholder={t.placeholderSsr}
                     aria-label="perResponse"
@@ -571,10 +590,14 @@ export default function CreatePage() {
                 <label className="block">
                   <span className="form-label">{t.maxResponses}</span>
                   <input
-                    type="number"
-                    min={1}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={data.maxResponses}
-                    onChange={(e) => updateField('maxResponses', Number(e.target.value))}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '')
+                      updateField('maxResponses', v === '' ? 0 : Number(v))
+                    }}
                     className="mt-1.5 form-input"
                     placeholder={t.placeholderMaxResponses}
                     aria-label="maxResponses"
@@ -584,7 +607,7 @@ export default function CreatePage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <label className="block">
-                  <span className="form-label">{t.deadline}</span>
+                  <span className="form-label">{t.deadline.replace('{tz}', getLocalUtcOffsetLabel())}</span>
                   <input
                     type="datetime-local"
                     value={deadlineLocal}
@@ -617,10 +640,14 @@ export default function CreatePage() {
                 <label className="block">
                   <span className="form-label">{t.repeatReward}</span>
                   <input
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={data.repeatReward}
-                    onChange={(e) => updateField('repeatReward', Number(e.target.value))}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '')
+                      updateField('repeatReward', v === '' ? 0 : Number(v))
+                    }}
                     className="mt-1.5 form-input"
                     placeholder={t.placeholderRepeatSsr}
                     aria-label="repeatReward"
@@ -630,10 +657,14 @@ export default function CreatePage() {
                 <label className="block">
                   <span className="form-label">{t.maxRepeatTimes}</span>
                   <input
-                    type="number"
-                    min={1}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={data.repeatMaxTimes}
-                    onChange={(e) => updateField('repeatMaxTimes', Number(e.target.value))}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '')
+                      updateField('repeatMaxTimes', v === '' ? 0 : Number(v))
+                    }}
                     disabled={data.repeatReward <= 0}
                     className="mt-1.5 form-input"
                     aria-label="repeatMaxTimes"
@@ -674,19 +705,19 @@ export default function CreatePage() {
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-slate-600 dark:text-neutral-400 font-medium">{t.ssrOffset}</span>
-                      <span className="font-semibold text-slate-700 dark:text-neutral-300">
+                      <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.offsetIn)} SSR`}>
                         {formatSsr(costBreakdown.offsetIn)} SSR
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-600 dark:text-neutral-400 font-medium">{t.newMintSsr}</span>
-                      <span className="font-semibold text-slate-700 dark:text-neutral-300">
+                      <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.minted)} SSR`}>
                         {formatSsr(costBreakdown.minted)} SSR
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-555 dark:text-neutral-400 font-medium">{t.platformFee}</span>
-                      <span className="font-bold text-slate-700 dark:text-neutral-300">
+                      <span className="font-bold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR`}>
                         {formatSsr(
                           (costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n
                         )}{' '}
@@ -695,8 +726,8 @@ export default function CreatePage() {
                     </div>
                     <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2 font-bold">
                       <span className="text-slate-700 dark:text-neutral-300">{t.suiConsumption}</span>
-                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono">
-                        {(Number(costBreakdown.suiToInvest) / 1e9).toFixed(4)} SUI
+                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono" title={`${formatFullPrecision(costBreakdown.suiToInvest)} SUI`}>
+                        {formatSui(costBreakdown.suiToInvest)} SUI
                       </span>
                     </div>
                   </div>
@@ -727,9 +758,9 @@ export default function CreatePage() {
                           type="checkbox"
                           checked={q.required}
                           onChange={(e) => updateQuestion(idx, { required: e.target.checked })}
-                          className={`w-4 h-4 rounded transition-colors ${q.required
-                            ? 'text-rose-800 dark:text-rose-400 focus:ring-rose-700 border-rose-800 bg-rose-50 dark:bg-rose-900/20'
-                            : 'text-blue-600 focus:ring-blue-500 border-slate-300 dark:border-neutral-700'
+                          className={`checkbox-dark ${q.required
+                            ? 'checked:bg-rose-700 checked:border-rose-700 dark:checked:bg-rose-950 dark:checked:border-rose-600 focus:ring-rose-500'
+                            : 'checked:bg-blue-600 checked:border-blue-600'
                             }`}
                         />
                         <label

@@ -3,6 +3,7 @@ import { useLocation, useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ConnectButton,
   useCurrentAccount,
+  useCurrentWallet,
   useSignAndExecuteTransaction,
   useSignPersonalMessage,
   useSuiClient,
@@ -12,20 +13,21 @@ import type { SuiClient } from '@mysten/sui/client'
 import {
   aggregateStats,
   decryptAllResponses,
+  decodeAllPlainResponses,
   fetchClaimedEvents,
   type DashboardStats,
   type SurveyClaimedEvent,
   type DecryptedResponse,
 } from '../lib/dashboardDecrypt'
 import { buildClosePtb } from '../lib/ptb'
-import { formatSsr } from '../lib/format'
+import { formatSsr, formatFullPrecision } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
   base64urlToBytes,
   deriveCreatorKeyPair,
   decryptSurveyContent,
 } from '../lib/crypto'
-import { parseFullSurveyMarkdown, type Question } from '../lib/frontmatter'
+import { parseFullSurveyMarkdown, type Question, type FullSurveyData } from '../lib/frontmatter'
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
 import QRCode from 'qrcode'
 import { useLanguage } from '../context/LanguageContext'
@@ -61,7 +63,18 @@ const content = {
     subtitle: '問卷儀表板',
     statusLabel: '狀態:',
     checking: '查詢中',
-    closedAtLabel: '結束時間:',
+    statusClosedAt: (ts: string) => `已結案 ${ts}`,
+    vaultLabel: 'Vault ID',
+    deadlineLabel: '截止時間',
+    identityThresholdLabel: '驗證等級',
+    perResponseLabel: '初次填答',
+    repeatLabel: '重複填答',
+    repeatDisabled: '禁止重複填答',
+    repeatEnabled: (r: number, n: number) => `每次 ${r} SSR，每地址最多 ${n} 次`,
+    tier0: 'Tier 0 - Email 驗證',
+    tier1: 'Tier 1 - OAuth 驗證',
+    tier2: 'Tier 2 - 真人驗證',
+    metaUnavailable: '解密後可查看設定',
     claimLink: '填答連結',
     claimLinkAria: '填答連結',
     copied: '已複製',
@@ -95,7 +108,6 @@ const content = {
     switchSurveysDescStrong: '點擊下方任何問卷卡片',
     switchSurveysDescSuffix: '，即可快速切換查看該問卷的數據儀表板。',
     currentlySelected: '目前選擇',
-    switchArrow: '切換 ➔',
     qrModalTitle: '問卷填答 QR Code',
     qrModalDesc: '受訪者可以使用手機相機掃描上方二維碼直接進入問卷填答頁面。',
     downloadPng: '下載 PNG',
@@ -104,6 +116,17 @@ const content = {
     errDecryptFailed: '解密失敗',
     errPtbBuildFailed: 'PTB 建構失敗',
     surveyTitlePrefix: '問卷 #',
+    redirectingToSurvey: '此問卷由發起人專屬，正在帶您回到填答頁…',
+    publicResultsLink: '查看結果',
+    publicResultsCopied: '統計連結已複製',
+    responsesTitlePublic: '公開統計圖表',
+    csvTooltipPublic: 'CSV 檔案將包含簡答題的明文內容，但同樣不會包含受訪者名單。',
+    downloadCsvPublic: '匯出數據 (CSV)',
+    questionTypeText: '簡答題',
+    textAnswersHiddenInfo: '為保護個人隱私，公開統計圖表不直接列出簡答題詳細答案。您可點擊右上角「匯出數據 (CSV)」下載完整明文答案（CSV 同樣不包含受訪者名單）。',
+    questionTypeSingle: '單選題',
+    questionTypeMulti: '複選題',
+    questionTypeScale: '評分題',
   },
   EN: {
     dashboardTitle: 'My Dashboard',
@@ -111,7 +134,7 @@ const content = {
     dashboardDescStrong: 'Click any survey card in the list',
     dashboardDescSuffix: ' to view detailed statistics and response data.',
     btnCreateSurvey: '+ Create Survey',
-    walletRequired: 'Wallet Connection Required',
+    walletRequired: 'Wallet connection required',
     walletRequiredDesc: 'Please connect your Sui wallet first to read and manage the surveys you have published.',
     loadingSurveys: 'Loading survey list and status from the Sui blockchain...',
     noSurveys: 'You have not created any surveys yet',
@@ -125,7 +148,7 @@ const content = {
     mobileProgress: 'Progress:',
     mobileStatus: 'Status:',
     statusActive: 'Active',
-    statusFull: 'Pending Close',
+    statusFull: 'Pending',
     statusClosed: 'Closed',
     loadingShort: 'Loading…',
     surveyDefault: 'Survey',
@@ -133,7 +156,18 @@ const content = {
     subtitle: 'Survey Dashboard',
     statusLabel: 'Status:',
     checking: 'Loading',
-    closedAtLabel: 'Closed at:',
+    statusClosedAt: (ts: string) => `Closed ${ts}`,
+    vaultLabel: 'Vault ID',
+    deadlineLabel: 'Deadline',
+    identityThresholdLabel: 'Verification level',
+    perResponseLabel: 'First Response',
+    repeatLabel: 'Repeat Response',
+    repeatDisabled: 'Repeat answer disabled',
+    repeatEnabled: (r: number, n: number) => `${r} SSR each, up to ${n} times per address`,
+    tier0: 'Tier 0 - Email',
+    tier1: 'Tier 1 - OAuth',
+    tier2: 'Tier 2 - Individual',
+    metaUnavailable: 'Decrypt to view settings',
     claimLink: 'Response Link',
     claimLinkAria: 'Response link',
     copied: 'Copied',
@@ -167,7 +201,6 @@ const content = {
     switchSurveysDescStrong: 'Click any survey card below',
     switchSurveysDescSuffix: ' to quickly switch and view that survey\'s dashboard.',
     currentlySelected: 'Selected',
-    switchArrow: 'Switch ➔',
     qrModalTitle: 'Survey Response QR Code',
     qrModalDesc: 'Respondents can scan the QR code above with their phone camera to directly access the survey.',
     downloadPng: 'Download PNG',
@@ -176,6 +209,17 @@ const content = {
     errDecryptFailed: 'Decryption failed',
     errPtbBuildFailed: 'PTB build failed',
     surveyTitlePrefix: 'Survey #',
+    redirectingToSurvey: 'This dashboard is creator-only. Redirecting you to the survey page…',
+    publicResultsLink: 'Show Results',
+    publicResultsCopied: 'Results link copied',
+    responsesTitlePublic: 'Public Statistics Charts',
+    csvTooltipPublic: 'The CSV file will include plaintext answers for text questions, but will not contain the list of respondents.',
+    downloadCsvPublic: 'Export Data (CSV)',
+    questionTypeText: 'Text',
+    textAnswersHiddenInfo: 'To protect personal privacy, public statistics charts do not directly list detailed answers for text questions. You can click "Export Data (CSV)" in the top right to download full plaintext answers (CSV also excludes respondent list).',
+    questionTypeSingle: 'Single Choice',
+    questionTypeMulti: 'Multiple Choice',
+    questionTypeScale: 'Scale',
   },
 }
 
@@ -258,6 +302,8 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const account = useCurrentAccount()
+  const { connectionStatus } = useCurrentWallet()
+  const isWalletResolving = connectionStatus === 'connecting'
   const suiClient = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
@@ -331,8 +377,17 @@ export default function DashboardPage() {
 
   // ── 鏈上 survey 物件 ────────────────────────────────────────────────────────
   const [surveyId, setSurveyId] = useState<string | null>(null)
+  const [surveyResolveFailed, setSurveyResolveFailed] = useState(false)
   const [surveyData, setSurveyData] = useState<any>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
+  const [surveyMeta, setSurveyMeta] = useState<{
+    minTier: number
+    repeatReward: number
+    repeatMaxTimes: number
+    perResponse: number
+    deadlineMs: number
+    encryptAnswers: boolean
+  } | null>(null)
   const [schemaHashStr, setSchemaHashStr] = useState<string>('')
   const [creatorSurveys, setCreatorSurveys] = useState<
     Array<{ vault_id: string; survey_id: string; question_count: number; registered_at_ms: number }>
@@ -364,6 +419,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!vaultId) return
     let cancelled = false
+    setSurveyResolveFailed(false)
     async function resolveSurvey() {
       if (
         !suiClient ||
@@ -407,9 +463,12 @@ export default function DashboardPage() {
               JSON.stringify(prev) === JSON.stringify(obj.data) ? prev : obj.data
             )
           }
+        } else if (!cancelled) {
+          setSurveyResolveFailed(true)
         }
       } catch (err) {
         console.error('[DashboardPage] Failed to resolve survey:', err)
+        if (!cancelled) setSurveyResolveFailed(true)
       }
     }
     void resolveSurvey()
@@ -631,6 +690,28 @@ export default function DashboardPage() {
 
     let rawContent = normalizeBytes(fields.encrypted_content)
 
+    function applyMeta(data: FullSurveyData) {
+      const next = {
+        minTier: data.minTier,
+        repeatReward: data.repeatReward,
+        repeatMaxTimes: data.repeatMaxTimes,
+        perResponse: data.perResponse,
+        deadlineMs: data.deadlineMs,
+        encryptAnswers: data.encryptAnswers,
+      }
+      setSurveyMeta((prev) =>
+        prev &&
+          prev.minTier === next.minTier &&
+          prev.repeatReward === next.repeatReward &&
+          prev.repeatMaxTimes === next.repeatMaxTimes &&
+          prev.perResponse === next.perResponse &&
+          prev.deadlineMs === next.deadlineMs &&
+          prev.encryptAnswers === next.encryptAnswers
+          ? prev
+          : next
+      )
+    }
+
     async function loadQuestions() {
       try {
         if (contentKeyB64) {
@@ -643,6 +724,7 @@ export default function DashboardPage() {
                 ? prev
                 : parsed.data.questions
             )
+            applyMeta(parsed.data)
           }
         } else {
           if (rawContent.length >= 32) {
@@ -654,6 +736,7 @@ export default function DashboardPage() {
                   ? prev
                   : parsed.data.questions
               )
+              applyMeta(parsed.data)
             }
           }
         }
@@ -664,6 +747,27 @@ export default function DashboardPage() {
 
     void loadQuestions()
   }, [surveyData, vaultId, location.hash])
+
+  // ── 公開問卷自動解析 ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (surveyMeta?.encryptAnswers === false && questions && events && schemaHashStr) {
+      try {
+        const { responses } = decodeAllPlainResponses(
+          events,
+          questions,
+          schemaHashStr
+        )
+        const s = aggregateStats(responses, events.length)
+        setStats(s)
+        setDecryptedResponses(responses)
+        setDecryptStatus('done')
+      } catch (err) {
+        console.error('[DashboardPage] Failed to decode plain responses:', err)
+        setDecryptError(err instanceof Error ? err.message : 'Failed to decode responses')
+        setDecryptStatus('error')
+      }
+    }
+  }, [surveyMeta?.encryptAnswers, questions, events, schemaHashStr])
 
   // ── 解密 ──────────────────────────────────────────────────────────────────
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -678,6 +782,23 @@ export default function DashboardPage() {
   const isCreator =
     !!account && !!vault && normalizeSuiId(account.address) === normalizeSuiId(vault.creator)
   const isActive = vault?.status === 0
+
+  const isAccessDenied = useMemo(() => {
+    if (!vaultId || isWalletResolving || !vault) return false
+    return !isCreator
+  }, [vaultId, isWalletResolving, vault, isCreator])
+
+  useEffect(() => {
+    if (!isAccessDenied) return
+    if (surveyId) {
+      const hash = contentKeyB64 ? `#${contentKeyB64}` : ''
+      navigate(`/s/${surveyId}${hash}`, { replace: true })
+      return
+    }
+    if (surveyResolveFailed) {
+      navigate('/', { replace: true })
+    }
+  }, [isAccessDenied, surveyId, surveyResolveFailed, contentKeyB64, navigate])
 
   async function handleDecrypt() {
     if (!isCreator || decryptStatus === 'signing' || decryptStatus === 'decrypting') return
@@ -814,9 +935,48 @@ export default function DashboardPage() {
   // ── 顯示 ──────────────────────────────────────────────────────────────────
   const displayBalanceSsr = vault ? formatSsr(vault.balance) : null
 
+  // QR Code 用的 fullUrl 與繪製 effect 必須宣告在任何 early return 之前，
+  // 否則 isAccessDenied 在同一 mount 內由 false 翻 true 時會違反 Rules of Hooks。
+  const fullUrl = surveyId
+    ? `${window.location.origin}/s/${surveyId}${contentKeyB64 ? `#${contentKeyB64}` : ''}`
+    : ''
+
+  useEffect(() => {
+    if (showQrModal && qrCanvasRef.current && fullUrl) {
+      QRCode.toCanvas(
+        qrCanvasRef.current,
+        fullUrl,
+        {
+          width: 240,
+          margin: 2,
+          color: {
+            dark: '#30305f',
+            light: '#ffffff',
+          },
+        },
+        (error) => {
+          if (error) console.error('[DashboardPage] Failed to generate QR Code:', error)
+        }
+      )
+    }
+  }, [showQrModal, fullUrl])
+
+  if (vaultId && isAccessDenied) {
+    return (
+      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
+          <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
+            {t.redirectingToSurvey}
+          </p>
+        </div>
+      </main>
+    )
+  }
+
   if (!vaultId) {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-neutral-850 dark:text-neutral-200">
+      <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
           <div className="flex-1">
             <h1 className="text-h1">
@@ -826,7 +986,7 @@ export default function DashboardPage() {
               {t.dashboardDescPrefix}<strong>{t.dashboardDescStrong}</strong>{t.dashboardDescSuffix}
             </p>
           </div>
-          {account && (
+          {account && !loadingDetails && surveyDetails.length > 0 && (
             <Link
               to="/create"
               className="self-start sm:self-auto whitespace-nowrap btn-primary"
@@ -851,12 +1011,12 @@ export default function DashboardPage() {
         ) : loadingDetails ? (
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-700 border-t-transparent mb-4"></div>
-            <p className="text-sm text-neutral-500 dark:text-neutral-450">
+            <p className="text-muted">
               {t.loadingSurveys}
             </p>
           </div>
         ) : surveyDetails.length === 0 ? (
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-150 dark:border-neutral-800 rounded-3xl p-10 text-center shadow-sm max-w-lg mx-auto my-8 transition-colors">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-100 dark:border-neutral-800 rounded-3xl p-10 text-center shadow-sm max-w-lg mx-auto my-8 transition-colors">
             <h3 className="text-h3 mb-2">
               {t.noSurveys}
             </h3>
@@ -895,18 +1055,18 @@ export default function DashboardPage() {
                 hover:bg-neutral-100/90 dark:hover:bg-neutral-800/60 transition-colors duration-150"
               >
                 {/* 欄位 1: 問卷標題 */}
-                <div className="sm:col-span-5 break-words" title={s.title}>
-                  <span className="font-mono text-neutral-900 dark:text-neutral-100 block">
+                <div className="sm:col-span-5 min-w-0" title={s.title}>
+                  <span className="font-mono text-slate-900 dark:text-neutral-100 block truncate">
                     {s.title}
                   </span>
-                  <div className="font-mono text-xxs text-neutral-400 mt-1" title={s.vault_id}>
+                  <div className="font-mono text-xxs text-slate-500 dark:text-neutral-500 mt-1 truncate" title={s.vault_id}>
                     Vault: {formatVaultId(s.vault_id)}
                   </div>
                 </div>
 
                 {/* 欄位 2: 建立日期 */}
-                <div className="sm:col-span-3 text-sm text-neutral-500 dark:text-neutral-400 flex items-center justify-between sm:block">
-                  <span className="sm:hidden text-xs font-bold text-neutral-400 uppercase">
+                <div className="sm:col-span-3 text-sm text-slate-600 dark:text-neutral-400 flex items-center justify-between sm:block">
+                  <span className="sm:hidden text-xs font-normal text-slate-600 dark:text-neutral-400 uppercase">
                     {t.mobileCreatedAt}
                   </span>
                   <span>{s.registered_at_ms ? formatDateTime(s.registered_at_ms) : '—'}</span>
@@ -914,14 +1074,14 @@ export default function DashboardPage() {
 
                 {/* 欄位 3: 填答進度 */}
                 <div className="sm:col-span-2 flex items-center justify-between sm:justify-start gap-2">
-                  <span className="sm:hidden text-xs font-bold text-neutral-400 uppercase">
+                  <span className="sm:hidden text-xs font-normal text-slate-600 dark:text-neutral-400 uppercase">
                     {t.mobileProgress}
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm text-neutral-800 dark:text-neutral-200 whitespace-nowrap">
+                    <span className="font-mono text-sm text-slate-800 dark:text-neutral-300 whitespace-nowrap">
                       {s.claimed_count} / {s.max_responses}
                     </span>
-                    <div className="w-16 bg-neutral-100 dark:bg-neutral-800 rounded-full h-1.5 overflow-hidden flex-shrink-0">
+                    <div className="w-16 bg-slate-100 dark:bg-neutral-800 rounded-full h-1.5 overflow-hidden flex-shrink-0">
                       <div
                         className="bg-blue-600 h-1.5 rounded-full"
                         style={{
@@ -934,7 +1094,7 @@ export default function DashboardPage() {
 
                 {/* 欄位 4: 狀態 */}
                 <div className="sm:col-span-2 sm:text-right flex items-center justify-between sm:justify-end gap-2">
-                  <span className="sm:hidden text-xs font-bold text-neutral-400 uppercase">
+                  <span className="sm:hidden text-xs font-normal text-slate-600 dark:text-neutral-400 uppercase">
                     {t.mobileStatus}
                   </span>
                   {(() => {
@@ -966,97 +1126,68 @@ export default function DashboardPage() {
 
   const currentSurvey = surveyDetails.find((s) => s.vault_id === vaultId)
   const surveyTitle = currentSurvey ? currentSurvey.title : loadingDetails ? t.loadingShort : t.surveyDefault
-  const fullUrl = surveyId
-    ? `${window.location.origin}/s/${surveyId}${contentKeyB64 ? `#${contentKeyB64}` : ''}`
-    : ''
-
-  useEffect(() => {
-    if (showQrModal && qrCanvasRef.current && fullUrl) {
-      QRCode.toCanvas(
-        qrCanvasRef.current,
-        fullUrl,
-        {
-          width: 240,
-          margin: 2,
-          color: {
-            dark: '#4671d3',
-            light: '#ffffff',
-          },
-        },
-        (error) => {
-          if (error) console.error('[DashboardPage] Failed to generate QR Code:', error)
-        }
-      )
-    }
-  }, [showQrModal, fullUrl])
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-neutral-850 dark:text-neutral-200">
+    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
       <div className="mb-4">
         <Link
           to="/dashboard"
-          className="inline-flex items-center gap-1.5 text-sm text-blue-705 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline font-normal"
+          className="inline-flex items-center gap-1.5 text-sm text-blue-700 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline font-normal"
         >
           {t.backToList}
         </Link>
       </div>
 
-      <h1 className="text-h1 mb-1">{surveyTitle}</h1>
-      <h2 className="text-h3 text-neutral-500 dark:text-neutral-450 mb-2">
+      <h1 className="text-h1 mb-1 overflow-x-auto whitespace-nowrap pb-1.5">{surveyTitle}</h1>
+      <h2 className="text-h3 text-muted mb-6">
         {t.subtitle}
       </h2>
-      <p className="text-sm text-neutral-500 mb-2 break-all font-mono">
-        Vault: <span className="font-semibold">{vaultId}</span>
-      </p>
-      <p className="text-sm text-neutral-500 mb-2">
-        {t.statusLabel}
-        <span
-          className={isActive ? 'text-green-600 font-normal' : 'text-neutral-550 font-normal'}
-        >
-          {vault ? (isActive ? t.statusActive : t.statusClosed) : t.checking}
-        </span>
-      </p>
-      {vault && !isActive && (
-        <p className="text-sm text-neutral-500 mb-6">
-          {t.closedAtLabel}
-          <span className="font-normal">
-            {vault.closed_at_ms && Number(vault.closed_at_ms) > 0
-              ? formatDateTime(Number(vault.closed_at_ms))
-              : '—'}
-          </span>
-        </p>
-      )}
-      {(!vault || isActive) && <div className="mb-6" />}
 
       {surveyId && (
-        <section className="mb-6 bg-blue-100 dark:bg-blue-900/20 border border-transparent dark:border-blue-900/30 rounded-xl p-4 flex items-center gap-3">
-          <a
-            href={`/s/${surveyId}${contentKeyB64 ? `#${contentKeyB64}` : ''}`}
-            className="text-sm text-blue-700 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-305 hover:underline font-normal cursor-pointer"
-            aria-label={t.claimLinkAria}
-          >
-            {t.claimLink}
-          </a>
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(fullUrl)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 2000)
-            }}
-            className={`px-3 py-1.5 text-sm rounded-xl font-normal transition-all ${copied ? 'bg-emerald-700 text-white' : 'bg-blue-700 hover:bg-blue-800 text-white dark:bg-blue-800 dark:hover:bg-blue-600'
-              }`}
-          >
-            {copied ? t.copied : t.copy}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowQrModal(true)}
-            className="btn-secondary px-3 py-1.5 text-sm"
-            aria-label={t.qrCodeAria}
-          >
-            QR Code
-          </button>
+        <section className="mb-6 bg-blue-100 dark:bg-blue-900/20 border border-transparent dark:border-blue-900/30 rounded-xl p-4 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-3">
+            <a
+              href={`/s/${surveyId}${contentKeyB64 ? `#${contentKeyB64}` : ''}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-blue-700 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline font-normal cursor-pointer"
+              aria-label={t.claimLinkAria}
+            >
+              {t.claimLink}
+            </a>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(fullUrl)
+                setCopied(true)
+                setTimeout(() => setCopied(false), 2000)
+              }}
+              className={`px-3 py-1.5 text-sm rounded-xl font-normal transition-all ${copied ? 'bg-emerald-700 text-white' : 'bg-blue-700 hover:bg-blue-800 text-white dark:bg-blue-800 dark:hover:bg-blue-600'
+                }`}
+            >
+              {copied ? t.copied : t.copy}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowQrModal(true)}
+              className="btn-secondary px-3 py-1.5 text-sm"
+              aria-label={t.qrCodeAria}
+            >
+              QR Code
+            </button>
+          </div>
+          {surveyMeta?.encryptAnswers === false && (
+            <div className="flex items-center gap-3 border-t sm:border-t-0 sm:border-l pt-3 sm:pt-0 sm:pl-3 border-slate-200 dark:border-neutral-800 sm:ml-auto">
+              <Link
+                to={`/results/${vaultId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 text-sm rounded-xl font-normal transition-all bg-emerald-700 hover:bg-emerald-800 text-white dark:bg-emerald-800 dark:hover:bg-emerald-650 cursor-pointer"
+              >
+                {t.publicResultsLink}
+              </Link>
+            </div>
+          )}
         </section>
       )}
 
@@ -1067,29 +1198,94 @@ export default function DashboardPage() {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <div className="bg-gray-50 dark:bg-neutral-900 rounded p-4 transition-colors">
-          <p className="text-sm text-gray-500 dark:text-neutral-400">{t.statResponseCount}</p>
-          <p className="text-2xl font-bold dark:text-neutral-100" aria-label="response-count">
+        <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
+          <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statResponseCount}</p>
+          <p className="text-2xl font-normal text-slate-900 dark:text-neutral-100" aria-label="response-count">
             {responseCount}
           </p>
         </div>
-        <div className="bg-gray-50 dark:bg-neutral-900 rounded p-4 transition-colors">
-          <p className="text-sm text-gray-500 dark:text-neutral-400">{t.statResponseProgress}</p>
-          <p className="text-2xl font-bold dark:text-neutral-100" aria-label="received-over-max">
+        <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
+          <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statResponseProgress}</p>
+          <p className="text-2xl font-normal text-slate-900 dark:text-neutral-100" aria-label="received-over-max">
             {responseCount} / {vault ? vault.max_responses : '—'}
           </p>
         </div>
-        <div className="bg-gray-50 dark:bg-neutral-900 rounded p-4 transition-colors">
-          <p className="text-sm text-gray-500 dark:text-neutral-400">{t.statVaultBalance}</p>
-          <p className="text-2xl font-bold dark:text-neutral-100" aria-label="vault-balance">
+        <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
+          <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statVaultBalance}</p>
+          <p className="text-2xl font-normal text-slate-900 dark:text-neutral-100" aria-label="vault-balance" title={vault ? `${formatFullPrecision(vault.balance)} SSR` : undefined}>
             {displayBalanceSsr !== null ? `${displayBalanceSsr} SSR` : t.checkingShort}
           </p>
         </div>
       </div>
 
+      {/* ── 問卷資訊整合區塊 ────────────────────────────────────────────── */}
+      <section className="mb-6 bg-slate-100 border border-slate-300 dark:bg-neutral-950 dark:border-neutral-800 rounded-xl p-4">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.vaultLabel}</dt>
+          <dd className="font-mono break-all text-body">{vaultId}</dd>
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.statusLabel.replace(':', '')}</dt>
+          <dd className="text-body">
+            {!vault ? (
+              t.checking
+            ) : (() => {
+              const state = deriveSurveyState(
+                vault.status,
+                Number(vault.claimed_count),
+                Number(vault.max_responses)
+              )
+              if (state === 'active') {
+                return <span className="text-emerald-700 dark:text-emerald-400">{t.statusActive}</span>
+              }
+              if (state === 'full') {
+                return <span className="text-amber-700 dark:text-amber-400">{t.statusFull}</span>
+              }
+              return (
+                <span className="text-slate-600 dark:text-neutral-400">
+                  {t.statusClosedAt(
+                    vault.closed_at_ms && Number(vault.closed_at_ms) > 0
+                      ? formatDateTime(Number(vault.closed_at_ms))
+                      : '—'
+                  )}
+                </span>
+              )
+            })()}
+          </dd>
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.deadlineLabel}</dt>
+          <dd className="text-body">{surveyMeta ? formatDateTime(surveyMeta.deadlineMs) : '—'}</dd>
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.identityThresholdLabel}</dt>
+          <dd className="text-body">
+            {surveyMeta
+              ? surveyMeta.minTier === 0
+                ? t.tier0
+                : surveyMeta.minTier === 1
+                  ? t.tier1
+                  : t.tier2
+              : '—'}
+          </dd>
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.perResponseLabel}</dt>
+          <dd className="text-body">{surveyMeta ? `${surveyMeta.perResponse} SSR` : '—'}</dd>
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.repeatLabel}</dt>
+          <dd className="text-body">
+            {surveyMeta
+              ? surveyMeta.repeatReward === 0
+                ? t.repeatDisabled
+                : t.repeatEnabled(surveyMeta.repeatReward, surveyMeta.repeatMaxTimes)
+              : '—'}
+          </dd>
+        </dl>
+        {!surveyMeta && (
+          <p className="text-muted mt-3">{t.metaUnavailable}</p>
+        )}
+      </section>
+
       {/* ── 解密 + 統計圖表 ──────────────────────────────────────────────── */}
       {responseCount === 0 ? (
-        <div className="bg-gray-50 dark:bg-neutral-900 rounded p-6 text-center text-gray-500 dark:text-neutral-400 mb-6 transition-colors">
+        <div className="bg-slate-100 dark:bg-neutral-900 rounded p-6 text-center text-slate-600 dark:text-neutral-400 mb-6 transition-colors">
           {t.noResponses}
         </div>
       ) : (
@@ -1104,7 +1300,7 @@ export default function DashboardPage() {
             </button>
           )}
           {(decryptStatus === 'signing' || decryptStatus === 'decrypting') && (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-slate-600 dark:text-neutral-400">
               {decryptStatus === 'signing' ? t.signingMsg : t.decryptingMsg}
             </p>
           )}
@@ -1117,6 +1313,8 @@ export default function DashboardPage() {
           {decryptedResponses &&
             questions &&
             (() => {
+              const isPublicSurvey = surveyMeta?.encryptAnswers === false
+
               // viewMode 切換：'latest' 同地址僅保留 max(claimed_at_ms) 那筆。
               const displayedResponses = (() => {
                 if (responseViewMode === 'all') return decryptedResponses
@@ -1140,50 +1338,56 @@ export default function DashboardPage() {
                 <div className="mt-6">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <h3 className="text-h3">{t.responsesTitle}</h3>
-                      <span className="text-xs text-gray-500 dark:text-neutral-400">
-                        {responseViewMode === 'all'
-                          ? t.displayCount(displayedResponses.length)
-                          : t.displayUniqueCount(displayedResponses.length, decryptedResponses.length)}
+                      <h3 className="text-h3">
+                        {isPublicSurvey ? t.responsesTitlePublic : t.responsesTitle}
+                      </h3>
+                      <span className="text-xs text-slate-600 dark:text-neutral-400">
+                        {isPublicSurvey
+                          ? t.displayCount(decryptedResponses.length)
+                          : responseViewMode === 'all'
+                            ? t.displayCount(displayedResponses.length)
+                            : t.displayUniqueCount(displayedResponses.length, decryptedResponses.length)}
                       </span>
                     </div>
                     <div className="flex items-center gap-3 flex-wrap">
-                      <div
-                        role="radiogroup"
-                        aria-label={t.viewModeLabel}
-                        className="inline-flex items-center bg-gray-100 dark:bg-neutral-800 rounded-lg p-0.5 text-xs transition-colors"
-                      >
-                        <label
-                          className={`px-3 py-1.5 rounded-md cursor-pointer font-medium ${responseViewMode === 'all' ? 'bg-white shadow-sm text-gray-800 dark:bg-neutral-700 dark:text-neutral-100' : 'text-gray-500 dark:text-neutral-400'}`}
+                      {!isPublicSurvey && (
+                        <div
+                          role="radiogroup"
+                          aria-label={t.viewModeLabel}
+                          className="inline-flex items-center bg-slate-100 dark:bg-neutral-800 rounded-lg p-0.5 text-xs transition-colors"
                         >
-                          <input
-                            type="radio"
-                            name="responseViewMode"
-                            value="all"
-                            checked={responseViewMode === 'all'}
-                            onChange={() => setResponseViewMode('all')}
-                            className="sr-only"
-                          />
-                          {t.allSubmissions}
-                        </label>
-                        <label
-                          className={`px-3 py-1.5 rounded-md cursor-pointer font-medium ${responseViewMode === 'latest' ? 'bg-white shadow-sm text-gray-800 dark:bg-neutral-700 dark:text-neutral-100' : 'text-gray-500 dark:text-neutral-400'}`}
-                        >
-                          <input
-                            type="radio"
-                            name="responseViewMode"
-                            value="latest"
-                            checked={responseViewMode === 'latest'}
-                            onChange={() => setResponseViewMode('latest')}
-                            className="sr-only"
-                          />
-                          {t.latestPerPerson}
-                        </label>
-                      </div>
+                          <label
+                            className={`px-3 py-1.5 rounded-md cursor-pointer font-normal ${responseViewMode === 'all' ? 'bg-white shadow-sm text-slate-800 dark:bg-neutral-700 dark:text-neutral-100' : 'text-slate-600 dark:text-neutral-400'}`}
+                          >
+                            <input
+                              type="radio"
+                              name="responseViewMode"
+                              value="all"
+                              checked={responseViewMode === 'all'}
+                              onChange={() => setResponseViewMode('all')}
+                              className="sr-only"
+                            />
+                            {t.allSubmissions}
+                          </label>
+                          <label
+                            className={`px-3 py-1.5 rounded-md cursor-pointer font-normal ${responseViewMode === 'latest' ? 'bg-white shadow-sm text-slate-800 dark:bg-neutral-700 dark:text-neutral-100' : 'text-slate-600 dark:text-neutral-400'}`}
+                          >
+                            <input
+                              type="radio"
+                              name="responseViewMode"
+                              value="latest"
+                              checked={responseViewMode === 'latest'}
+                              onChange={() => setResponseViewMode('latest')}
+                              className="sr-only"
+                            />
+                            {t.latestPerPerson}
+                          </label>
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={handleDownloadCsv}
-                        title={t.csvTooltip}
+                        title={isPublicSurvey ? t.csvTooltipPublic : t.csvTooltip}
                         className="bg-emerald-700 hover:bg-emerald-800 text-neutral-100 font-normal px-5 py-2 rounded-xl transition-all text-base flex items-center justify-center gap-1.5 shadow-sm dark:bg-emerald-800 dark:hover:bg-emerald-650"
                       >
                         <svg
@@ -1200,93 +1404,213 @@ export default function DashboardPage() {
                             d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                           ></path>
                         </svg>
-                        {t.downloadCsv}
+                        {isPublicSurvey ? t.downloadCsvPublic : t.downloadCsv}
                       </button>
                     </div>
                   </div>
-                  {hasRepeats && responseViewMode === 'all' && (
-                    <p className="text-xs text-gray-500 dark:text-neutral-400 mb-3">
+                  {hasRepeats && responseViewMode === 'all' && !isPublicSurvey && (
+                    <p className="text-xs text-slate-600 dark:text-neutral-400 mb-3">
                       {t.hasRepeatsInfo}
                     </p>
                   )}
 
-                  <div className="overflow-x-auto rounded-xl bg-white dark:bg-neutral-900 shadow-sm max-w-full transition-colors">
-                    <table className="min-w-full divide-y divide-gray-200 dark:divide-neutral-800 text-sm">
-                      <thead className="bg-gray-50 dark:bg-neutral-800">
-                        <tr>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap"
-                          >
-                            #
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap"
-                          >
-                            {t.respondentHeader}
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap"
-                          >
-                            {t.submittedTimeHeader}
-                          </th>
-                          {questions.map((q) => (
-                            <th
+                  {isPublicSurvey ? (
+                    <div className="space-y-6">
+                      {questions.map((q) => {
+                        const questionStats = stats?.questions?.[q.id]
+                        const totalAnswers = stats?.decrypted_count || 0
+
+                        if (q.type === 'text') {
+                          return (
+                            <div
                               key={q.id}
-                              scope="col"
-                              className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap max-w-xs truncate"
-                              title={q.prompt}
+                              className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 transition-colors shadow-xs"
                             >
-                              {q.id}: {q.prompt}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white dark:bg-neutral-900 divide-y divide-gray-100 dark:divide-neutral-800">
-                        {displayedResponses.map((resp, idx) => (
-                          <tr
-                            key={resp.respondent + idx}
-                            className="hover:bg-gray-50/50 dark:hover:bg-neutral-800/40 transition-colors"
-                          >
-                            <td className="px-4 py-3 text-gray-400 dark:text-neutral-500 font-mono whitespace-nowrap">
-                              {idx + 1}
-                            </td>
-                            <td
-                              className="px-4 py-3 text-gray-600 dark:text-neutral-300 font-mono whitespace-nowrap"
-                              title={resp.respondent}
-                            >
-                              {resp.respondent.slice(0, 8)}...{resp.respondent.slice(-8)}
-                            </td>
-                            <td className="px-4 py-3 text-gray-500 dark:text-neutral-400 whitespace-nowrap">
-                              {new Date(resp.claimed_at_ms).toLocaleString('zh-TW')}
-                            </td>
-                            {questions.map((q) => {
-                              const val = resp.answers[q.id]
-                              let displayVal = '—'
-                              if (val !== undefined && val !== null) {
-                                if (Array.isArray(val)) {
-                                  displayVal = val.join(', ')
-                                } else {
-                                  displayVal = String(val)
-                                }
-                              }
-                              return (
-                                <td
-                                  key={q.id}
-                                  className="px-4 py-3 text-gray-800 dark:text-neutral-200 whitespace-nowrap max-w-xs truncate"
-                                  title={displayVal}
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+                                  {t.questionTypeText}
+                                </span>
+                                <h4 className="text-base font-semibold text-slate-900 dark:text-neutral-100">
+                                  {q.prompt}
+                                </h4>
+                              </div>
+                              <div className="p-4 bg-slate-50 dark:bg-neutral-950/50 rounded-xl border border-dashed border-neutral-200 dark:border-neutral-800 text-sm text-slate-500 dark:text-neutral-400 flex items-start gap-2.5">
+                                <svg
+                                  className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                  xmlns="http://www.w3.org/2000/svg"
                                 >
-                                  {displayVal}
-                                </td>
-                              )
-                            })}
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="2"
+                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                                  ></path>
+                                </svg>
+                                <span>{t.textAnswersHiddenInfo}</span>
+                              </div>
+                            </div>
+                          )
+                        }
+
+                        const options = q.options_json || []
+                        const counts = questionStats?.counts || {}
+
+                        const displayOptions =
+                          options.length > 0
+                            ? options
+                            : Object.keys(counts).sort((a, b) => (counts[b] || 0) - (counts[a] || 0))
+
+                        const typeLabel =
+                          q.type === 'single_choice'
+                            ? t.questionTypeSingle
+                            : q.type === 'multi_choice'
+                              ? t.questionTypeMulti
+                              : t.questionTypeScale
+
+                        const badgeStyle =
+                          q.type === 'single_choice'
+                            ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400 border-blue-200/30'
+                            : q.type === 'multi_choice'
+                              ? 'bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400 border-purple-200/30'
+                              : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400 border-indigo-200/30'
+
+                        return (
+                          <div
+                            key={q.id}
+                            className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 transition-colors shadow-xs"
+                          >
+                            <div className="flex items-center gap-2 mb-4">
+                              <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeStyle}`}>
+                                {typeLabel}
+                              </span>
+                              <h4 className="text-base font-semibold text-slate-900 dark:text-neutral-100">
+                                {q.prompt}
+                              </h4>
+                            </div>
+
+                            <div className="space-y-4">
+                              {displayOptions.map((opt) => {
+                                const count = counts[opt] || 0
+                                const pct = totalAnswers > 0 ? (count / totalAnswers) * 100 : 0
+                                const displayPct = pct.toFixed(1)
+
+                                return (
+                                  <div key={opt} className="space-y-1.5">
+                                    <div className="flex items-center justify-between text-sm">
+                                      <span className="text-slate-800 dark:text-neutral-200 font-medium break-all pr-4">
+                                        {opt}
+                                      </span>
+                                      <span className="text-slate-500 dark:text-neutral-400 text-xs font-mono whitespace-nowrap">
+                                        {count} 次 ({displayPct}%)
+                                      </span>
+                                    </div>
+                                    <div className="w-full bg-slate-100 dark:bg-neutral-800/80 rounded-full h-3 overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-full transition-all duration-500 ${q.type === 'single_choice'
+                                          ? 'bg-blue-600 dark:bg-blue-500'
+                                          : q.type === 'multi_choice'
+                                            ? 'bg-purple-600 dark:bg-purple-500'
+                                            : 'bg-indigo-600 dark:bg-indigo-500'
+                                          }`}
+                                        style={{ width: `${pct}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                )
+                              })}
+
+                              {displayOptions.length === 0 && (
+                                <p className="text-sm text-slate-400 dark:text-neutral-500 italic">
+                                  無填答數據
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl bg-white dark:bg-neutral-900 shadow-sm max-w-full transition-colors">
+                      <table className="min-w-full divide-y divide-gray-200 dark:divide-neutral-800 text-sm">
+                        <thead className="bg-slate-100 dark:bg-neutral-800">
+                          <tr>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-left text-xs font-normal text-slate-600 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap"
+                            >
+                              #
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-left text-xs font-normal text-slate-600 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap"
+                            >
+                              {t.respondentHeader}
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-left text-xs font-normal text-slate-600 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap"
+                            >
+                              {t.submittedTimeHeader}
+                            </th>
+                            {questions.map((q) => (
+                              <th
+                                key={q.id}
+                                scope="col"
+                                className="px-4 py-3 text-left text-xs font-normal text-slate-600 dark:text-neutral-400 uppercase tracking-wider whitespace-nowrap max-w-xs truncate"
+                                title={q.prompt}
+                              >
+                                {q.id}: {q.prompt}
+                              </th>
+                            ))}
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="bg-white dark:bg-neutral-900 divide-y divide-gray-100 dark:divide-neutral-800">
+                          {displayedResponses.map((resp, idx) => (
+                            <tr
+                              key={resp.respondent + idx}
+                              className="hover:bg-slate-100/50 dark:hover:bg-neutral-800/40 transition-colors"
+                            >
+                              <td className="px-4 py-3 text-slate-500 dark:text-neutral-500 font-mono whitespace-nowrap">
+                                {idx + 1}
+                              </td>
+                              <td
+                                className="px-4 py-3 text-slate-700 dark:text-neutral-300 font-mono whitespace-nowrap"
+                                title={resp.respondent}
+                              >
+                                {resp.respondent.slice(0, 8)}...{resp.respondent.slice(-8)}
+                              </td>
+                              <td className="px-4 py-3 text-slate-600 dark:text-neutral-400 whitespace-nowrap">
+                                {new Date(resp.claimed_at_ms).toLocaleString('zh-TW')}
+                              </td>
+                              {questions.map((q) => {
+                                const val = resp.answers[q.id]
+                                let displayVal = '—'
+                                if (val !== undefined && val !== null) {
+                                  if (Array.isArray(val)) {
+                                    displayVal = val.join(', ')
+                                  } else {
+                                    displayVal = String(val)
+                                  }
+                                }
+                                return (
+                                  <td
+                                    key={q.id}
+                                    className="px-4 py-3 text-slate-800 dark:text-neutral-300 whitespace-nowrap max-w-xs truncate"
+                                    title={displayVal}
+                                  >
+                                    {displayVal}
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )
             })()}
@@ -1337,7 +1661,7 @@ export default function DashboardPage() {
             <h2 className="text-h2">
               {t.switchSurveys}
             </h2>
-            <p className="text-xs text-neutral-500 dark:text-neutral-450 mt-1">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
               <strong>{t.switchSurveysDescStrong}</strong>{t.switchSurveysDescSuffix}
             </p>
           </div>
@@ -1351,34 +1675,40 @@ export default function DashboardPage() {
                   navigate(`/dashboard/${s.vault_id}${getSavedContentKey(s.vault_id)}`)
                 }
                 className={`flex items-center justify-between px-4 py-2 rounded-xs transition-colors duration-150 group ${s.vault_id === vaultId
-                    ? 'bg-neutral-50/50 dark:bg-neutral-800/30 cursor-default'
-                    : 'bg-white dark:bg-neutral-900 cursor-pointer hover:bg-neutral-100/80 dark:hover:bg-neutral-800/60'
+                  ? 'bg-neutral-50/50 dark:bg-neutral-800/30 cursor-default'
+                  : 'bg-white dark:bg-neutral-900 cursor-pointer hover:bg-neutral-100/80 dark:hover:bg-neutral-800/60'
                   }`}
               >
-                <div className="text-neutral-900 dark:text-white font-semibold">{s.title}</div>
+                <div className="text-slate-900 dark:text-white font-normal flex-1 min-w-0 truncate mr-4" title={s.title}>
+                  {s.title}
+                </div>
                 <div className="flex items-center gap-4">
-                  {deriveSurveyState(s.status, s.claimed_count, s.max_responses) === 'full' && (
-                    <span
-                      className="inline-flex items-center gap-1 text-xxs font-normal text-amber-700 dark:text-amber-400"
-                      title={t.statusFull}
-                    >
-                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400" />
-                      {t.statusFull}
-                    </span>
-                  )}
-                  <div className="text-neutral-500 dark:text-neutral-400 font-mono whitespace-nowrap">
+                  <div className="text-slate-600 dark:text-neutral-400 font-mono whitespace-nowrap">
                     {s.claimed_count} / {s.max_responses}
                   </div>
                   <div className="w-24 text-right">
                     {s.vault_id === vaultId ? (
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-normal bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
                         {t.currentlySelected}
                       </span>
-                    ) : (
-                      <span className="text-neutral-400 group-hover:text-blue-500 transition-colors text-xs font-bold opacity-0 group-hover:opacity-100 mr-2">
-                        {t.switchArrow}
-                      </span>
-                    )}
+                    ) : (() => {
+                      const state = deriveSurveyState(s.status, s.claimed_count, s.max_responses)
+                      const styles =
+                        state === 'active'
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-200/50 dark:border-emerald-800/30'
+                          : state === 'full'
+                            ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 border-amber-200/50 dark:border-amber-800/30'
+                            : 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border-neutral-200/50 dark:border-neutral-700/30'
+                      const label =
+                        state === 'active' ? t.statusActive : state === 'full' ? t.statusFull : t.statusClosed
+                      return (
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-normal border ${styles}`}
+                        >
+                          {label}
+                        </span>
+                      )
+                    })()}
                   </div>
                 </div>
               </div>

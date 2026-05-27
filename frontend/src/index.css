@@ -33,9 +33,47 @@
     font-family: 'Noto Sans TC', ui-sans-serif, system-ui, sans-serif;
     @apply bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-100 transition-colors duration-200;
   }
+
   input:focus::placeholder,
   textarea:focus::placeholder {
     color: transparent;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-color: oklch(0.85 0 0) transparent;
+    scrollbar-width: thin;
+  }
+
+  .dark * {
+    scrollbar-color: oklch(0.35 0 0) transparent;
+  }
+
+  /* WebKit / Chromium */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: oklch(0.85 0 0);
+    border-radius: 8px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(0.75 0 0);
+  }
+
+  .dark *::-webkit-scrollbar-thumb {
+    background-color: oklch(0.35 0 0);
+  }
+
+  .dark *::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(0.45 0 0);
   }
 }
 
@@ -92,6 +130,41 @@
   @apply disabled:border-slate-100 disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed dark:disabled:border-neutral-800 dark:disabled:bg-neutral-800/50 dark:disabled:text-neutral-500;
 }
 
+@utility checkbox-dark {
+  @apply w-4 h-4 rounded border appearance-none cursor-pointer transition-colors align-middle;
+  @apply bg-white border-slate-400;
+  @apply dark:bg-neutral-800 dark:border-neutral-200;
+  @apply focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400;
+  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+@utility radio-dark {
+  @apply w-4 h-4 rounded-full border appearance-none cursor-pointer transition-colors align-middle;
+  @apply bg-white border-slate-400;
+  @apply dark:bg-neutral-800 dark:border-neutral-200;
+  @apply focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400;
+  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+@layer components {
+  .checkbox-dark:checked {
+    background-size: 0.75rem 0.75rem;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='white'%3E%3Cpath d='M13.485 4.43a1 1 0 010 1.414l-6.364 6.364a1 1 0 01-1.414 0L2.515 8.94a1 1 0 011.414-1.414l2.485 2.485 5.657-5.657a1 1 0 011.414 0z'/%3E%3C/svg%3E");
+  }
+
+  .radio-dark:checked {
+    border-color: var(--color-blue-600);
+    background-image: radial-gradient(circle, var(--color-blue-500) 38%, transparent 42%);
+  }
+
+  .dark .radio-dark:checked {
+    border-color: var(--color-blue-500);
+    background-image: radial-gradient(circle, var(--color-blue-400) 38%, transparent 42%);
+  }
+}
+
 @utility alert-success {
   @apply flex items-start gap-3 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-xl p-4 text-sm font-semibold transition-all;
   @apply dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-900/30;
@@ -107,3 +180,23 @@
   @apply dark:bg-blue-950/20 dark:text-blue-300 dark:border-blue-900/30;
 }
 
+@utility warning-box {
+  @apply bg-amber-50 text-amber-900 border border-amber-200 transition-all duration-200 font-normal;
+  @apply dark:bg-amber-600/10 dark:text-amber-200 dark:border-amber-700/40;
+}
+
+@utility alert-warning {
+  @apply flex items-start gap-3 warning-box rounded-xl p-4 text-sm;
+}
+
+@utility chip-required {
+  @apply px-2 py-0.5 rounded-full text-[10px] font-bold border;
+  @apply bg-rose-50 border-rose-100 text-rose-800;
+  @apply dark:bg-rose-600/20 dark:border-rose-400/70 dark:text-rose-400/80;
+}
+
+@utility chip-optional {
+  @apply px-2 py-0.5 rounded-full text-[10px] font-bold border;
+  @apply bg-slate-100 border-slate-200 text-slate-500;
+  @apply dark:bg-neutral-800 dark:border-neutral-700 dark:text-neutral-400;
+}

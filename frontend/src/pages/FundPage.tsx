@@ -8,7 +8,7 @@ import {
   useSuiClient,
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
-import { parseFrontmatter, parseFullSurveyMarkdown, type QuestionType } from '../lib/frontmatter'
+import { parseFrontmatter, parseFullSurveyMarkdown, serializeFullSurveyToMarkdown, type QuestionType } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import {
   buildCreateSurveyPtb,
@@ -16,7 +16,7 @@ import {
   extractSurveyIdFromEffects,
   extractVaultIdFromEffects,
 } from '../lib/ptb'
-import { formatSsr } from '../lib/format'
+import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
   bytesToBase64url,
@@ -64,6 +64,7 @@ const content = {
     calculating: '計算中...',
     estimatedTotal: '預估總計',
     withSlippage: '含 1% 滑點',
+    coveredBySsrSubtitle: 'SSR 全額折抵',
     fundFlow: '資金分拆流向',
     flow1Title: '1. SSR 折抵',
     flow1Desc: '優先扣除已持有的 SSR',
@@ -71,16 +72,19 @@ const content = {
     flow2Desc: '外加於總獎勵的最大值',
     flow3Title: '3. 鑄造 SSR 差額',
     flow3Desc: '花費 SUI 從 AMM 鑄造',
-    encryptSurvey: '加密空白問卷',
+    encryptSurvey: '加密題目',
     encryptSurveyDesc: '加密問卷中的問題,避免過早揭露商業策略。',
+    encryptAnswers: '加密答卷',
+    encryptAnswersDesc: '加密填答者的回答。若題目已加密，則答卷強制加密。',
     btnBack: '← 返回:修改問卷',
     keySigningBtn: '設定加密金鑰中...',
     keyReadyBtn: '加密金鑰已就緒',
     setupKeyBtn: '產生答卷加密金鑰',
+    keyNotNeededBtn: '公開問卷，無須設定加密金鑰',
     submittingBtn: '發布中,請在錢包簽名...',
     successBtn: '發布成功!',
     publishBtn: '注資並發布問卷',
-    connectWalletPrompt: '請先點擊右上角按鈕連接您的 Sui 錢包,以開始設定金鑰與發布交易。',
+    connectWalletPrompt: '請先連接 Sui 錢包, 設定金鑰與發布。',
   },
   EN: {
     typeSingleChoice: 'Single Choice',
@@ -110,14 +114,15 @@ const content = {
     rewardSettings: 'Reward and Publishing Settings',
     perResponseLabel: 'First-time reward:',
     maxResponsesLabel: 'Max responses:',
-    unitCopies: 'entries',
+    unitCopies: 'pcs',
     repeatRewardLabel: 'Repeat reward:',
     timesPerPerson: 'times/person',
     totalRewardLabel: 'Total reward:',
     platformFeeLabel: (pct: string) => `Platform fee (${pct}):`,
     calculating: 'Calculating...',
-    estimatedTotal: 'Estimated Total',
+    estimatedTotal: 'Estimated',
     withSlippage: 'Includes 1% slippage',
+    coveredBySsrSubtitle: 'Covered by SSR',
     fundFlow: 'Fund Distribution',
     flow1Title: '1. SSR Offset',
     flow1Desc: 'Prioritize SSR already held',
@@ -125,12 +130,15 @@ const content = {
     flow2Desc: 'Added on top of the max total reward',
     flow3Title: '3. Mint SSR Difference',
     flow3Desc: 'Mint from AMM using SUI',
-    encryptSurvey: 'Encrypt Blank Survey',
+    encryptSurvey: 'Encrypt Survey Questions',
     encryptSurveyDesc: 'Encrypt questions in the survey to avoid prematurely revealing business strategies.',
+    encryptAnswers: 'Encrypt Responses',
+    encryptAnswersDesc: 'Encrypt respondent answers, only creator can decrypt. Forced to encrypt if the survey questions are encrypted.',
     btnBack: '← Back: Edit Survey',
     keySigningBtn: 'Setting up encryption key...',
     keyReadyBtn: 'Encryption key ready',
     setupKeyBtn: 'Generate response encryption key',
+    keyNotNeededBtn: 'Public survey, no key setup required',
     submittingBtn: 'Publishing, please sign in wallet...',
     successBtn: 'Published successfully!',
     publishBtn: 'Fund and Publish Survey',
@@ -270,10 +278,15 @@ export default function FundPage() {
   >('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [encrypt, setEncrypt] = useState(false)
+  const [encryptAnswers, setEncryptAnswers] = useState(true)
 
   useEffect(() => {
     if (draft) {
       setEncrypt(!!draft.encrypt)
+      const parsed = parseFullSurveyMarkdown(draft.contentMd)
+      if (parsed.ok) {
+        setEncryptAnswers(parsed.data.encryptAnswers !== false)
+      }
     }
   }, [draft])
 
@@ -335,21 +348,49 @@ export default function FundPage() {
   }
 
   async function handleFund() {
-    if (!account || !cost || !suiToSpend || !draft || !keypair) return
+    const actualEncryptAnswers = encrypt ? true : encryptAnswers
+    const isKeyRequired = encrypt || actualEncryptAnswers
+
+    if (!account || !cost || suiToSpend == null || !draft) return
+    if (isKeyRequired && !keypair) return
+
     setStatus('tx-signing')
     setErrorMsg(null)
 
-    const creatorPublicKeyBytes = keypair.publicKeyBytes
+    const creatorPublicKeyBytes = isKeyRequired && keypair
+      ? keypair.publicKeyBytes
+      : new Uint8Array(32) // 32-byte dummy key for non-encrypted surveys
     let contentKey: Uint8Array
     let encryptedBlob: Uint8Array
+
+    // 1. 解析 draft.contentMd，更新 encryptAnswers 並重新序列化
+    let contentMdUpdated = draft.contentMd
+    try {
+      const parsed = parseFullSurveyMarkdown(draft.contentMd)
+      if (!parsed.ok) {
+        setErrorMsg(parsed.error)
+        setStatus('error')
+        return
+      }
+      parsed.data.encryptAnswers = actualEncryptAnswers
+      contentMdUpdated = serializeFullSurveyToMarkdown(parsed.data, {
+        draftStamp: new Date().toISOString()
+      })
+    } catch (err) {
+      console.error('Failed to update draft markdown frontmatter:', err)
+      setErrorMsg('更新問卷 frontmatter 失敗')
+      setStatus('error')
+      return
+    }
+
     try {
       const shouldEncrypt = encrypt
       if (shouldEncrypt) {
-        const enc = await encryptSurveyContent(draft.contentMd, creatorPublicKeyBytes)
+        const enc = await encryptSurveyContent(contentMdUpdated, creatorPublicKeyBytes)
         encryptedBlob = enc.encryptedBlob
         contentKey = enc.contentKey
       } else {
-        const mdBytes = new TextEncoder().encode(draft.contentMd)
+        const mdBytes = new TextEncoder().encode(contentMdUpdated)
         encryptedBlob = new Uint8Array(creatorPublicKeyBytes.length + mdBytes.length)
         encryptedBlob.set(creatorPublicKeyBytes, 0)
         encryptedBlob.set(mdBytes, creatorPublicKeyBytes.length)
@@ -362,7 +403,7 @@ export default function FundPage() {
       return
     }
 
-    const fullSurvey = parseFullSurveyMarkdown(draft.contentMd)
+    const fullSurvey = parseFullSurveyMarkdown(contentMdUpdated)
     if (!fullSurvey.ok) {
       setErrorMsg(fullSurvey.error)
       setStatus('error')
@@ -551,11 +592,11 @@ export default function FundPage() {
     )
   }
 
-  const sui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4)
+  const sui = (mist: bigint) => formatSui(mist)
   const ssr = (base: bigint) => formatSsr(base)
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto">
+    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800/80 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn transition-colors">
         {/* 頂部標題 */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 border-slate-100 dark:border-neutral-800">
@@ -581,7 +622,7 @@ export default function FundPage() {
               </span>
             </div>
 
-            <div className="space-y-5 max-h-[400px] overflow-y-auto pr-2">
+            <div className="space-y-5 max-h-[400px] overflow-y-auto pr-1">
               <div className="space-y-3 bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800/80 shadow-sm">
                 <h3 className="text-h2 text-slate-800 dark:text-white">{fullSurvey.title}</h3>
                 {fullSurvey.description && (
@@ -627,7 +668,7 @@ export default function FundPage() {
                             type="radio"
                             name={`preview-single-${q.id}`}
                             disabled
-                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 dark:focus:ring-blue-600 dark:bg-neutral-800 dark:border-neutral-700 transition-colors"
+                            className="radio-dark"
                           />
                           <span>{opt}</span>
                         </label>
@@ -645,7 +686,7 @@ export default function FundPage() {
                           <input
                             type="checkbox"
                             disabled
-                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 dark:focus:ring-blue-600 dark:bg-neutral-800 dark:border-neutral-700 rounded transition-colors"
+                            className="checkbox-dark checked:bg-blue-600 checked:border-blue-600"
                           />
                           <span>{opt}</span>
                         </label>
@@ -674,7 +715,7 @@ export default function FundPage() {
                             type="radio"
                             name={`preview-scale-${q.id}`}
                             disabled
-                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 dark:focus:ring-blue-600 dark:bg-neutral-800 dark:border-neutral-700 transition-colors"
+                            className="radio-dark"
                           />
                         </label>
                       ))}
@@ -696,47 +737,84 @@ export default function FundPage() {
             <div className="space-y-2 text-base">
               <div className="flex justify-between">
                 <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.perResponseLabel}</span>
-                <span className="font-normal text-slate-700 dark:text-neutral-200">{params.perResponse} SSR</span>
+                <span className="font-normal text-slate-700 dark:text-neutral-200 tabular-nums">
+                  {params.perResponse} <span className="inline-block w-12 text-left">SSR</span>
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.maxResponsesLabel}</span>
-                <span className="font-normal text-slate-700 dark:text-neutral-200">{params.maxResponses} {t.unitCopies}</span>
+                <span className="font-normal text-slate-700 dark:text-neutral-200 tabular-nums">
+                  {params.maxResponses} <span className="inline-block w-12 text-left">{t.unitCopies}</span>
+                </span>
               </div>
               {params.repeatReward > 0 && (
-                <>
-                  <div className="flex justify-between border-t border-slate-100 dark:border-neutral-800 mt-1 pt-1">
-                    <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.repeatRewardLabel}</span>
-                    <span className="font-normal text-slate-700 dark:text-neutral-200">
-                      {params.repeatReward} SSR × {params.repeatMaxTimes} {t.timesPerPerson}
-                    </span>
-                  </div>
-                </>
+                <div className="flex justify-between">
+                  <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.repeatRewardLabel}</span>
+                  <span className="font-normal text-slate-700 dark:text-neutral-200">
+                    {params.repeatReward} SSR × {params.repeatMaxTimes} {t.timesPerPerson}
+                  </span>
+                </div>
               )}
               <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2.5">
                 <span className="text-slate-600 dark:text-neutral-350 font-normal">{t.totalRewardLabel}</span>
-                <span className="font-normal text-slate-800 dark:text-neutral-100">{totalSsr} SSR</span>
+                <span className="font-normal text-slate-800 dark:text-neutral-100 tabular-nums">
+                  {totalSsr} <span className="inline-block w-12 text-left">SSR</span>
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-600 dark:text-neutral-400 font-normal">
                   {t.platformFeeLabel(cost ? `${Number(cost.effectiveFeeBps) / 100}%` : t.calculating)}
                 </span>
-                <span className="font-normal text-slate-800 dark:text-white" aria-label="platform-fee">
-                  {cost
-                    ? `${ssr((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR`
-                    : t.calculating}
+                <span
+                  className="font-normal text-slate-800 dark:text-white tabular-nums"
+                  aria-label="platform-fee"
+                  title={cost ? `${formatFullPrecision((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR` : undefined}
+                >
+                  {cost ? (
+                    <>
+                      {ssr((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} <span className="inline-block w-12 text-left">SSR</span>
+                    </>
+                  ) : (
+                    t.calculating
+                  )}
                 </span>
               </div>
 
-              {/* 大字突出：最終估算 SUI 消耗 */}
-              <div className="bg-gradient-to-r from-blue-900 to-indigo-800 text-white rounded-xl p-3 mt-4 flex justify-between items-center shadow-md">
-                <div className="flex flex-col">
-                  <span className="text-base font-normal opacity-90">{t.estimatedTotal}</span>
-                  <span className="text-sm opacity-70">{t.withSlippage}</span>
-                </div>
-                <span className="text-xl font-normal font-mono" aria-label="estimated-sui-cost">
-                  {suiToSpend ? `${sui(suiToSpend)} SUI` : t.calculating}
-                </span>
-              </div>
+              {/* 大字突出：最終估算消耗 — 三態：載入中 / 需花 SUI / 全額由 SSR 折抵 */}
+              {(() => {
+                const fullyOffset = cost != null && suiToSpend != null && suiToSpend === 0n
+                const cardClass = fullyOffset
+                  ? 'bg-gradient-to-r from-emerald-700 to-emerald-600 dark:from-teal-950 dark:to-teal-900 text-white rounded-xl p-3 mt-4 flex justify-between items-center shadow-md'
+                  : 'bg-gradient-to-r from-blue-900 to-indigo-800 text-white rounded-xl p-3 mt-4 flex justify-between items-center shadow-md'
+                const title = fullyOffset ? t.estimatedTotal : t.estimatedTotal
+                const subtitle = fullyOffset ? t.coveredBySsrSubtitle : t.withSlippage
+                let mainValue: string
+                let fullValue: string | undefined = undefined
+                if (suiToSpend == null) {
+                  mainValue = t.calculating
+                } else if (fullyOffset) {
+                  mainValue = `${ssr(cost!.offsetIn)} SSR`
+                  fullValue = `${formatFullPrecision(cost!.offsetIn)} SSR`
+                } else {
+                  mainValue = `${sui(suiToSpend)} SUI`
+                  fullValue = `${formatFullPrecision(suiToSpend)} SUI`
+                }
+                return (
+                  <div className={cardClass}>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-base font-normal opacity-90">{title}</span>
+                      <span className="text-sm opacity-70">{subtitle}</span>
+                    </div>
+                    <span
+                      className="text-xl font-normal font-mono whitespace-nowrap text-right shrink-0 ml-3"
+                      aria-label="estimated-sui-cost"
+                      title={fullValue}
+                    >
+                      {mainValue}
+                    </span>
+                  </div>
+                )
+              })()}
             </div>
           </section>
 
@@ -746,37 +824,41 @@ export default function FundPage() {
               <h2 className="text-h3 border-b pb-2 border-slate-100 dark:border-neutral-800">
                 {t.fundFlow}
               </h2>
-              <div className="space-y-2 pt-1">
-                <div className="flex flex-col gap-1">
-                  <div className="text-base flex justify-between font-normal text-slate-800 dark:text-neutral-200">
+              <div className="space-y-3 pt-1">
+                <div className="flex justify-between items-start gap-3 text-base font-normal text-slate-800 dark:text-neutral-200">
+                  <div className="flex flex-col gap-1">
                     <span>{t.flow1Title}</span>
-                    <span className="font-mono text-slate-900 dark:text-white font-normal">{ssr(cost.offsetIn)} SSR</span>
+                    <span className="text-sm text-slate-500 dark:text-neutral-450 font-normal">
+                      {t.flow1Desc}
+                    </span>
                   </div>
-                  <span className="text-sm text-slate-500 dark:text-neutral-450">
-                    {t.flow1Desc}
+                  <span className="font-mono text-slate-900 dark:text-white font-normal whitespace-nowrap" title={`${formatFullPrecision(cost.offsetIn)} SSR`}>
+                    {ssr(cost.offsetIn)} SSR
                   </span>
                 </div>
 
-                <div className="text-base flex justify-between font-normal text-slate-800 dark:text-neutral-200 border-t border-slate-100 dark:border-neutral-800 pt-3">
+                <div className="flex justify-between items-start gap-3 text-base font-normal text-slate-800 dark:text-neutral-200 border-t border-slate-100 dark:border-neutral-800 pt-3">
                   <div className="flex flex-col gap-1">
                     <span>{t.flow2Title}</span>
                     <span className="text-sm text-slate-500 dark:text-neutral-455 font-normal">
                       {t.flow2Desc}
                     </span>
                   </div>
-                  <span className="font-mono text-slate-900 dark:text-white font-normal">
+                  <span className="font-mono text-slate-900 dark:text-white font-normal whitespace-nowrap" title={`${formatFullPrecision((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR`}>
                     {ssr((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR
                   </span>
                 </div>
 
-                <div className="text-base flex justify-between font-normal text-slate-800 dark:text-neutral-200 border-t border-slate-100 dark:border-neutral-800 pt-3">
+                <div className="flex justify-between items-start gap-3 text-base font-normal text-slate-800 dark:text-neutral-200 border-t border-slate-100 dark:border-neutral-800 pt-3">
                   <div className="flex flex-col gap-1">
                     <span>{t.flow3Title}</span>
                     <span className="text-sm text-slate-500 dark:text-neutral-455 font-normal">
                       {t.flow3Desc}
                     </span>
                   </div>
-                  <span className="font-mono text-slate-900 dark:text-white font-normal">{ssr(cost.minted)} SSR</span>
+                  <span className="font-mono text-slate-900 dark:text-white font-normal whitespace-nowrap" title={`${formatFullPrecision(cost.minted)} SSR`}>
+                    {ssr(cost.minted)} SSR
+                  </span>
                 </div>
               </div>
             </section>
@@ -784,28 +866,46 @@ export default function FundPage() {
         </div>
 
         {/* 3. 加密安全開關 */}
-        <section className="bg-slate-50/50 dark:bg-neutral-950/30 border border-slate-100 dark:border-neutral-850 rounded-2xl p-5 flex items-start gap-3.5 animate-fadeIn transition-colors">
-          <input
-            id="encrypt-survey"
-            type="checkbox"
-            checked={encrypt}
-            onChange={(e) => setEncrypt(e.target.checked)}
-            className="mt-0.5 w-4 h-4 rounded text-blue-600 focus:ring-blue-500 dark:focus:ring-blue-600 dark:bg-neutral-800 dark:border-neutral-700 transition-colors"
-          />
-          <div
-            className="flex flex-col cursor-pointer select-none gap-0.5"
-            onClick={() => setEncrypt(!encrypt)}
-          >
-            <label
-              htmlFor="encrypt-survey"
-              className="text-base font-normal text-slate-800 dark:text-neutral-200 cursor-pointer"
-            >
-              {t.encryptSurvey}
-            </label>
-            <span className="text-sm text-slate-500 dark:text-neutral-400 font-normal">
-              {t.encryptSurveyDesc}
-            </span>
-          </div>
+        <section className="bg-slate-50/50 dark:bg-neutral-950/30 border border-slate-100 dark:border-neutral-850 rounded-2xl p-5 animate-fadeIn transition-colors flex flex-col sm:flex-row gap-6">
+          <label className="inline-flex items-start gap-3.5 cursor-pointer select-none flex-1">
+            <input
+              id="encrypt-survey"
+              type="checkbox"
+              checked={encrypt}
+              onChange={(e) => setEncrypt(e.target.checked)}
+              className="checkbox-dark checked:bg-blue-600 checked:border-blue-600 mt-0.5 shrink-0"
+            />
+            <div className="flex flex-col gap-0.5">
+              <span className="text-base text-slate-800 dark:text-neutral-200 font-semibold">
+                {t.encryptSurvey}
+              </span>
+              <span className="text-sm text-slate-400 dark:text-neutral-400 font-normal leading-normal">
+                {t.encryptSurveyDesc}
+              </span>
+            </div>
+          </label>
+
+          <div className="hidden sm:block border-l border-slate-200 dark:border-neutral-800/80 self-stretch my-1" />
+          <div className="sm:hidden border-t border-slate-200 dark:border-neutral-800/80 my-1" />
+
+          <label className="inline-flex items-start gap-3.5 cursor-pointer select-none flex-1">
+            <input
+              id="encrypt-answers"
+              type="checkbox"
+              checked={encrypt ? true : encryptAnswers}
+              disabled={encrypt}
+              onChange={(e) => setEncryptAnswers(e.target.checked)}
+              className="checkbox-dark checked:bg-blue-600 checked:border-blue-600 mt-0.5 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+            <div className="flex flex-col gap-0.5">
+              <span className="text-base text-slate-800 dark:text-neutral-200 font-semibold">
+                {t.encryptAnswers}
+              </span>
+              <span className="text-sm text-slate-400 dark:text-neutral-400 font-normal leading-normal">
+                {t.encryptAnswersDesc}
+              </span>
+            </div>
+          </label>
         </section>
 
         {/* 4. 發布操作 */}
@@ -830,41 +930,56 @@ export default function FundPage() {
                 {t.btnBack}
               </button>
               <div className="w-full sm:w-2/3 flex flex-col gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleSetupKey}
-                  disabled={!!keypair || status === 'key-signing'}
-                  className="btn-secondary w-full flex items-center justify-center gap-2 py-3"
-                >
-                  {status === 'key-signing'
-                    ? t.keySigningBtn
-                    : keypair
-                      ? t.keyReadyBtn
-                      : t.setupKeyBtn}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleFund}
-                  disabled={
-                    !keypair ||
-                    !suiToSpend ||
-                    status === 'tx-signing' ||
-                    status === 'submitting' ||
-                    status === 'success'
-                  }
-                  className="btn-primary w-full flex items-center justify-center gap-1.5 py-3"
-                >
-                  {status === 'tx-signing' || status === 'submitting'
-                    ? t.submittingBtn
-                    : status === 'success'
-                      ? t.successBtn
-                      : t.publishBtn}
-                </button>
+                {(() => {
+                  const isKeyRequired = encrypt || (encrypt ? true : encryptAnswers);
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleSetupKey}
+                        disabled={!isKeyRequired || !!keypair || status === 'key-signing'}
+                        className={
+                          !isKeyRequired
+                            ? 'bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500 font-normal px-5 rounded-xl border border-slate-200/60 dark:border-neutral-700/60 w-full flex items-center justify-center gap-2 py-3 cursor-not-allowed'
+                            : keypair
+                              ? 'bg-emerald-700/40 text-white dark:bg-emerald-800/40 dark:text-emerald-200 font-normal px-5 rounded-xl shadow-sm w-full flex items-center justify-center gap-2 py-3'
+                              : 'btn-primary w-full flex items-center justify-center gap-2 py-3'
+                        }
+                      >
+                        {!isKeyRequired
+                          ? t.keyNotNeededBtn
+                          : status === 'key-signing'
+                            ? t.keySigningBtn
+                            : keypair
+                              ? t.keyReadyBtn
+                              : t.setupKeyBtn}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFund}
+                        disabled={
+                          (isKeyRequired && !keypair) ||
+                          suiToSpend == null ||
+                          status === 'tx-signing' ||
+                          status === 'submitting' ||
+                          status === 'success'
+                        }
+                        className="btn-primary w-full flex items-center justify-center gap-1.5 py-3"
+                      >
+                        {status === 'tx-signing' || status === 'submitting'
+                          ? t.submittingBtn
+                          : status === 'success'
+                            ? t.successBtn
+                            : t.publishBtn}
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           ) : (
-            <div className="text-center py-5 bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-2xl shadow-inner transition-colors">
-              <p className="text-sm font-normal text-amber-800 dark:text-amber-400">
+            <div className="text-center py-5 warning-box rounded-2xl shadow-inner">
+              <p className="text-sm">
                 {t.connectWalletPrompt}
               </p>
             </div>

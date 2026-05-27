@@ -27,7 +27,9 @@ export async function fetchActivePass(
     return null
   }
 
-  try {
+  const attempt = async (): Promise<SurveyPassData | null> => {
+    console.log('[fetchActivePass] start', { userAddress, registryId })
+
     // 1. Fetch NullifierRegistry to get the passes Table object ID
     const registryRes = await suiClient.getObject({
       id: registryId,
@@ -37,7 +39,7 @@ export async function fetchActivePass(
     })
 
     if (!registryRes.data || !registryRes.data.content || !('fields' in registryRes.data.content)) {
-      console.warn('NullifierRegistry content not found or invalid format.')
+      console.warn('[fetchActivePass] step1: NullifierRegistry content not found or invalid format', registryRes)
       return null
     }
 
@@ -45,9 +47,10 @@ export async function fetchActivePass(
     const tableId = registryFields.passes?.fields?.id?.id
 
     if (!tableId) {
-      console.warn('passes table ID not found in NullifierRegistry fields.')
+      console.warn('[fetchActivePass] step1: passes table ID not found in NullifierRegistry fields', registryFields)
       return null
     }
+    console.log('[fetchActivePass] step1 ok', { tableId })
 
     // 2. Query the passes Table dynamic field using the user's address as Key
     const tableRes = await suiClient.getDynamicFieldObject({
@@ -59,9 +62,14 @@ export async function fetchActivePass(
     })
 
     if (tableRes.error || !tableRes.data) {
-      // Dynamic field not found means the user doesn't have a pass registered
+      console.warn('[fetchActivePass] step2: dynamic field not found for address', {
+        userAddress,
+        tableId,
+        error: tableRes.error,
+      })
       return null
     }
+    console.log('[fetchActivePass] step2 ok', { dfData: tableRes.data })
 
     // 3. Extract the SurveyPass object ID from the dynamic field value
     const content = tableRes.data.content
@@ -78,7 +86,7 @@ export async function fetchActivePass(
 
         if (passRes.data && passRes.data.content && 'fields' in passRes.data.content) {
           const fields = passRes.data.content.fields as any
-          return {
+          const result = {
             objectId: passId,
             owner: fields.owner,
             effectiveTier: Number(fields.effective_tier ?? 0),
@@ -87,13 +95,30 @@ export async function fetchActivePass(
             credentialSources: fields.credential_sources || [],
             createdAt: Number(fields.created_at ?? 0),
           }
+          console.log('[fetchActivePass] step4 ok — returning pass', result)
+          return result
         }
+        console.warn('[fetchActivePass] step4: pass object fetched but content invalid', passRes)
+      } else {
+        console.warn('[fetchActivePass] step3: dynamic field has no passId value', content)
       }
+    } else {
+      console.warn('[fetchActivePass] step3: dynamic field content missing fields', content)
     }
 
     return null
+  }
+
+  try {
+    return await attempt()
   } catch (error) {
-    console.error('Error in fetchActivePass:', error)
-    return null
+    console.warn('fetchActivePass first attempt failed, retrying once:', error)
+    await new Promise((r) => setTimeout(r, 600))
+    try {
+      return await attempt()
+    } catch (retryError) {
+      console.error('Error in fetchActivePass (after retry):', retryError)
+      return null
+    }
   }
 }
