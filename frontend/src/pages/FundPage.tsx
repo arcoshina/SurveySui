@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Info } from 'lucide-react'
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -19,132 +19,16 @@ import {
 import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
+  buildCreatorPubKey,
   bytesToBase64url,
   deriveCreatorKeyPair,
   encryptSurveyContent,
   type CreatorKeyPair,
 } from '../lib/crypto'
 import { translateMoveAbort } from '../lib/moveAbort'
-import { useLanguage } from '../context/LanguageContext'
-
-const content = {
-  ZH: {
-    typeSingleChoice: '單選',
-    typeMultiChoice: '複選',
-    typeText: '簡答',
-    typeScale: '量表',
-    pageTitle: '注資',
-    draftNotFound: (id: string) => `找不到問卷草稿（draftId=${id}）。請從 /create 重新建立。`,
-    frontmatterParseFailed: (err: string) => `Frontmatter 解析失敗：${err}`,
-    unknownError: '未知錯誤',
-    errKeySetupFailed: '金鑰設定失敗',
-    errEncryptFailed: '加密失敗',
-    errHashCalcFailed: 'Hash 計算失敗',
-    errDryRunFailed: (raw: string) => `預檢失敗：${raw}`,
-    errUnknownMoveError: '未知 Move 錯誤',
-    errTxOnchainFailed: (raw: string) => `交易鏈上執行失敗：${raw}`,
-    errCannotFetchTx: '無法從節點取得交易資訊',
-    errCannotExtractVaultId: '交易成功但無法抽出 vault_id',
-    errQueryTxFailed: '查詢交易結果失敗',
-    title: '預覽並發布問卷',
-    desc: '請在此確認問卷填答介面並完成鏈上注資與發布。',
-    previewTitle: '問卷預覽',
-    readOnly: '唯讀模式',
-    questionNum: (n: number) => `第 ${n} 題`,
-    required: '必填',
-    textPlaceholder: '填答者簡答輸入框預覽...',
-    rewardSettings: '獎勵與發佈設定',
-    perResponseLabel: '首次填答獎勵:',
-    maxResponsesLabel: '名額上限:',
-    unitCopies: '份',
-    repeatRewardLabel: '重複填答獎勵:',
-    timesPerPerson: '次/人',
-    totalRewardLabel: '總獎勵:',
-    platformFeeLabel: (pct: string) => `平台手續費 (${pct}):`,
-    calculating: '計算中...',
-    estimatedTotal: '預估總計',
-    withSlippage: '含 1% 滑點',
-    coveredBySsrSubtitle: 'SSR 全額折抵',
-    fundFlow: '資金分拆流向',
-    flow1Title: '1. SSR 折抵',
-    flow1Desc: '優先扣除已持有的 SSR',
-    flow2Title: '2. 平台手續費',
-    flow2Desc: '外加於總獎勵的最大值',
-    flow3Title: '3. 鑄造 SSR 差額',
-    flow3Desc: '花費 SUI 從 AMM 鑄造',
-    encryptSurvey: '加密題目',
-    encryptSurveyDesc: '加密問卷中的問題,避免過早揭露商業策略。',
-    encryptAnswers: '加密答卷',
-    encryptAnswersDesc: '加密填答者的回答。若題目已加密，則答卷強制加密。',
-    btnBack: '← 返回:修改問卷',
-    keySigningBtn: '設定加密金鑰中...',
-    keyReadyBtn: '加密金鑰已就緒',
-    setupKeyBtn: '產生答卷加密金鑰',
-    keyNotNeededBtn: '公開問卷，無須設定加密金鑰',
-    submittingBtn: '發布中,請在錢包簽名...',
-    successBtn: '發布成功!',
-    publishBtn: '注資並發布問卷',
-    connectWalletPrompt: '請先連接 Sui 錢包, 設定金鑰與發布。',
-  },
-  EN: {
-    typeSingleChoice: 'Single Choice',
-    typeMultiChoice: 'Multi Choice',
-    typeText: 'Text',
-    typeScale: 'Scale',
-    pageTitle: 'Fund',
-    draftNotFound: (id: string) => `Survey draft not found (draftId=${id}). Please recreate from /create.`,
-    frontmatterParseFailed: (err: string) => `Failed to parse frontmatter: ${err}`,
-    unknownError: 'Unknown error',
-    errKeySetupFailed: 'Key setup failed',
-    errEncryptFailed: 'Encryption failed',
-    errHashCalcFailed: 'Hash calculation failed',
-    errDryRunFailed: (raw: string) => `Pre-flight check failed: ${raw}`,
-    errUnknownMoveError: 'Unknown Move error',
-    errTxOnchainFailed: (raw: string) => `Transaction failed on-chain: ${raw}`,
-    errCannotFetchTx: 'Cannot retrieve transaction information from node',
-    errCannotExtractVaultId: 'Transaction succeeded but vault_id could not be extracted',
-    errQueryTxFailed: 'Failed to query transaction result',
-    title: 'Preview and Publish Survey',
-    desc: 'Please confirm the survey response interface here and complete on-chain funding and publishing.',
-    previewTitle: 'Survey Preview',
-    readOnly: 'Read-only',
-    questionNum: (n: number) => `Question ${n}`,
-    required: 'Required',
-    textPlaceholder: 'Respondent text input preview...',
-    rewardSettings: 'Reward and Publishing Settings',
-    perResponseLabel: 'First-time reward:',
-    maxResponsesLabel: 'Max responses:',
-    unitCopies: 'pcs',
-    repeatRewardLabel: 'Repeat reward:',
-    timesPerPerson: 'times/person',
-    totalRewardLabel: 'Total reward:',
-    platformFeeLabel: (pct: string) => `Platform fee (${pct}):`,
-    calculating: 'Calculating...',
-    estimatedTotal: 'Estimated',
-    withSlippage: 'Includes 1% slippage',
-    coveredBySsrSubtitle: 'Covered by SSR',
-    fundFlow: 'Fund Distribution',
-    flow1Title: '1. SSR Offset',
-    flow1Desc: 'Prioritize SSR already held',
-    flow2Title: '2. Platform Fee',
-    flow2Desc: 'Added on top of the max total reward',
-    flow3Title: '3. Mint SSR Difference',
-    flow3Desc: 'Mint from AMM using SUI',
-    encryptSurvey: 'Encrypt Survey Questions',
-    encryptSurveyDesc: 'Encrypt questions in the survey to avoid prematurely revealing business strategies.',
-    encryptAnswers: 'Encrypt Responses',
-    encryptAnswersDesc: 'Encrypt respondent answers, only creator can decrypt. Forced to encrypt if the survey questions are encrypted.',
-    btnBack: '← Back: Edit Survey',
-    keySigningBtn: 'Setting up encryption key...',
-    keyReadyBtn: 'Encryption key ready',
-    setupKeyBtn: 'Generate response encryption key',
-    keyNotNeededBtn: 'Public survey, no key setup required',
-    submittingBtn: 'Publishing, please sign in wallet...',
-    successBtn: 'Published successfully!',
-    publishBtn: 'Fund and Publish Survey',
-    connectWalletPrompt: 'Please click the button in the top-right to connect your Sui wallet to begin key setup and transaction publishing.',
-  },
-}
+import { useT } from '../i18n'
+import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
+import { uploadToDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 const POOL_ID = import.meta.env.VITE_AMM_POOL_ID ?? ''
@@ -192,8 +76,7 @@ export default function FundPage() {
   const suiClient = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
-  const { lang } = useLanguage()
-  const t = content[lang]
+  const t = useT('fund')
 
   const typeLabel = (type: QuestionType): string => {
     switch (type) {
@@ -242,6 +125,14 @@ export default function FundPage() {
     return BigInt(fields.total_sui_invested ?? '0')
   }, [poolData])
 
+  const currentRate = useMemo(() => {
+    const decay = 1_000_000_000_000n
+    const initialSsrPerSui = 1000n
+    const numer = Number(initialSsrPerSui * decay)
+    const denom = Number(decay + totalSuiInvested)
+    return numer / denom
+  }, [totalSuiInvested])
+
   const feeConfig = useMemo(() => {
     if (poolData?.data?.content?.dataType !== 'moveObject') {
       return { totalFeeBps: 2000n, discountBps: 5000n }
@@ -272,9 +163,48 @@ export default function FundPage() {
 
   const suiToSpend = cost ? (cost.suiToInvest * SLIPPAGE_NUMER) / SLIPPAGE_DENOM : null
 
+  const [gasHealth, setGasHealth] = useState<GasHealth | null>(null)
+
+  useEffect(() => {
+    const backendUrl = import.meta.env.VITE_BFF_URL ?? ''
+    void probeGasSponsorHealth({ backendUrl }).then((res) => {
+      setGasHealth(res)
+    })
+  }, [])
+
+  const gasCompensationAmount = useMemo(() => {
+    if (!gasHealth?.available) return 0n
+    return BigInt(gasHealth.gasCompensationAmount ?? '0')
+  }, [gasHealth])
+
+  const storageCompensationAmountMIST = useMemo(() => {
+    if (!frontmatter?.ok) return 0n
+    const amount = frontmatter.data.storageCompensationAmount ?? 0.01
+    return BigInt(Math.round(amount * 1_000_000_000))
+  }, [frontmatter])
+
+  const requiredGas = useMemo(() => {
+    if (!frontmatter?.ok) return 0n
+    const perResponseSui = gasCompensationAmount + storageCompensationAmountMIST
+    if (perResponseSui === 0n) return 0n
+    const params = frontmatter.data
+    const repeatMaxTimes = BigInt(params.repeatMaxTimes ?? 1)
+    if (params.repeatReward > 0) {
+      return BigInt(params.maxResponses) * (1n + repeatMaxTimes) * perResponseSui
+    } else {
+      return BigInt(params.maxResponses) * perResponseSui
+    }
+  }, [frontmatter, gasCompensationAmount, storageCompensationAmountMIST])
+
+  const SURVEY_SIZE_THRESHOLD_KB = Number(import.meta.env.VITE_SURVEY_SIZE_THRESHOLD_KB || '10')
+
+  const requiredStorageFund = 0n
+
+  const totalSuiToSpend = suiToSpend != null ? suiToSpend + requiredGas : null
+
   const [keypair, setKeypair] = useState<CreatorKeyPair | null>(null)
   const [status, setStatus] = useState<
-    'idle' | 'key-signing' | 'key-ready' | 'tx-signing' | 'submitting' | 'success' | 'error'
+    'idle' | 'key-signing' | 'key-ready' | 'uploading' | 'tx-signing' | 'submitting' | 'success' | 'error'
   >('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [encrypt, setEncrypt] = useState(false)
@@ -309,7 +239,7 @@ export default function FundPage() {
   if (!draftId || !draft) {
     return (
       <main className="min-h-screen p-8 max-w-xl mx-auto">
-        <h1 className="text-3xl font-bold mb-4">{t.pageTitle}</h1>
+        <h1 className="text-h1 mb-4">{t.pageTitle}</h1>
         <p className="text-red-600">
           {t.draftNotFound(draftId ?? '?')}
         </p>
@@ -320,7 +250,7 @@ export default function FundPage() {
   if (!frontmatter?.ok) {
     return (
       <main className="min-h-screen p-8 max-w-xl mx-auto">
-        <h1 className="text-3xl font-bold mb-4">{t.pageTitle}</h1>
+        <h1 className="text-h1 mb-4">{t.pageTitle}</h1>
         <p className="text-red-600">{t.frontmatterParseFailed(frontmatter?.error ?? t.unknownError)}</p>
       </main>
     )
@@ -357,9 +287,14 @@ export default function FundPage() {
     setStatus('tx-signing')
     setErrorMsg(null)
 
+    // 32B X25519 pubkey embedded in the content blob header (identification only).
     const creatorPublicKeyBytes = isKeyRequired && keypair
-      ? keypair.publicKeyBytes
+      ? keypair.x25519PublicKeyBytes
       : new Uint8Array(32) // 32-byte dummy key for non-encrypted surveys
+    // Hybrid (X25519 + ML-KEM-768) pubkey published on-chain for answer encryption.
+    const creatorPubKeyForChain = isKeyRequired && keypair
+      ? buildCreatorPubKey(keypair)
+      : new Uint8Array(32) // dummy for non-encrypted surveys (answers never encrypted)
     let contentKey: Uint8Array
     let encryptedBlob: Uint8Array
 
@@ -419,7 +354,7 @@ export default function FundPage() {
     let contentHash: Uint8Array
     let schemaHash: Uint8Array
     try {
-      contentHash = await sha256(draft.contentMd)
+      contentHash = await sha256(contentMdUpdated) // Use updated markdown
       const schemaStr = JSON.stringify(fullSurvey.data.questions || [])
       schemaHash = await sha256(schemaStr)
     } catch (err) {
@@ -428,6 +363,24 @@ export default function FundPage() {
       setStatus('error')
       return
     }
+
+    let surveyBlobId: Uint8Array | undefined = undefined
+    let surveyBlobIdStr = ''
+    if (encryptedBlob.length > SURVEY_SIZE_THRESHOLD_KB * 1024) {
+      setStatus('uploading')
+      try {
+        const uploadRes = await uploadToDecentralizedStorage(encryptedBlob)
+        surveyBlobIdStr = uploadRes.blobId
+        surveyBlobId = new TextEncoder().encode(uploadRes.blobId)
+      } catch (err) {
+        console.error('[FundPage] Decentralized upload failed:', err)
+        setErrorMsg(t.errUploadFailed)
+        setStatus('error')
+        return
+      }
+    }
+
+    setStatus('tx-signing')
 
     const buildTx = () => {
       return buildCreateSurveyPtb({
@@ -442,15 +395,20 @@ export default function FundPage() {
         repeatMaxTimes: params.repeatMaxTimes,
         maxResponses: params.maxResponses,
         deadlineMs: BigInt(params.deadlineMs),
-        encryptedContent: encryptedBlob,
+        encryptedContent: surveyBlobId ? new Uint8Array(0) : encryptedBlob,
         suiToSpend,
         contentHash,
         schemaHash,
-        creatorPubKey: creatorPublicKeyBytes,
+        creatorPubKey: creatorPubKeyForChain,
         questions: fullSurvey.data.questions,
         minTier: fullSurvey.data.minTier,
         offsetIn: cost.offsetIn,
         creatorSsrCoins: ssrCoins,
+        sponsorAddress: gasHealth?.sponsorAddress,
+        gasCompensationAmount,
+        surveyBlobId,
+        storageCompensationAmount: storageCompensationAmountMIST,
+        requiredStorageFund,
       })
     }
 
@@ -570,6 +528,18 @@ export default function FundPage() {
                   createdAt: Date.now(),
                 })
               )
+              if (surveyBlobIdStr) {
+                try {
+                  const bffUrl = import.meta.env.VITE_BFF_URL || 'http://localhost:3100'
+                  await fetch(`${bffUrl}/api/cache/survey`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ surveyId, blobId: surveyBlobIdStr })
+                  })
+                } catch (e) {
+                  console.warn('Failed to notify BFF to cache survey:', e)
+                }
+              }
             }
             window.localStorage.removeItem(`${DRAFT_KEY_PREFIX}${draftId}`)
 
@@ -627,7 +597,7 @@ export default function FundPage() {
                 <h3 className="text-h2 text-slate-800 dark:text-white">{fullSurvey.title}</h3>
                 {fullSurvey.description && (
                   <div
-                    className="prose max-w-none text-sm text-slate-600 dark:text-neutral-350 leading-relaxed border-t border-slate-100 dark:border-neutral-800/80 pt-3 mt-1 font-normal"
+                    className="prose max-w-none text-sm text-slate-600 dark:text-neutral-400 leading-relaxed border-t border-slate-100 dark:border-neutral-800/80 pt-3 mt-1 font-normal"
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(fullSurvey.description) }}
                   />
                 )}
@@ -636,20 +606,18 @@ export default function FundPage() {
               {fullSurvey.questions.map((q: any, i: number) => (
                 <div
                   key={q.id}
-                  className="bg-white dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800/80 rounded-2xl p-5 space-y-4 shadow-sm hover:bg-slate-50/30 dark:hover:bg-neutral-850/30 transition-colors"
+                  className="bg-white dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800/80 rounded-2xl p-5 space-y-4 shadow-sm hover:bg-slate-50/30 dark:hover:bg-neutral-800/30 transition-colors"
                 >
                   <div className="flex items-center justify-between border-b pb-2 border-slate-200/60 dark:border-neutral-800/80">
                     <div className="flex items-center gap-3">
                       <span className={`text-sm font-normal transition-colors ${q.required ? 'text-rose-800 dark:text-rose-400' : 'text-slate-700 dark:text-neutral-300'}`}>
                         {t.questionNum(i + 1)}
                       </span>
-                      {q.required && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-normal bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/30 text-rose-800 dark:text-rose-400">
-                          {t.required}
-                        </span>
-                      )}
+                      <span className={q.required ? 'chip-required' : 'chip-optional'}>
+                        {q.required ? t.required : t.optional}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-normal px-2 py-0.5 bg-slate-100 dark:bg-neutral-800 text-slate-500 dark:text-neutral-400 rounded-full">
+                    <span className="chip-optional shrink-0">
                       {typeLabel(q.type as QuestionType)}
                     </span>
                   </div>
@@ -695,12 +663,19 @@ export default function FundPage() {
                   )}
 
                   {q.type === 'text' && (
-                    <textarea
-                      disabled
-                      rows={2}
-                      className="form-input bg-slate-50/50 dark:bg-neutral-950/20 cursor-not-allowed font-mono"
-                      placeholder={t.textPlaceholder}
-                    />
+                    <div className="space-y-1.5">
+                      <textarea
+                        disabled
+                        rows={2}
+                        className="form-input bg-slate-50/50 dark:bg-neutral-950/20 cursor-not-allowed font-mono"
+                        placeholder={t.textPlaceholder}
+                      />
+                      {q.maxLen !== undefined && (
+                        <div className="text-xs font-semibold text-slate-400 dark:text-neutral-500 px-1 select-none text-right">
+                          {t.charLimit(q.maxLen)}
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {q.type === 'scale' && (
@@ -710,7 +685,7 @@ export default function FundPage() {
                           key={val}
                           className="flex flex-col items-center justify-center gap-1.5 cursor-not-allowed bg-slate-50/50 dark:bg-neutral-950/20 border border-slate-100 dark:border-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-950/30 rounded-xl p-3 w-12 h-14 transition-colors"
                         >
-                          <span className="text-xs font-normal text-slate-400 dark:text-neutral-450">{val}</span>
+                          <span className="text-xs font-normal text-slate-400 dark:text-neutral-500">{val}</span>
                           <input
                             type="radio"
                             name={`preview-scale-${q.id}`}
@@ -727,52 +702,59 @@ export default function FundPage() {
           </section>
         )}
 
-        {/* 2. 費用估計與資金明細 */}
+        {/* 2. 問卷規則參數資訊條 */}
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-600 dark:text-neutral-400 bg-slate-50/60 dark:bg-neutral-950/20 rounded-2xl p-4 border border-slate-100 dark:border-neutral-800/80 transition-colors">
+          <div className="flex items-center gap-1.5">
+            <span className="font-medium text-slate-500 dark:text-neutral-500">{t.perResponseLabel}</span>
+            <span className="font-semibold text-slate-800 dark:text-neutral-200">{params.perResponse} SSR</span>
+          </div>
+          <div className="h-4 w-px bg-slate-200 dark:bg-neutral-800 hidden sm:block" />
+          <div className="flex items-center gap-1.5">
+            <span className="font-medium text-slate-500 dark:text-neutral-500">{t.maxResponsesLabel}</span>
+            <span className="font-semibold text-slate-800 dark:text-neutral-200">{params.maxResponses} {t.unitCopies}</span>
+          </div>
+          {params.repeatReward > 0 && (
+            <>
+              <div className="h-4 w-px bg-slate-200 dark:bg-neutral-800 hidden sm:block" />
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-slate-500 dark:text-neutral-500">{t.repeatRewardLabel}</span>
+                <span className="font-semibold text-slate-800 dark:text-neutral-200">{params.repeatReward} SSR ({params.repeatMaxTimes} {t.timesPerPerson})</span>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 3. 費用估計與資金明細 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {/* 左：預估與手續費摘要 */}
-          <section className="bg-slate-50/50 dark:bg-neutral-950/30 border border-slate-100 dark:border-neutral-850 rounded-2xl p-5 space-y-2 shadow-sm transition-colors">
+          {/* 左：問卷規則與預算 */}
+          <section className="bg-slate-50/50 dark:bg-neutral-950/30 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-4 shadow-sm transition-colors text-sm">
             <h2 className="text-h3 border-b pb-2 border-slate-100 dark:border-neutral-800">
               {t.rewardSettings}
             </h2>
-            <div className="space-y-2 text-base">
-              <div className="flex justify-between">
-                <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.perResponseLabel}</span>
-                <span className="font-normal text-slate-700 dark:text-neutral-200 tabular-nums">
-                  {params.perResponse} <span className="inline-block w-12 text-left">SSR</span>
+            <div className="space-y-2.5 pt-1">
+              <div className="flex justify-between text-base">
+                <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.totalRewardLabel}</span>
+                <span className="font-semibold text-slate-800 dark:text-neutral-200 tabular-nums">
+                  {totalSsr} <span className="text-sm font-normal text-slate-500 dark:text-neutral-400">SSR</span>
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.maxResponsesLabel}</span>
-                <span className="font-normal text-slate-700 dark:text-neutral-200 tabular-nums">
-                  {params.maxResponses} <span className="inline-block w-12 text-left">{t.unitCopies}</span>
-                </span>
-              </div>
-              {params.repeatReward > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.repeatRewardLabel}</span>
-                  <span className="font-normal text-slate-700 dark:text-neutral-200">
-                    {params.repeatReward} SSR × {params.repeatMaxTimes} {t.timesPerPerson}
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2.5">
-                <span className="text-slate-600 dark:text-neutral-350 font-normal">{t.totalRewardLabel}</span>
-                <span className="font-normal text-slate-800 dark:text-neutral-100 tabular-nums">
-                  {totalSsr} <span className="inline-block w-12 text-left">SSR</span>
-                </span>
-              </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between text-base">
                 <span className="text-slate-600 dark:text-neutral-400 font-normal">
-                  {t.platformFeeLabel(cost ? `${Number(cost.effectiveFeeBps) / 100}%` : t.calculating)}
+                  {t.platformFeeLabel}
+                  {cost && (
+                    <span className="text-xs text-slate-400 dark:text-neutral-500 ml-1">
+                      ({Number(cost.effectiveFeeBps) / 100}%)
+                    </span>
+                  )}
                 </span>
                 <span
-                  className="font-normal text-slate-800 dark:text-white tabular-nums"
+                  className="font-semibold text-slate-800 dark:text-white tabular-nums"
                   aria-label="platform-fee"
                   title={cost ? `${formatFullPrecision((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR` : undefined}
                 >
                   {cost ? (
                     <>
-                      {ssr((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} <span className="inline-block w-12 text-left">SSR</span>
+                      {ssr((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} <span className="text-sm font-normal text-slate-500 dark:text-neutral-400">SSR</span>
                     </>
                   ) : (
                     t.calculating
@@ -780,93 +762,117 @@ export default function FundPage() {
                 </span>
               </div>
 
-              {/* 大字突出：最終估算消耗 — 三態：載入中 / 需花 SUI / 全額由 SSR 折抵 */}
-              {(() => {
-                const fullyOffset = cost != null && suiToSpend != null && suiToSpend === 0n
-                const cardClass = fullyOffset
-                  ? 'bg-gradient-to-r from-emerald-700 to-emerald-600 dark:from-teal-950 dark:to-teal-900 text-white rounded-xl p-3 mt-4 flex justify-between items-center shadow-md'
-                  : 'bg-gradient-to-r from-blue-900 to-indigo-800 text-white rounded-xl p-3 mt-4 flex justify-between items-center shadow-md'
-                const title = fullyOffset ? t.estimatedTotal : t.estimatedTotal
-                const subtitle = fullyOffset ? t.coveredBySsrSubtitle : t.withSlippage
-                let mainValue: string
-                let fullValue: string | undefined = undefined
-                if (suiToSpend == null) {
-                  mainValue = t.calculating
-                } else if (fullyOffset) {
-                  mainValue = `${ssr(cost!.offsetIn)} SSR`
-                  fullValue = `${formatFullPrecision(cost!.offsetIn)} SSR`
-                } else {
-                  mainValue = `${sui(suiToSpend)} SUI`
-                  fullValue = `${formatFullPrecision(suiToSpend)} SUI`
-                }
-                return (
-                  <div className={cardClass}>
-                    <div className="flex flex-col min-w-0">
-                      <span className="text-base font-normal opacity-90">{title}</span>
-                      <span className="text-sm opacity-70">{subtitle}</span>
-                    </div>
-                    <span
-                      className="text-xl font-normal font-mono whitespace-nowrap text-right shrink-0 ml-3"
-                      aria-label="estimated-sui-cost"
-                      title={fullValue}
-                    >
-                      {mainValue}
-                    </span>
-                  </div>
-                )
-              })()}
+              <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2.5 font-medium text-base">
+                <span className="text-slate-700 dark:text-neutral-200">{t.totalSsrRequiredLabel}</span>
+                <span className="font-semibold text-slate-800 dark:text-neutral-200 tabular-nums" title={cost ? `${formatFullPrecision(cost.grossSsrBase)} SSR` : undefined}>
+                  {cost ? `${ssr(cost.grossSsrBase)} SSR` : t.calculating}
+                </span>
+              </div>
+              <div className="flex justify-between text-base">
+                <span className="text-slate-600 dark:text-neutral-400 font-normal">{t.ssrOffsetLabel}</span>
+                <span className="font-semibold text-slate-700 dark:text-neutral-300 tabular-nums" title={cost ? `${formatFullPrecision(cost.offsetIn)} SSR` : undefined}>
+                  {cost ? `-${ssr(cost.offsetIn)} SSR` : t.calculating}
+                </span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2.5 font-medium text-base">
+                <span className="text-slate-700 dark:text-neutral-200">{t.newMintSsrLabel}</span>
+                <span className="font-bold text-blue-700 dark:text-blue-400 tabular-nums" title={cost ? `${formatFullPrecision(cost.minted)} SSR` : undefined}>
+                  {cost ? `${ssr(cost.minted)} SSR` : t.calculating}
+                </span>
+              </div>
             </div>
           </section>
 
-          {/* 右：詳細資金分拆流向 */}
-          {cost && (
-            <section className="bg-white dark:bg-neutral-950/20 border border-slate-100 dark:border-neutral-850 rounded-2xl p-5 space-y-4 shadow-sm text-sm transition-colors">
+          {/* 右：支付與資金流向 */}
+          <section className="bg-white dark:bg-neutral-950/20 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-4 shadow-sm text-sm transition-colors flex flex-col justify-between">
+            <div className="space-y-4">
               <h2 className="text-h3 border-b pb-2 border-slate-100 dark:border-neutral-800">
                 {t.fundFlow}
               </h2>
-              <div className="space-y-3 pt-1">
-                <div className="flex justify-between items-start gap-3 text-base font-normal text-slate-800 dark:text-neutral-200">
-                  <div className="flex flex-col gap-1">
-                    <span>{t.flow1Title}</span>
-                    <span className="text-sm text-slate-500 dark:text-neutral-450 font-normal">
-                      {t.flow1Desc}
-                    </span>
+
+              {/* Part 2: SUI Payments */}
+              <div className="space-y-2">
+                <div className="flex justify-between text-slate-600 dark:text-neutral-400">
+                  <div className="flex items-center gap-1">
+                    <div className="flex flex-col">
+                      <span>{t.mintSuiCostLabel}</span>
+                      <span className="text-xs text-slate-400 dark:text-neutral-500">
+                        ({t.withSlippage})
+                      </span>
+                    </div>
+                    <div className="group relative inline-block self-start mt-1">
+                      <Info size={13} className="text-slate-400 hover:text-slate-600 dark:text-neutral-500 dark:hover:text-neutral-300 cursor-pointer" />
+                      <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 bg-slate-900 text-white dark:bg-neutral-800 dark:text-neutral-100 text-xs rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none leading-relaxed font-normal">
+                        <p className="font-semibold">{t.exchangeRateLabel} 1 SUI ≈ {currentRate.toFixed(2)} SSR</p>
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900 dark:border-t-neutral-800" />
+                      </div>
+                    </div>
                   </div>
-                  <span className="font-mono text-slate-900 dark:text-white font-normal whitespace-nowrap" title={`${formatFullPrecision(cost.offsetIn)} SSR`}>
-                    {ssr(cost.offsetIn)} SSR
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300" title={suiToSpend !== null ? `${formatFullPrecision(suiToSpend)} SUI` : undefined}>
+                    {suiToSpend !== null ? `${sui(suiToSpend)} SUI` : t.calculating}
                   </span>
                 </div>
 
-                <div className="flex justify-between items-start gap-3 text-base font-normal text-slate-800 dark:text-neutral-200 border-t border-slate-100 dark:border-neutral-800 pt-3">
-                  <div className="flex flex-col gap-1">
-                    <span>{t.flow2Title}</span>
-                    <span className="text-sm text-slate-500 dark:text-neutral-455 font-normal">
-                      {t.flow2Desc}
+                {requiredGas > 0n && (
+                  <div className="flex justify-between items-center text-slate-600 dark:text-neutral-400">
+                    <div className="flex items-center gap-1">
+                      <span>{t.prefundTotalLabel}</span>
+                      <div className="group relative inline-block">
+                        <Info size={13} className="text-slate-400 hover:text-slate-600 dark:text-neutral-500 dark:hover:text-neutral-300 cursor-pointer" />
+                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 bg-slate-900 text-white dark:bg-neutral-800 dark:text-neutral-100 text-xs rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none leading-relaxed font-normal">
+                          {t.prefundTooltip}
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900 dark:border-t-neutral-800" />
+                        </div>
+                      </div>
+                    </div>
+                    <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(requiredGas)} SUI`}>
+                      {sui(requiredGas)} SUI
                     </span>
                   </div>
-                  <span className="font-mono text-slate-900 dark:text-white font-normal whitespace-nowrap" title={`${formatFullPrecision((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR`}>
-                    {ssr((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-start gap-3 text-base font-normal text-slate-800 dark:text-neutral-200 border-t border-slate-100 dark:border-neutral-800 pt-3">
-                  <div className="flex flex-col gap-1">
-                    <span>{t.flow3Title}</span>
-                    <span className="text-sm text-slate-500 dark:text-neutral-455 font-normal">
-                      {t.flow3Desc}
-                    </span>
-                  </div>
-                  <span className="font-mono text-slate-900 dark:text-white font-normal whitespace-nowrap" title={`${formatFullPrecision(cost.minted)} SSR`}>
-                    {ssr(cost.minted)} SSR
-                  </span>
-                </div>
+                )}
               </div>
-            </section>
-          )}
+            </div>
+
+            {/* Part 3: Total Card */}
+            {(() => {
+              const fullyOffset = cost != null && totalSuiToSpend != null && totalSuiToSpend === 0n
+              const cardClass = fullyOffset
+                ? 'bg-gradient-to-r from-emerald-700 to-emerald-600 dark:from-teal-950 dark:to-teal-900 text-white rounded-xl p-3.5 mt-4 flex justify-between items-center shadow-md'
+                : 'bg-gradient-to-r from-blue-900 to-indigo-800 text-white rounded-xl p-3.5 mt-4 flex justify-between items-center shadow-md'
+              const title = t.estimatedTotal
+              const subtitle = fullyOffset ? t.coveredBySsrSubtitle : t.withSlippage
+              let mainValue: string
+              let fullValue: string | undefined = undefined
+              if (totalSuiToSpend == null) {
+                mainValue = t.calculating
+              } else if (fullyOffset) {
+                mainValue = `${ssr(cost!.offsetIn)} SSR`
+                fullValue = `${formatFullPrecision(cost!.offsetIn)} SSR`
+              } else {
+                mainValue = `${sui(totalSuiToSpend)} SUI`
+                fullValue = `${formatFullPrecision(totalSuiToSpend)} SUI`
+              }
+              return (
+                <div className={cardClass}>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-base font-normal opacity-90">{title}</span>
+                    <span className="text-sm opacity-70">{subtitle}</span>
+                  </div>
+                  <span
+                    className="text-xl font-normal font-mono whitespace-nowrap text-right shrink-0 ml-3"
+                    aria-label="estimated-sui-cost"
+                    title={fullValue}
+                  >
+                    {mainValue}
+                  </span>
+                </div>
+              )
+            })()}
+          </section>
         </div>
 
         {/* 3. 加密安全開關 */}
-        <section className="bg-slate-50/50 dark:bg-neutral-950/30 border border-slate-100 dark:border-neutral-850 rounded-2xl p-5 animate-fadeIn transition-colors flex flex-col sm:flex-row gap-6">
+        <section className="bg-slate-50/50 dark:bg-neutral-950/30 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 animate-fadeIn transition-colors flex flex-col sm:flex-row gap-6">
           <label className="inline-flex items-start gap-3.5 cursor-pointer select-none flex-1">
             <input
               id="encrypt-survey"
@@ -937,7 +943,7 @@ export default function FundPage() {
                       <button
                         type="button"
                         onClick={handleSetupKey}
-                        disabled={!isKeyRequired || !!keypair || status === 'key-signing'}
+                        disabled={!isKeyRequired || !!keypair || status === 'key-signing' || status === 'uploading'}
                         className={
                           !isKeyRequired
                             ? 'bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500 font-normal px-5 rounded-xl border border-slate-200/60 dark:border-neutral-700/60 w-full flex items-center justify-center gap-2 py-3 cursor-not-allowed'
@@ -962,15 +968,18 @@ export default function FundPage() {
                           suiToSpend == null ||
                           status === 'tx-signing' ||
                           status === 'submitting' ||
+                          status === 'uploading' ||
                           status === 'success'
                         }
                         className="btn-primary w-full flex items-center justify-center gap-1.5 py-3"
                       >
-                        {status === 'tx-signing' || status === 'submitting'
-                          ? t.submittingBtn
-                          : status === 'success'
-                            ? t.successBtn
-                            : t.publishBtn}
+                        {status === 'uploading'
+                          ? t.uploadingShort
+                          : status === 'tx-signing' || status === 'submitting'
+                            ? t.submittingBtn
+                            : status === 'success'
+                              ? t.successBtn
+                              : t.publishBtn}
                       </button>
                     </>
                   );
@@ -978,7 +987,8 @@ export default function FundPage() {
               </div>
             </div>
           ) : (
-            <div className="text-center py-5 warning-box rounded-2xl shadow-inner">
+            <div className="text-center py-5 warning-box rounded-2xl shadow-inner flex flex-col items-center gap-1.5 justify-center">
+              <AlertTriangle size={16} className="text-amber-600 dark:text-amber-500" />
               <p className="text-sm">
                 {t.connectWalletPrompt}
               </p>
@@ -986,6 +996,21 @@ export default function FundPage() {
           )}
         </div>
       </div>
+
+      {/* Glassmorphism progress overlay */}
+      {status === 'uploading' && (
+        <div className="glass-overlay">
+          <div className="glass-card space-y-4">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <h3 className="text-lg font-medium text-slate-800 dark:text-neutral-200 animate-pulse">
+              {t.uploadingSurvey}
+            </h3>
+            <p className="text-sm text-slate-500 dark:text-neutral-400">
+              {t.pleaseWait}
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

@@ -2,16 +2,18 @@
  * T3.3 — Dashboard decrypt + stats aggregation.
  *
  * Fetches SurveyClaimed events for a vault, decrypts encrypted_answers using
- * the creator's X25519 private key, and aggregates per-question answer counts.
+ * the creator's hybrid (X25519 + ML-KEM-768) key pair, and aggregates
+ * per-question answer counts.
  *
  * Designed for the /dashboard/:vaultId page (T4.6).
  */
 
 import type { SuiClient } from '@mysten/sui/client'
-import { decryptAnswers } from './crypto'
+import { decryptAnswers, type CreatorKeyPair } from './crypto'
 
 import { decodeAnswers } from './answerCodec'
 import type { Question } from './frontmatter'
+import { downloadFromDecentralizedStorage } from './storage'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -51,45 +53,88 @@ export interface DashboardStats {
 
 // ── fetchClaimedEvents ────────────────────────────────────────────────────────
 
+/** Convert a Move `vector<u8>` as returned by the RPC (number[] or base64) to bytes. */
+function moveBytesToUint8(v: unknown): Uint8Array {
+  if (v == null) return new Uint8Array()
+  if (Array.isArray(v)) return Uint8Array.from(v as number[])
+  if (typeof v === 'string') {
+    try {
+      const bin = atob(v)
+      const out = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+      return out
+    } catch {
+      return new TextEncoder().encode(v)
+    }
+  }
+  return new Uint8Array()
+}
+
 /**
- * Query all SurveyClaimed events for the given vault from the Sui RPC.
+ * Fetch every stored answer for a vault.
  *
- * Filters server-side by MoveEventType only, then narrows to the target vault
- * client-side. Sui devnet RPC rejects `MoveEventField` over ID-typed fields
- * with "Invalid params" (the All filter then silently returns zero events),
- * so we cannot pre-filter by vault_id at the RPC level.
+ * Answers now live in **deletable dynamic fields** on the vault object (so they
+ * can be destroyed at purge), not in the immutable `SurveyClaimed` event. Each
+ * field is a `Field<u64, AnswerRecord>`. We read them, and for Walrus-backed
+ * answers (`kind === 1`) download the blob so the returned `encrypted_answers`
+ * always carries the ciphertext bytes — keeping the downstream decrypt/decode
+ * paths unchanged. The `packageId` arg is retained for signature compatibility.
  */
 export async function fetchClaimedEvents(
   client: SuiClient,
   vaultId: string,
-  packageId: string
+  _packageId: string
 ): Promise<SurveyClaimedEvent[]> {
-  const events: SurveyClaimedEvent[] = []
-  let cursor: Parameters<SuiClient['queryEvents']>[0]['cursor'] = null
+  // 1. Collect the answer dynamic-field object ids (name type is u64).
+  const fieldIds: string[] = []
+  let cursor: string | null = null
   let pageCount = 0
-  const maxPages = 20 // Safety limit to avoid hanging the UI / infinite loops on bad RPC responses
-
+  const maxPages = 200
   do {
-    const page = await client.queryEvents({
-      query: { MoveEventType: `${packageId}::survey_vault::SurveyClaimed` },
-      cursor,
-      limit: 50,
-    })
-
-    for (const ev of page.data) {
-      const parsed = ev.parsedJson as any
-      if (parsed && parsed.vault_id === vaultId) {
-        events.push({
-          ...parsed,
-          claimed_at_ms: Number(parsed.claimed_at_ms),
-        })
-      }
+    const page = await client.getDynamicFields({ parentId: vaultId, cursor })
+    for (const f of page.data) {
+      if (f.name?.type === 'u64') fieldIds.push(f.objectId)
     }
-
     cursor = page.hasNextPage ? (page.nextCursor ?? null) : null
     pageCount++
   } while (cursor !== null && pageCount < maxPages)
 
+  if (fieldIds.length === 0) return []
+
+  // 2. Batch-read the field objects and resolve each answer to ciphertext bytes.
+  const events: SurveyClaimedEvent[] = []
+  for (let i = 0; i < fieldIds.length; i += 50) {
+    const batch = fieldIds.slice(i, i + 50)
+    const objs = await client.multiGetObjects({ ids: batch, options: { showContent: true } })
+    for (const o of objs) {
+      const content = o.data?.content as any
+      if (!content || content.dataType !== 'moveObject') continue
+      const rec = content.fields?.value?.fields
+      if (!rec) continue
+      const kind = Number(rec.kind)
+      let payloadBytes = moveBytesToUint8(rec.payload)
+      if (kind === 1) {
+        // payload is a Walrus/IPFS blob id (utf8 bytes); resolve to ciphertext.
+        const blobId = new TextDecoder().decode(payloadBytes)
+        try {
+          payloadBytes = await downloadFromDecentralizedStorage(blobId)
+        } catch (e) {
+          console.warn('[dashboardDecrypt] blob download failed for', blobId, e)
+          continue
+        }
+      }
+      events.push({
+        vault_id: vaultId,
+        sub_hash: Array.from(moveBytesToUint8(rec.sub_hash)),
+        respondent: String(rec.respondent),
+        encrypted_answers: Array.from(payloadBytes),
+        claimed_at_ms: Number(rec.claimed_at_ms),
+      })
+    }
+  }
+
+  // Stable chronological order.
+  events.sort((a, b) => a.claimed_at_ms - b.claimed_at_ms)
   return events
 }
 
@@ -102,7 +147,7 @@ export async function fetchClaimedEvents(
  */
 export async function decryptAllResponses(
   events: SurveyClaimedEvent[],
-  creatorPrivateKey: CryptoKey,
+  creatorKeyPair: CreatorKeyPair,
   questions: Question[],
   vaultSchemaHash: string | Uint8Array
 ): Promise<{ responses: DecryptedResponse[]; failed: number }> {
@@ -112,7 +157,7 @@ export async function decryptAllResponses(
   for (const ev of events) {
     try {
       const encryptedBytes = new Uint8Array(ev.encrypted_answers)
-      const plaintext = await decryptAnswers(encryptedBytes, creatorPrivateKey)
+      const plaintext = await decryptAnswers(encryptedBytes, creatorKeyPair)
       const answers = decodeAnswers(plaintext, questions, vaultSchemaHash)
       responses.push({
         respondent: ev.respondent,

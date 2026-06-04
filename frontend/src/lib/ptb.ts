@@ -1,4 +1,5 @@
 import { Transaction } from '@mysten/sui/transactions'
+import { bcs } from '@mysten/sui/bcs'
 
 // ── bonding curve constants ───────────────────────────────────────────────────
 
@@ -13,6 +14,15 @@ export const VAULT_FEE_BPS = 30n
 
 /** SSR & SR coins both use 9 decimals. */
 export const SSR_BASE_PER_UNIT = 1_000_000_000n
+
+/**
+ * Auto-destroy grace period (ms) after a survey closes (or expires), before its
+ * data may be purged. Env-tunable via `VITE_PURGE_GRACE_MS`; falls back to the
+ * contract default (90 days). The create PTB writes this onto the vault.
+ */
+export const PURGE_GRACE_MS = BigInt(
+  import.meta.env.VITE_PURGE_GRACE_MS ?? 90 * 24 * 60 * 60 * 1000
+)
 
 // ── estimate fund cost ────────────────────────────────────────────────────────
 
@@ -168,12 +178,17 @@ export interface BuildCreateSurveyPtbParams {
   repeatMaxTimes?: number
   maxResponses: number
   deadlineMs: bigint
-  /** Encrypted survey blob to store in `survey_registry::register`. */
+  /** Encrypted survey blob to store in `survey_registry::register`. If surveyBlobId is set, this is optional or ignored. */
   encryptedContent: Uint8Array
   /** MIST amount of SUI to invest into the pool. */
   suiToSpend: bigint
   /** 身分門檻：0 無門檻，1-3 對應 KYC tier。預設 0 以維持既有測試呼叫相容。 */
   minTier?: number
+
+  // Hybrid decentralized storage parameters
+  surveyBlobId?: Uint8Array
+  storageCompensationAmount?: bigint // in MIST
+  requiredStorageFund?: bigint // in MIST
 
   // V2 specific parameters (optional for backward compatibility in tests)
   contentHash?: Uint8Array
@@ -188,6 +203,8 @@ export interface BuildCreateSurveyPtbParams {
   }>
   offsetIn?: bigint
   creatorSsrCoins?: { coinObjectId: string; balance: string }[]
+  sponsorAddress?: string
+  gasCompensationAmount?: bigint
 }
 
 /**
@@ -210,9 +227,36 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   const offsetIn = p.offsetIn || 0n
   const creatorSsrCoins = p.creatorSsrCoins || []
 
-  // 1. Create empty vault
+  // 1. Create gas_coin input & Create empty vault
   const repeatReward = p.repeatReward ?? 0n
   const repeatMaxTimes = BigInt(p.repeatMaxTimes ?? 1)
+  const gasCompensationAmount = p.gasCompensationAmount ?? 0n
+  const storageCompensationAmount = p.storageCompensationAmount ?? 0n
+
+  const perResponseSui = gasCompensationAmount + storageCompensationAmount
+  let requiredGas = 0n
+  if (perResponseSui > 0n) {
+    if (repeatReward > 0n) {
+      requiredGas = BigInt(p.maxResponses) * (1n + repeatMaxTimes) * perResponseSui
+    } else {
+      requiredGas = BigInt(p.maxResponses) * perResponseSui
+    }
+  }
+
+  let gasCoinInput
+  if (requiredGas > 0n) {
+    const [splitSui] = tx.splitCoins(tx.gas, [tx.pure.u64(requiredGas.toString())])
+    gasCoinInput = splitSui
+  } else {
+    const [zeroSui] = tx.moveCall({
+      target: '0x2::coin::zero',
+      typeArguments: ['0x2::sui::SUI'],
+    })
+    gasCoinInput = zeroSui
+  }
+
+  const sponsorAddr = p.sponsorAddress || '0x0000000000000000000000000000000000000000000000000000000000000000'
+
   const [vault] = tx.moveCall({
     target: `${p.packageId}::survey_vault::create_empty`,
     arguments: [
@@ -222,7 +266,17 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.u64(p.maxResponses),
       tx.pure.u64(p.deadlineMs),
       tx.pure.address(p.adminTreasury),
+      gasCoinInput,
+      tx.pure.address(sponsorAddr),
+      tx.pure.u64(gasCompensationAmount),
+      tx.pure.u64(storageCompensationAmount),
     ],
+  })
+
+  // 1b. Set the env-configured auto-destroy grace period on the new vault.
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::set_purge_grace_ms`,
+    arguments: [vault, tx.pure.u64(PURGE_GRACE_MS)],
   })
 
   // 2. Deposit existing SSR offset
@@ -259,7 +313,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       )
     }
 
-    const [splitCoin] = tx.splitCoins(primaryCoinInput, [tx.pure.u64(offsetIn)])
+    const [splitCoin] = tx.splitCoins(primaryCoinInput, [tx.pure.u64(offsetIn.toString())])
     offsetCoinInput = splitCoin
   } else {
     const [zeroCoin] = tx.moveCall({
@@ -277,7 +331,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   // 3. Invest & Mint new SSR
   let mintedCoin
   if (p.suiToSpend > 0n) {
-    const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.suiToSpend)])
+    const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.suiToSpend.toString())])
     const [newSsrCoin] = tx.moveCall({
       target: `${p.packageId}::amm_pool::invest_and_mint`,
       arguments: [
@@ -330,14 +384,28 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     elements: questionsArgs,
   })
 
+  // Get vault ID to pass to register
+  const [vaultId] = tx.moveCall({
+    target: '0x2::object::id',
+    typeArguments: [`${p.packageId}::survey_vault::SurveyVault`],
+    arguments: [vault],
+  })
+
+  const surveyBlobIdOpt = p.surveyBlobId ? p.surveyBlobId : null
+  const encryptedContentOpt = p.surveyBlobId ? null : p.encryptedContent
+
+  const encryptedContentArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedContentOpt).toBytes())
+  const surveyBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(surveyBlobIdOpt).toBytes())
+
   // 6. Register survey
   tx.moveCall({
     target: `${p.packageId}::survey_registry::register`,
     arguments: [
       tx.object(p.registryId),
-      vault,
+      vaultId,
       tx.pure.vector('u8', Array.from(contentHash)),
-      tx.pure.vector('u8', Array.from(p.encryptedContent)),
+      encryptedContentArg,
+      surveyBlobIdArg,
       tx.pure.vector('u8', Array.from(schemaHash)),
       tx.pure.vector('u8', Array.from(creatorPubKey)),
       questionsVec,
@@ -375,6 +443,37 @@ export function buildClosePtb(p: BuildClosePtbParams): Transaction {
   tx.moveCall({
     target: `${p.packageId}::survey_vault::close`,
     arguments: [tx.object(p.vaultId), tx.object('0x6')],
+  })
+
+  return tx
+}
+
+// ── build purge PTB ───────────────────────────────────────────────────────────
+
+export interface BuildPurgePtbParams {
+  packageId: string
+  registryId: string
+  surveyId: string
+  vaultId: string
+}
+
+/**
+ * Build the purge PTB that permanently destroys a survey + its vault (and every
+ * stored answer) once the grace period has elapsed. The BFF cron is the normal
+ * trigger; this is also used for the manual / permissionless fallback. `purge`
+ * is gated on-chain, so calling early simply aborts.
+ */
+export function buildPurgePtb(p: BuildPurgePtbParams): Transaction {
+  const tx = new Transaction()
+
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::purge`,
+    arguments: [
+      tx.object(p.registryId),
+      tx.object(p.surveyId),
+      tx.object(p.vaultId),
+      tx.object('0x6'), // Clock
+    ],
   })
 
   return tx
@@ -420,8 +519,11 @@ export interface BuildMintPassPtbParams {
   registryId: string
   configId: string
   owner: string
+  // 支付儲存押金的一方：代付鑄造 = sponsor 位址；自付 fallback = owner。
+  // 決定刪除授權與儲存返還流向，後端代付時會驗證此值 == sponsor。
+  depositPayer: string
   source: number
-  nullifierHash: Uint8Array
+  nullifiers: Uint8Array[]
   commitment: Uint8Array
   expiresAt: bigint | string
   bffSig: Uint8Array
@@ -438,8 +540,9 @@ export function buildMintPassPtb(p: BuildMintPassPtbParams): Transaction {
       tx.object(p.registryId),
       tx.object(p.configId),
       tx.pure.address(p.owner),
+      tx.pure.address(p.depositPayer),
       tx.pure.u8(p.source),
-      tx.pure.vector('u8', Array.from(p.nullifierHash)),
+      tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(p.nullifiers.map((n) => Array.from(n))).toBytes()),
       tx.pure.vector('u8', Array.from(p.commitment)),
       tx.pure.u64(BigInt(p.expiresAt).toString()),
       tx.pure.vector('u8', Array.from(p.bffSig)),
@@ -455,7 +558,7 @@ export interface BuildUpdatePassCredentialPtbParams {
   registryId: string
   configId: string
   source: number
-  nullifierHash: Uint8Array
+  nullifiers: Uint8Array[]
   commitment: Uint8Array
   expiresAt: bigint | string
   bffSig: Uint8Array
@@ -473,7 +576,7 @@ export function buildUpdatePassCredentialPtb(p: BuildUpdatePassCredentialPtbPara
       tx.object(p.registryId),
       tx.object(p.configId),
       tx.pure.u8(p.source),
-      tx.pure.vector('u8', Array.from(p.nullifierHash)),
+      tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(p.nullifiers.map((n) => Array.from(n))).toBytes()),
       tx.pure.vector('u8', Array.from(p.commitment)),
       tx.pure.u64(BigInt(p.expiresAt).toString()),
       tx.pure.vector('u8', Array.from(p.bffSig)),
@@ -490,13 +593,37 @@ export interface BuildDeletePassPtbParams {
 }
 
 /**
- * Builds a PTB to permanently delete a revoked SurveyPass.
+ * Builds a PTB to delete a SurveyPass via `delete_pass`.
+ * 授權依鏈上 `deposit_payer` 分流：自付鑄造的 Pass 由 owner 自行送出；
+ * 代付鑄造的 Pass 須由 admin（後端）送出（使用者自送會 abort ENotAdmin）。
  */
 export function buildDeletePassPtb(p: BuildDeletePassPtbParams): Transaction {
   const tx = new Transaction()
   tx.moveCall({
     target: `${p.packageId}::survey_pass::delete_pass`,
     arguments: [tx.object(p.registryId), tx.object(p.passId)],
+  })
+  return tx
+}
+
+export interface BuildSelfDeleteSponsoredPassPtbParams {
+  packageId: string
+  registryId: string
+  passId: string
+  // 須 >= 合約 REBATE_FEE_FLOOR（MIST），用於抵銷使用者自付刪除時拿到的儲存返還
+  feeMist: bigint | string
+}
+
+/**
+ * 自付逃生門 PTB：後端代付不可用時，使用者自付刪除「代付鑄造」的 Pass。
+ * 從 gas coin 切出 feeMist 作為費用轉回項目方，確保使用者無利可圖。
+ */
+export function buildSelfDeleteSponsoredPassPtb(p: BuildSelfDeleteSponsoredPassPtbParams): Transaction {
+  const tx = new Transaction()
+  const [fee] = tx.splitCoins(tx.gas, [tx.pure.u64(BigInt(p.feeMist).toString())])
+  tx.moveCall({
+    target: `${p.packageId}::survey_pass::self_delete_sponsored_pass`,
+    arguments: [tx.object(p.registryId), tx.object(p.passId), fee],
   })
   return tx
 }

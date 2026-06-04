@@ -40,6 +40,15 @@ export default defineConfig({
           process.env.SURVEY_PASS_ISSUER_PRIV ||
           '0101010101010101010101010101010101010101010101010101010101010101',
         SURVEY_PASS_ISSUER_SALT: process.env.SURVEY_PASS_ISSUER_SALT || 'dev_salt_surveysui_v2',
+        // OAuth credentials — loaded from bff/.env when reuseExistingServer=true
+        GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
+        GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
+        GITHUB_OAUTH_CLIENT_ID: process.env.GITHUB_OAUTH_CLIENT_ID || '',
+        GITHUB_OAUTH_CLIENT_SECRET: process.env.GITHUB_OAUTH_CLIENT_SECRET || '',
+        // zkLogin salt secret — NEVER change after first set
+        ZKLOGIN_SALT_SECRET: process.env.ZKLOGIN_SALT_SECRET || '',
+        FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
+        BFF_URL: process.env.BFF_URL || 'http://localhost:3100',
       },
     },
   ],

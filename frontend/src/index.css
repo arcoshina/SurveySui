@@ -75,6 +75,13 @@
   .dark *::-webkit-scrollbar-thumb:hover {
     background-color: oklch(0.45 0 0);
   }
+
+  /* dapp-kit 帳號下拉選單:套件只設了 max-height 卻漏了 overflow,
+     帳號一多會溢位疊到頁面。補上垂直捲動。 */
+  [data-dapp-kit][role="menu"] {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
 }
 
 @utility text-h1 {
@@ -121,7 +128,7 @@
 }
 
 @utility form-label {
-  @apply block text-sm font-normal text-slate-600 dark:text-neutral-300 uppercase tracking-wider mb-1;
+  @apply block text-sm font-normal text-slate-600 dark:text-neutral-300 tracking-wider mb-1;
 }
 
 @utility form-input {
@@ -190,13 +197,173 @@
 }
 
 @utility chip-required {
-  @apply px-2 py-0.5 rounded-full text-[10px] font-bold border;
-  @apply bg-rose-50 border-rose-100 text-rose-800;
+  @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-sm font-normal border;
+  @apply bg-rose-50 border-rose-200 text-rose-800;
   @apply dark:bg-rose-600/20 dark:border-rose-400/70 dark:text-rose-400/80;
 }
 
 @utility chip-optional {
-  @apply px-2 py-0.5 rounded-full text-[10px] font-bold border;
+  @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-sm font-normal border;
   @apply bg-slate-100 border-slate-200 text-slate-500;
   @apply dark:bg-neutral-800 dark:border-neutral-700 dark:text-neutral-400;
+}
+
+/* 呼吸燈特效與儲存模式 Badge */
+@keyframes breathe {
+  0%, 100% {
+    opacity: 0.85;
+    box-shadow: 0 0 4px rgba(59, 130, 246, 0.2);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+  }
+}
+
+.animate-breathe {
+  animation: breathe 3s ease-in-out infinite;
+}
+
+/* SurveyPass 證件夾展開/收合過渡 */
+@keyframes deckFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-deck-in {
+  animation: deckFadeIn 0.3s ease-out both;
+}
+
+@utility badge-direct {
+  @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-sm font-normal border;
+  @apply bg-emerald-50 border-emerald-200 text-emerald-800;
+  @apply dark:bg-emerald-600/20 dark:border-emerald-400/70 dark:text-emerald-400/80;
+}
+
+@utility badge-decentralized {
+  @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-sm font-normal border;
+  @apply bg-blue-100 border-blue-200 text-blue-800;
+  @apply dark:bg-blue-600/20 dark:border-blue-400/70 dark:text-blue-400/80;
+}
+
+/* Glassmorphism 磨砂玻璃覆蓋層 */
+.glass-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.3);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.2);
+  backdrop-filter: blur(12px);
+  border-radius: 24px;
+  padding: 32px;
+  max-width: 400px;
+  width: 90%;
+  text-align: center;
+}
+
+.dark .glass-card {
+  background: rgba(23, 23, 23, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Custom slider CSS variables */
+:root {
+  --slider-active: #1d4ed8; /* blue-700 */
+  --slider-inactive: #e2e8f0; /* slate-200 */
+}
+
+.dark {
+  --slider-active: #3b82f6; /* blue-500 */
+  --slider-inactive: #262626; /* neutral-800 */
+}
+
+/* Custom range slider styling */
+.slider-custom {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 9999px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+/* Chrome, Safari, Opera, Edge */
+.slider-custom::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 3px solid var(--slider-active);
+  cursor: pointer;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transition: transform 0.1s, border-color 0.2s;
+}
+
+.dark .slider-custom::-webkit-slider-thumb {
+  background: #171717;
+}
+
+.slider-custom::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.slider-custom::-webkit-slider-thumb:active {
+  transform: scale(0.95);
+}
+
+/* Firefox */
+.slider-custom::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--slider-active);
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transition: transform 0.1s, border-color 0.2s;
+}
+
+.dark .slider-custom::-moz-range-thumb {
+  background: #171717;
+}
+
+.slider-custom::-moz-range-thumb:hover {
+  transform: scale(1.15);
+}
+
+.slider-custom::-moz-range-thumb:active {
+  transform: scale(0.95);
+}
+
+/* Unselected state: Slate-400 / Neutral-600 */
+.slider-unselected::-webkit-slider-thumb {
+  border-color: #94a3b8;
+}
+.dark .slider-unselected::-webkit-slider-thumb {
+  border-color: #525252;
+}
+
+.slider-unselected::-moz-range-thumb {
+  border-color: #94a3b8;
+}
+.dark .slider-unselected::-moz-range-thumb {
+  border-color: #525252;
 }

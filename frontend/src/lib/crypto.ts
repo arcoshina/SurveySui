@@ -1,19 +1,29 @@
 /**
- * T3.2 — AES-256-GCM survey content encryption + X25519-ECIES answer encryption.
+ * AES-256-GCM survey content encryption + post-quantum hybrid answer encryption.
  *
- * Survey content:
+ * Survey content (already quantum-safe — symmetric only):
  *   encryptedBlob = [32B creator_x25519_pubkey | 12B iv | ciphertext]
  *   Stored in survey_registry::encrypted_content.
  *   contentKey (32B random) stored in URL fragment (#<base64url>).
+ *   The 32B header is identification metadata only; content confidentiality
+ *   rests on AES-256-GCM + the out-of-band URL-fragment key.
  *
- * Answers (ECIES):
- *   encryptedAnswers = [32B ephemeral_x25519_pubkey | 12B iv | ciphertext]
+ * Answers (hybrid KEM = X25519-ECDH + ML-KEM-768 + HKDF + AES-256-GCM):
+ *   creatorPubKey published in survey_registry::creator_pub_key:
+ *     [1B ver=0x01 | 32B x25519_pub | 1184B ml_kem768_ek]
+ *   encryptedAnswers = [1B ver=0x01 | 32B ephemeral_x25519_pub | 1088B kem_ct | 12B iv | ciphertext]
  *   Stored in survey_vault::claim(..., encrypted_answers).
- *   Only creator can decrypt via their deterministic X25519 private key.
+ *   The AES key derives from BOTH the X25519 and ML-KEM shared secrets, so the
+ *   answer stays confidential as long as EITHER primitive is unbroken — defeating
+ *   "harvest-now-decrypt-later" against a future quantum adversary.
+ *   Only the creator can decrypt, via key pairs deterministically re-derived from
+ *   their wallet signature.
  *
- * Key derivation message: "SurveySui encryption key\nvault:<vaultId>"
+ * Key derivation message: KEY_DERIVE_MSG below.
  * Signing is done by the caller (wallet adapter); this module hashes the result.
  */
+
+import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 
 // ── PKCS#8 DER prefix for X25519 private key (RFC 8410) ─────────────────────
 
@@ -38,8 +48,22 @@ const X25519_PKCS8_PREFIX = new Uint8Array([
 
 // ── HKDF info constants ───────────────────────────────────────────────────────
 
-const ANSWERS_HKDF_INFO = new TextEncoder().encode('surveysui-answers-v1')
+/** Domain-separation prefix for the hybrid answer KEM key derivation. */
+const ANSWERS_HKDF_INFO_PREFIX = new TextEncoder().encode('surveysui-answers-v2')
 const HKDF_SALT = new Uint8Array(32) // all zeros
+
+// ── Hybrid (X25519 + ML-KEM-768) constants ───────────────────────────────────
+
+/** Version byte prefixing creatorPubKey and answer blobs (forward-compat hook). */
+const HYBRID_VERSION = 0x01
+const X25519_PUB_LEN = 32
+const MLKEM_EK_LEN = 1184 // ml_kem768 encapsulation (public) key
+const MLKEM_CT_LEN = 1088 // ml_kem768 ciphertext
+const MLKEM_SEED_LEN = 64 // ml_kem768 deterministic keygen seed
+const IV_LEN = 12
+
+/** Info label for deriving the deterministic ML-KEM seed from the wallet signature. */
+const MLKEM_SEED_INFO = new TextEncoder().encode('surveysui-mlkem768-v1')
 
 // ── KEY_DERIVE_MSG ─────────────────────────────────────────────────────────────
 
@@ -82,35 +106,42 @@ function seedToX25519Pkcs8(seed: Uint8Array): Uint8Array {
 // ── Creator key pair ──────────────────────────────────────────────────────────
 
 export interface CreatorKeyPair {
-  /** 32-byte X25519 public key — stored on-chain (in content blob). */
-  publicKeyBytes: Uint8Array
+  /** 32-byte X25519 public key. */
+  x25519PublicKeyBytes: Uint8Array
   /** Non-extractable X25519 private key — kept in memory only. */
-  privateKey: CryptoKey
+  x25519PrivateKey: CryptoKey
+  /** 1184-byte ML-KEM-768 encapsulation (public) key. */
+  mlkemPublicKey: Uint8Array
+  /** 2400-byte ML-KEM-768 decapsulation (secret) key — kept in memory only. */
+  mlkemSecretKey: Uint8Array
 }
 
 /**
- * Deterministically derive an X25519 key pair from a wallet signature.
+ * Deterministically derive the creator's hybrid (X25519 + ML-KEM-768) key pair
+ * from a wallet signature. Both halves are reproducible from the same signature,
+ * so the creator can re-derive them later (e.g. on the dashboard) to decrypt.
  *
  * @param walletSignatureBytes — raw bytes returned by wallet.signPersonalMessage
  */
 export async function deriveCreatorKeyPair(
   walletSignatureBytes: Uint8Array
 ): Promise<CreatorKeyPair> {
+  // ── X25519: seed = SHA-256(walletSig) ──
   const seed = new Uint8Array(await crypto.subtle.digest('SHA-256', walletSignatureBytes as any))
   const der = seedToX25519Pkcs8(seed)
-  const privateKey = await crypto.subtle.importKey(
+  const extractable = await crypto.subtle.importKey(
     'pkcs8',
     der as any,
     { name: 'X25519' },
-    true, // extractable=true so we can export JWK to retrieve pubkey
+    true, // extractable so we can export JWK to retrieve pubkey
     ['deriveBits']
   )
-  const jwk = await crypto.subtle.exportKey('jwk', privateKey)
+  const jwk = await crypto.subtle.exportKey('jwk', extractable)
   if (!jwk.x) throw new Error('Failed to derive X25519 public key from JWK')
-  const publicKeyBytes = base64urlToBytes(jwk.x)
+  const x25519PublicKeyBytes = base64urlToBytes(jwk.x)
 
   // Re-import private key as non-extractable for the caller
-  const privateKeyFinal = await crypto.subtle.importKey(
+  const x25519PrivateKey = await crypto.subtle.importKey(
     'pkcs8',
     der as any,
     { name: 'X25519' },
@@ -118,7 +149,41 @@ export async function deriveCreatorKeyPair(
     ['deriveBits']
   )
 
-  return { publicKeyBytes, privateKey: privateKeyFinal }
+  // ── ML-KEM-768: 64-byte seed = HKDF-SHA256(walletSig), domain-separated ──
+  const mlkemSeed = await _deriveMlkemSeed(walletSignatureBytes)
+  const { publicKey: mlkemPublicKey, secretKey: mlkemSecretKey } = ml_kem768.keygen(mlkemSeed)
+
+  return { x25519PublicKeyBytes, x25519PrivateKey, mlkemPublicKey, mlkemSecretKey }
+}
+
+/**
+ * Combined, publishable creator public key:
+ *   [1B ver | 32B x25519_pub | 1184B ml_kem768_ek]
+ * Stored on-chain in survey_registry::creator_pub_key.
+ */
+export function buildCreatorPubKey(kp: CreatorKeyPair): Uint8Array {
+  const out = new Uint8Array(1 + X25519_PUB_LEN + MLKEM_EK_LEN)
+  out[0] = HYBRID_VERSION
+  out.set(kp.x25519PublicKeyBytes, 1)
+  out.set(kp.mlkemPublicKey, 1 + X25519_PUB_LEN)
+  return out
+}
+
+/** Reverse of {@link buildCreatorPubKey}. */
+export function parseCreatorPubKey(bytes: Uint8Array): {
+  x25519Pub: Uint8Array
+  mlkemEk: Uint8Array
+} {
+  if (bytes.length !== 1 + X25519_PUB_LEN + MLKEM_EK_LEN) {
+    throw new Error(`Unexpected creator pub key length: ${bytes.length}`)
+  }
+  if (bytes[0] !== HYBRID_VERSION) {
+    throw new Error(`Unsupported creator pub key version: ${bytes[0]}`)
+  }
+  return {
+    x25519Pub: bytes.slice(1, 1 + X25519_PUB_LEN),
+    mlkemEk: bytes.slice(1 + X25519_PUB_LEN),
+  }
 }
 
 // ── Survey content encryption ─────────────────────────────────────────────────
@@ -190,67 +255,94 @@ export async function decryptSurveyContent(
   }
 }
 
-// ── Answer encryption (ECIES = X25519-ECDH + HKDF + AES-256-GCM) ─────────────
+// ── Answer encryption (hybrid KEM = X25519-ECDH + ML-KEM-768 + HKDF + AES-256-GCM) ──
 
 /**
- * Encrypt survey answers for the creator using ECIES.
+ * Encrypt survey answers for the creator using a post-quantum hybrid KEM.
+ * The AES key binds BOTH an X25519 ECDH secret and an ML-KEM-768 encapsulated
+ * secret, so confidentiality holds as long as EITHER primitive is unbroken.
+ *
  * @param answers — JSON-serialisable answer payload (pass JSON.stringify result)
- * @param creatorPublicKeyBytes — 32B creator X25519 public key from content blob
- * Returns: [32B ephemeral_pubkey | 12B iv | ciphertext]
+ * @param creatorPubKeyCombined — survey_registry::creator_pub_key bytes
+ *   (`[1B ver | 32B x25519_pub | 1184B ml_kem768_ek]`)
+ * Returns: [1B ver | 32B ephemeral_x25519_pub | 1088B kem_ct | 12B iv | ciphertext]
  */
 export async function encryptAnswers(
   answers: string,
-  creatorPublicKeyBytes: Uint8Array
+  creatorPubKeyCombined: Uint8Array
 ): Promise<Uint8Array> {
+  const { x25519Pub, mlkemEk } = parseCreatorPubKey(creatorPubKeyCombined)
+
   const creatorPub = await crypto.subtle.importKey(
     'raw',
-    creatorPublicKeyBytes as any,
+    x25519Pub as any,
     { name: 'X25519' },
     false,
     []
   )
 
-  // Ephemeral key pair
+  // X25519: ephemeral key pair → ECDH shared secret (ss1)
   const ephemeral = (await crypto.subtle.generateKey({ name: 'X25519' }, true, [
     'deriveBits',
   ])) as CryptoKeyPair
   const ephemeralPubRaw = new Uint8Array(
     await crypto.subtle.exportKey('raw', ephemeral.publicKey as any)
   )
-
-  // Shared secret → HKDF → AES-GCM key
-  const sharedBits = await crypto.subtle.deriveBits(
-    { name: 'X25519', public: creatorPub },
-    ephemeral.privateKey as any,
-    256
+  const ss1 = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: 'X25519', public: creatorPub }, ephemeral.privateKey as any, 256)
   )
-  const aesKey = await _deriveAesKey(sharedBits, ['encrypt'])
 
-  const iv = crypto.getRandomValues(new Uint8Array(12))
+  // ML-KEM-768: encapsulate to creator ek → ciphertext + shared secret (ss2)
+  const { cipherText: kemCt, sharedSecret: ss2 } = ml_kem768.encapsulate(mlkemEk)
+
+  // Hybrid combine → AES key, transcript-bound (ephemeral pub ‖ kem ct)
+  const aesKey = await _deriveHybridAesKey(ss1, ss2, ephemeralPubRaw, kemCt, ['encrypt'])
+
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LEN))
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, new TextEncoder().encode(answers))
   )
 
-  // output = ephemeralPub(32) || iv(12) || ciphertext
-  const out = new Uint8Array(32 + 12 + ciphertext.length)
-  out.set(ephemeralPubRaw, 0)
-  out.set(iv, 32)
-  out.set(ciphertext, 44)
+  // output = ver(1) || ephemeralPub(32) || kemCt(1088) || iv(12) || ciphertext
+  const headerLen = 1 + X25519_PUB_LEN + MLKEM_CT_LEN + IV_LEN
+  const out = new Uint8Array(headerLen + ciphertext.length)
+  let off = 0
+  out[off] = HYBRID_VERSION
+  off += 1
+  out.set(ephemeralPubRaw, off)
+  off += X25519_PUB_LEN
+  out.set(kemCt, off)
+  off += MLKEM_CT_LEN
+  out.set(iv, off)
+  off += IV_LEN
+  out.set(ciphertext, off)
   return out
 }
 
 /**
- * Decrypt answers using the creator's X25519 private key.
+ * Decrypt answers using the creator's hybrid key pair.
  * @param encryptedAnswers — bytes stored in SurveyClaimed event
- * @param creatorPrivateKey — non-extractable CryptoKey from deriveCreatorKeyPair
+ * @param kp — creator key pair re-derived via deriveCreatorKeyPair
  */
 export async function decryptAnswers(
   encryptedAnswers: Uint8Array,
-  creatorPrivateKey: CryptoKey
+  kp: CreatorKeyPair
 ): Promise<string> {
-  const ephemeralPubRaw = encryptedAnswers.slice(0, 32)
-  const iv = encryptedAnswers.slice(32, 44)
-  const ciphertext = encryptedAnswers.slice(44)
+  const minLen = 1 + X25519_PUB_LEN + MLKEM_CT_LEN + IV_LEN
+  if (encryptedAnswers.length < minLen) {
+    throw new Error(`Answer blob too short: ${encryptedAnswers.length}`)
+  }
+  if (encryptedAnswers[0] !== HYBRID_VERSION) {
+    throw new Error(`Unsupported answer blob version: ${encryptedAnswers[0]}`)
+  }
+  let off = 1
+  const ephemeralPubRaw = encryptedAnswers.slice(off, off + X25519_PUB_LEN)
+  off += X25519_PUB_LEN
+  const kemCt = encryptedAnswers.slice(off, off + MLKEM_CT_LEN)
+  off += MLKEM_CT_LEN
+  const iv = encryptedAnswers.slice(off, off + IV_LEN)
+  off += IV_LEN
+  const ciphertext = encryptedAnswers.slice(off)
 
   const ephemeralPub = await crypto.subtle.importKey(
     'raw',
@@ -259,13 +351,12 @@ export async function decryptAnswers(
     false,
     []
   )
-
-  const sharedBits = await crypto.subtle.deriveBits(
-    { name: 'X25519', public: ephemeralPub },
-    creatorPrivateKey as any,
-    256
+  const ss1 = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: 'X25519', public: ephemeralPub }, kp.x25519PrivateKey as any, 256)
   )
-  const aesKey = await _deriveAesKey(sharedBits, ['decrypt'])
+  const ss2 = ml_kem768.decapsulate(kemCt, kp.mlkemSecretKey)
+
+  const aesKey = await _deriveHybridAesKey(ss1, ss2, ephemeralPubRaw, kemCt, ['decrypt'])
 
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext)
   return new TextDecoder().decode(plaintext)
@@ -273,15 +364,55 @@ export async function decryptAnswers(
 
 // ── private helpers ───────────────────────────────────────────────────────────
 
-async function _deriveAesKey(sharedBits: ArrayBuffer, usages: KeyUsage[]): Promise<CryptoKey> {
-  const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey'])
+/** Derive a 64-byte deterministic ML-KEM seed from the wallet signature. */
+async function _deriveMlkemSeed(walletSignatureBytes: Uint8Array): Promise<Uint8Array> {
+  const hkdfKey = await crypto.subtle.importKey(
+    'raw',
+    walletSignatureBytes as any,
+    'HKDF',
+    false,
+    ['deriveBits']
+  )
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: HKDF_SALT, info: MLKEM_SEED_INFO },
+    hkdfKey,
+    MLKEM_SEED_LEN * 8
+  )
+  return new Uint8Array(bits)
+}
+
+/**
+ * Hybrid KEM combiner: AES-256-GCM key = HKDF-SHA256 over (ss1 ‖ ss2), with the
+ * transcript (ephemeral X25519 pub ‖ ML-KEM ciphertext) bound via `info`.
+ *
+ * The transcript is first hashed to a fixed 32-byte digest before going into
+ * `info`: WebCrypto HKDF caps `info` at 1024 bytes (the 1088-byte ML-KEM
+ * ciphertext alone would overflow it), and hashing keeps the binding intact
+ * while staying well within that limit.
+ */
+async function _deriveHybridAesKey(
+  ss1: Uint8Array,
+  ss2: Uint8Array,
+  ephemeralPub: Uint8Array,
+  kemCt: Uint8Array,
+  usages: KeyUsage[]
+): Promise<CryptoKey> {
+  const ikm = new Uint8Array(ss1.length + ss2.length)
+  ikm.set(ss1, 0)
+  ikm.set(ss2, ss1.length)
+
+  const transcript = new Uint8Array(ephemeralPub.length + kemCt.length)
+  transcript.set(ephemeralPub, 0)
+  transcript.set(kemCt, ephemeralPub.length)
+  const transcriptHash = new Uint8Array(await crypto.subtle.digest('SHA-256', transcript as any))
+
+  const info = new Uint8Array(ANSWERS_HKDF_INFO_PREFIX.length + transcriptHash.length)
+  info.set(ANSWERS_HKDF_INFO_PREFIX, 0)
+  info.set(transcriptHash, ANSWERS_HKDF_INFO_PREFIX.length)
+
+  const hkdfKey = await crypto.subtle.importKey('raw', ikm as any, 'HKDF', false, ['deriveKey'])
   return crypto.subtle.deriveKey(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: HKDF_SALT,
-      info: ANSWERS_HKDF_INFO,
-    },
+    { name: 'HKDF', hash: 'SHA-256', salt: HKDF_SALT, info },
     hkdfKey,
     { name: 'AES-GCM', length: 256 },
     false,

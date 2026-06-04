@@ -3,11 +3,116 @@ import { SuiClient } from '@mysten/sui/client'
 export interface SurveyPassData {
   objectId: string
   owner: string
+  // 鑄造時支付儲存押金的一方：代付鑄造 = sponsor 位址；自付鑄造 = owner。
+  // 決定刪除流程（代付 Pass 走後端代刪，自付 Pass 由 owner 自刪）。
+  depositPayer: string
   effectiveTier: number
   status: number
   expiresAt: number
   credentialSources: number[]
   createdAt: number
+}
+
+// 證件夾內單一憑證（鏈上 CredentialSlot dynamic field）的展示用資料。
+export interface CredentialInfo {
+  source: number // 1-5（見 getSourceTier）
+  tier: number // 由 source 換算
+  issuedAt: number // ms
+  expiresAt: number // ms（0 = 永不過期）
+}
+
+/**
+ * 合約 get_source_tier 的前端鏡像。
+ * ⚠️ 務必與 contracts/sources/survey_pass.move get_source_tier 保持同步。
+ * SELF_REPORT(1)→0、EMAIL(2)→0、SOCIAL(3)→1、SELF_PROTOCOL(4)→2、WORLD_ID(5)→2、
+ * SOCIAL_GOOGLE(6)→1、SOCIAL_GITHUB(7)→1
+ */
+export function getSourceTier(source: number): number {
+  switch (source) {
+    case 1: // SRC_SELF_REPORT
+      return 0
+    case 2: // SRC_EMAIL
+      return 0
+    case 3: // SRC_SOCIAL
+      return 1
+    case 6: // SRC_SOCIAL_GOOGLE
+      return 1
+    case 7: // SRC_SOCIAL_GITHUB
+      return 1
+    case 4: // SRC_SELF_PROTOCOL
+      return 2
+    case 5: // SRC_WORLD_ID
+      return 2
+    default:
+      return 0
+  }
+}
+
+/**
+ * Fetches per-credential slots for a SurveyPass by enumerating its CredentialKey dynamic fields.
+ *
+ * 每個來源對應一個 CredentialSlot（dynamic field，key = CredentialKey { source }）。
+ * 回傳各憑證的 source / tier / issuedAt / expiresAt，供扇形堆疊卡顯示。
+ *
+ * @param suiClient The SuiClient instance
+ * @param passId The SurveyPass object ID
+ * @returns Array of CredentialInfo (順序未排序；呼叫端自行排序)
+ */
+export async function fetchPassCredentials(
+  suiClient: any,
+  passId: string
+): Promise<CredentialInfo[]> {
+  if (!passId) {
+    return []
+  }
+
+  const attempt = async (): Promise<CredentialInfo[]> => {
+    const result: CredentialInfo[] = []
+    let cursor: string | null = null
+
+    // 列舉 Pass 的所有 dynamic field（即各 CredentialKey），支援分頁
+    do {
+      const page: any = await suiClient.getDynamicFields({ parentId: passId, cursor })
+      for (const df of page.data ?? []) {
+        // df.name.value 形如 { source: N }
+        const source = Number((df.name?.value as any)?.source)
+        if (!Number.isFinite(source)) continue
+
+        const fieldObj = await suiClient.getDynamicFieldObject({
+          parentId: passId,
+          name: df.name,
+        })
+        const content = fieldObj?.data?.content
+        if (content && 'fields' in content) {
+          const slot = (content.fields as any).value?.fields ?? (content.fields as any).value
+          if (slot) {
+            result.push({
+              source,
+              tier: getSourceTier(source),
+              issuedAt: Number(slot.issued_at ?? 0),
+              expiresAt: Number(slot.expires_at ?? 0),
+            })
+          }
+        }
+      }
+      cursor = page.hasNextPage ? page.nextCursor : null
+    } while (cursor)
+
+    return result
+  }
+
+  try {
+    return await attempt()
+  } catch (error) {
+    console.warn('fetchPassCredentials first attempt failed, retrying once:', error)
+    await new Promise((r) => setTimeout(r, 600))
+    try {
+      return await attempt()
+    } catch (retryError) {
+      console.error('Error in fetchPassCredentials (after retry):', retryError)
+      return []
+    }
+  }
 }
 
 /**
@@ -89,6 +194,7 @@ export async function fetchActivePass(
           const result = {
             objectId: passId,
             owner: fields.owner,
+            depositPayer: fields.deposit_payer ?? fields.owner,
             effectiveTier: Number(fields.effective_tier ?? 0),
             status: Number(fields.status ?? 0),
             expiresAt: Number(fields.expires_at ?? 0),

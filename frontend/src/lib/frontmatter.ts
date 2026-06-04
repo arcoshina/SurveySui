@@ -7,6 +7,7 @@ export interface FrontmatterData {
   maxResponses: number
   deadlineMs: number
   encryptAnswers: boolean
+  storageCompensationAmount: number
 }
 
 export type FrontmatterResult = { ok: true; data: FrontmatterData } | { ok: false; error: string }
@@ -30,6 +31,7 @@ export function parseFrontmatter(md: string): FrontmatterResult {
   const repeatRewardStr = getVal('repeatReward')
   const repeatMaxTimesStr = getVal('repeatMaxTimes')
   const encryptAnswersStr = getVal('encryptAnswers')
+  const storageCompensationAmountStr = getVal('storageCompensationAmount')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -59,7 +61,12 @@ export function parseFrontmatter(md: string): FrontmatterResult {
 
   const encryptAnswers = encryptAnswersStr === 'false' ? false : true
 
-  return { ok: true, data: { perResponse, repeatReward, repeatMaxTimes, maxResponses, deadlineMs, encryptAnswers } }
+  const storageCompensationAmount = storageCompensationAmountStr == null ? 0.01 : Number(storageCompensationAmountStr)
+  if (isNaN(storageCompensationAmount) || storageCompensationAmount < 0) {
+    return { ok: false, error: 'storageCompensationAmount 必須為非負數' }
+  }
+
+  return { ok: true, data: { perResponse, repeatReward, repeatMaxTimes, maxResponses, deadlineMs, encryptAnswers, storageCompensationAmount } }
 }
 
 export type QuestionType = 'single_choice' | 'multi_choice' | 'text' | 'scale'
@@ -70,6 +77,8 @@ export interface Question {
   prompt: string
   options_json: string[] | null
   required: boolean
+  maxLen?: number
+  shuffle?: boolean
 }
 
 export interface FullSurveyData {
@@ -84,6 +93,7 @@ export interface FullSurveyData {
   /** 0 = 無門檻；1/2 對應 KYC tier */
   minTier: number
   encryptAnswers: boolean
+  storageCompensationAmount: number
   /** 問卷說明文字（純 markdown，frontmatter 與 questions 程式碼區塊之間） */
   description: string
   questions: Question[]
@@ -154,6 +164,7 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   const repeatRewardStr = getVal('repeatReward')
   const repeatMaxTimesStr = getVal('repeatMaxTimes')
   const encryptAnswersStr = getVal('encryptAnswers')
+  const storageCompensationAmountStr = getVal('storageCompensationAmount')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -187,6 +198,11 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
 
   const encryptAnswers = encryptAnswersStr === 'false' ? false : true
 
+  const storageCompensationAmount = storageCompensationAmountStr == null ? 0.01 : Number(storageCompensationAmountStr)
+  if (isNaN(storageCompensationAmount) || storageCompensationAmount < 0) {
+    return { ok: false, error: 'storageCompensationAmount 必須為非負數' }
+  }
+
   // 2) yaml code block (questions)
   const codeBlockMatch = /^([\s\S]*?)\r?\n```yaml\r?\n([\s\S]*?)\r?\n```/m.exec(afterFm)
   if (!codeBlockMatch) {
@@ -213,6 +229,7 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
       deadlineMs,
       minTier,
       encryptAnswers,
+      storageCompensationAmount,
       description,
       questions: questionsResult.questions,
     },
@@ -266,6 +283,17 @@ function parseQuestionsYaml(
         const opt = stripQuotes(trimmed.replace(/^-\s*/, ''))
         if (!current.options_json) current.options_json = []
         current.options_json.push(opt)
+        current.shuffle = true
+      }
+      continue
+    }
+
+    // 選項列表（以 6/7 空格 數字. 起始）
+    if (/^\s{6,7}\d+\.\s/.test(line)) {
+      if (inOptions && current) {
+        const opt = stripQuotes(trimmed.replace(/^\d+\.\s*/, ''))
+        if (!current.options_json) current.options_json = []
+        current.options_json.push(opt)
       }
       continue
     }
@@ -287,8 +315,11 @@ function parseQuestionsYaml(
 
   flush()
 
+  const ids = new Set<string>()
   for (const q of questions) {
     if (!q.id) return { ok: false, error: `題目缺少 id：${q.prompt || '(空 prompt)'}` }
+    if (ids.has(q.id)) return { ok: false, error: `題目 ID 重複：${q.id}` }
+    ids.add(q.id)
     if (!q.prompt) return { ok: false, error: `題目 ${q.id} 缺少 prompt` }
   }
 
@@ -302,6 +333,12 @@ function applyQuestionField(q: Question, key: string, value: string): void {
     if (t) q.type = t
   } else if (key === 'prompt') q.prompt = value
   else if (key === 'required') q.required = value === 'true'
+  else if (key === 'max_len') {
+    const num = Number(value)
+    if (!isNaN(num) && num > 0) {
+      q.maxLen = num
+    }
+  }
 }
 
 export interface SerializeOptions {
@@ -330,6 +367,7 @@ export function serializeFullSurveyToMarkdown(
     `deadline: ${quoteString(deadlineIso)}`,
     `minTier: ${data.minTier}`,
     `encryptAnswers: ${data.encryptAnswers !== false ? 'true' : 'false'}`,
+    `storageCompensationAmount: ${data.storageCompensationAmount ?? 0.01}`,
     `draftStamp: ${quoteString(draftStamp)}`,
     '---',
   ]
@@ -340,10 +378,21 @@ export function serializeFullSurveyToMarkdown(
     questionLines.push(`    type: ${QUESTION_TYPE_TO_YAML[q.type]}`)
     questionLines.push(`    prompt: ${quoteString(q.prompt)}`)
     questionLines.push(`    required: ${q.required ? 'true' : 'false'}`)
+    if (q.type === 'text' && q.maxLen !== undefined && q.maxLen !== null) {
+      questionLines.push(`    max_len: ${q.maxLen}`)
+    }
     if (q.options_json && q.options_json.length > 0) {
       questionLines.push('    options:')
-      for (const opt of q.options_json) {
-        questionLines.push(`      - ${quoteString(opt)}`)
+      if (q.shuffle) {
+        for (const opt of q.options_json) {
+          questionLines.push(`      - ${quoteString(opt)}`)
+        }
+      } else {
+        let oIdx = 1
+        for (const opt of q.options_json) {
+          questionLines.push(`      ${oIdx}. ${quoteString(opt)}`)
+          oIdx++
+        }
       }
     }
   }
@@ -377,7 +426,43 @@ export function makeBlankSurveyData(): FullSurveyData {
     deadlineMs: future.getTime(),
     minTier: 0,
     encryptAnswers: true,
+    storageCompensationAmount: 0.01,
     description: '',
     questions: [],
   }
+}
+
+export function sanitizeQuestionIds(questions: Question[]): Question[] {
+  const usedIds = new Set<string>()
+  return questions.map((q, idx) => {
+    let uniqueId = q.id || `q_${idx + 1}`
+    let counter = 1
+    while (usedIds.has(uniqueId)) {
+      uniqueId = `${q.id || 'q'}_${counter}`
+      counter++
+    }
+    usedIds.add(uniqueId)
+
+    // 清洗選項列表中的重複選項
+    let sanitizedOptions: string[] | null = null
+    if (q.options_json) {
+      const usedOpts = new Set<string>()
+      sanitizedOptions = q.options_json.map((opt) => {
+        let uniqueOpt = opt
+        let optCounter = 1
+        while (usedOpts.has(uniqueOpt)) {
+          uniqueOpt = `${opt}_${optCounter}`
+          optCounter++
+        }
+        usedOpts.add(uniqueOpt)
+        return uniqueOpt
+      })
+    }
+
+    return {
+      ...q,
+      id: uniqueId,
+      options_json: sanitizedOptions,
+    }
+  })
 }

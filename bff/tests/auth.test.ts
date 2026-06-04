@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { otpStore } from '../src/auth/otpStore.js'
-import { computeNullifierHash, signTicket } from '../src/auth/ticket.js'
+
+vi.mock('../src/email/sender.js', () => ({
+  sendOtpEmail: vi.fn().mockResolvedValue(undefined),
+}))
+import { computeNullifierHash, computeEmailSecondaryNullifier, signTicket, getPassTtlMs } from '../src/auth/ticket.js'
 import { registerAuthRoutes } from '../src/auth/handler.js'
 
 describe('BFF Authentication & Ticket Tests', () => {
@@ -71,10 +75,11 @@ describe('BFF Authentication & Ticket Tests', () => {
       const commitment = new Uint8Array(0)
       const expiresAt = Date.now() + 3600000
 
-      const ticket = await signTicket(owner, source, nullifierHash, commitment, expiresAt)
+      const ticket = await signTicket(owner, source, [nullifierHash], commitment, expiresAt)
       expect(ticket.bff_sig).toBeDefined()
       expect(ticket.expires_at).toBe(BigInt(expiresAt).toString())
-      expect(ticket.nullifier_hash).toBe(Buffer.from(nullifierHash).toString('hex'))
+      expect(ticket.nullifiers).toHaveLength(1)
+      expect(ticket.nullifiers[0]).toBe(Buffer.from(nullifierHash).toString('hex'))
     })
   })
 
@@ -134,7 +139,8 @@ describe('BFF Authentication & Ticket Tests', () => {
       const ticketData = JSON.parse(verifyResponse.payload)
       expect(ticketData.bff_sig).toBeDefined()
       expect(ticketData.expires_at).toBeDefined()
-      expect(ticketData.nullifier_hash).toBeDefined()
+      expect(Array.isArray(ticketData.nullifiers)).toBe(true)
+      expect(ticketData.nullifiers).toHaveLength(1)
       expect(ticketData.source).toBe(2)
     })
 
@@ -156,6 +162,60 @@ describe('BFF Authentication & Ticket Tests', () => {
       expect(verifyResponse.statusCode).toBe(401)
       const errData = JSON.parse(verifyResponse.payload)
       expect(errData.error).toBe('Invalid or expired OTP code')
+    })
+  })
+
+  // 差異化 TTL：getPassTtlMs 依來源回傳不同有效期
+  describe('getPassTtlMs (per-source TTL)', () => {
+    const SRC_EMAIL = 2
+    const SRC_SOCIAL = 3
+    const SRC_WORLD_ID = 5
+    const SRC_SOCIAL_GOOGLE = 6
+    const SRC_SOCIAL_GITHUB = 7
+    const ONE_DAY = 24 * 60 * 60 * 1000
+    const ONE_MONTH = 30 * ONE_DAY
+
+    afterEach(() => {
+      delete process.env.BFF_PASS_TTL_MS
+      delete process.env.BFF_PASS_TTL_MS_EMAIL
+      delete process.env.BFF_PASS_TTL_MS_SOCIAL
+      delete process.env.BFF_PASS_TTL_MS_WORLDID
+    })
+
+    it('uses per-source defaults when no env set (Email/social 3mo, World ID 1yr)', () => {
+      expect(getPassTtlMs(SRC_EMAIL)).toBe(3 * ONE_MONTH)
+      expect(getPassTtlMs(SRC_SOCIAL)).toBe(3 * ONE_MONTH)
+      expect(getPassTtlMs(SRC_SOCIAL_GOOGLE)).toBe(3 * ONE_MONTH)
+      expect(getPassTtlMs(SRC_SOCIAL_GITHUB)).toBe(3 * ONE_MONTH)
+      expect(getPassTtlMs(SRC_WORLD_ID)).toBe(365 * ONE_DAY)
+    })
+
+    it('uses global BFF_PASS_TTL_MS when no per-source env', () => {
+      process.env.BFF_PASS_TTL_MS = '60000'
+      expect(getPassTtlMs(SRC_EMAIL)).toBe(60000)
+      expect(getPassTtlMs(SRC_SOCIAL)).toBe(60000)
+    })
+
+    it('per-source env overrides global', () => {
+      process.env.BFF_PASS_TTL_MS = '60000'
+      process.env.BFF_PASS_TTL_MS_WORLDID = '999000'
+      expect(getPassTtlMs(SRC_WORLD_ID)).toBe(999000)
+      expect(getPassTtlMs(SRC_EMAIL)).toBe(60000) // 無專屬 → 用全域
+    })
+
+    it('ignores invalid / non-positive env values and falls back to per-source default', () => {
+      process.env.BFF_PASS_TTL_MS_EMAIL = 'abc'
+      process.env.BFF_PASS_TTL_MS_SOCIAL = '0'
+      expect(getPassTtlMs(SRC_EMAIL)).toBe(3 * ONE_MONTH)
+      expect(getPassTtlMs(SRC_SOCIAL)).toBe(3 * ONE_MONTH)
+    })
+
+    it('maps specific social providers (google=6/github=7) to the SOCIAL TTL', () => {
+      process.env.BFF_PASS_TTL_MS_SOCIAL = '123000'
+      expect(getPassTtlMs(SRC_SOCIAL_GOOGLE)).toBe(123000)
+      expect(getPassTtlMs(SRC_SOCIAL_GITHUB)).toBe(123000)
+      // 與泛稱社群一致
+      expect(getPassTtlMs(SRC_SOCIAL)).toBe(123000)
     })
   })
 })

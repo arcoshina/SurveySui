@@ -26,19 +26,12 @@
 在 repo 根目錄執行：
 
 ```powershell
-pwsh docs/Reset/redeploy-devnet.ps1
+docs/Reset/redeploy-devnet.ps1
 ```
 
-腳本會依序做 6 件事，全程不需互動：
-
-| 步驟 | 動作                                                                                                                                                                                                         |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1    | `sui client switch --env devnet` 切到 devnet 並設為 active env                                                                                                                                               |
-| 2    | 對 `.env` 中的 `SUI_ADMIN_ADDRESS` 領一次 devnet faucet                                                                                                                                                      |
-| 3    | 刪掉 `contracts/Pub.devnet.toml` 與 `contracts/Move.lock` 中的 `[env.devnet]` 區塊（避免 stale chain-id 阻擋 publish）                                                                                       |
-| 4    | 跑 `pnpm deploy:Devnet`（= `tsx scripts/src/init.ts`），完成 publish + `amm_pool::init_pool` + `survey_pass::set_issuer_pubkey`，並把 7 個新 ID 寫進 root `.env`、`.env.shared`、`frontend/.env`、`bff/.env` |
-| 5    | 從更新後的 `.env` 印出 7 個新合約 ID                                                                                                                                                                         |
-| 6    | 印出後續手動步驟（重啟服務、清 localStorage）                                                                                                                                                                |
+```CMD
+pwsh docs/Reset/redeploy-devnet.ps1
+```
 
 跑完應該看到：
 
@@ -63,6 +56,29 @@ ISSUER_CONFIG_ID=0x...
 4. （選擇性）**DB 清理**：`surveysui_dev` 內 `surveys` 表若有舊 `package_id` 紀錄，自行決定是否 `TRUNCATE`，本腳本不會動 DB。
 
 5. **執行 `npx tsx scratch/fund_issuer.ts` 補 gas**
+
+---
+
+## Tier 1 認證方案環境變數（2026-05-28 起）
+
+合約已升級為多 nullifier（`nullifiers: vector<vector<u8>>`）。devnet reset 後腳本不需修改，但需確認以下環境變數已設定：
+
+### `bff/.env` 必填項（Tier 1）
+
+# zkLogin salt（保持固定，換了 salt 會使現有 Sui 地址失效）
+
+### `frontend/.env` 必填項（Tier 1）
+
+```
+VITE_GOOGLE_CLIENT_ID=
+VITE_FACEBOOK_CLIENT_ID=
+VITE_TWITCH_CLIENT_ID=
+VITE_KAKAO_CLIENT_ID=
+VITE_APPLE_CLIENT_ID=
+VITE_SLACK_CLIENT_ID=
+```
+
+> **注意**：`ZKLOGIN_SALT_SECRET` 決定 zkLogin 用戶的 Sui 地址推導，一旦設定後嚴禁更換，否則所有 zkLogin 用戶的地址會變更。
 
 ---
 

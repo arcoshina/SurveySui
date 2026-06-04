@@ -30,6 +30,16 @@
         }
       })();
     </script>
+    <script>
+      // 在 React 載入前依 ?lang / localStorage / 系統語言預設 html lang，避免首屏閃動
+      (function() {
+        const url = new URLSearchParams(location.search).get('lang');
+        const saved = localStorage.getItem('surveysui:lang');
+        const nav = (navigator.language || '').toLowerCase();
+        const raw = (url || saved || (nav.indexOf('zh') === 0 ? 'zh' : 'en')).toLowerCase();
+        document.documentElement.lang = raw.indexOf('zh') === 0 ? 'zh-TW' : 'en';
+      })();
+    </script>
 
     <title>SurveySui — Sui 區塊鏈問卷平台</title>
     <meta

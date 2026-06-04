@@ -2,7 +2,8 @@ export interface SurveyClaimedEvent {
   vault_id: string
   sub_hash: number[]
   respondent: string
-  encrypted_answers: number[]
+  encrypted_answers: number[] | null
+  answer_blob_id: number[] | null
   claimed_at_ms: number
 }
 

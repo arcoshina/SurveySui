@@ -35,3 +35,12 @@ contracts/build/
 frontend/test-results/
 frontend/playwright-report/
 .gstack/
+
+# Backup files
+*.bak
+
+# Dev scratch
+scratch/
+
+# BFF runtime data (auto-generated ledger)
+bff/data/

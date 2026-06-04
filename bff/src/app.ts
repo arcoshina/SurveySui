@@ -7,6 +7,8 @@ import { registerStatsRoutes } from './stats/handler.js'
 import { registerOgRoutes } from './og/handler.js'
 import { registerAuthRoutes } from './auth/handler.js'
 import { registerGasRoutes } from './gas/handler.js'
+import { registerPassRoutes } from './pass/handler.js'
+import { registerStorageRoutes } from './storage/handler.js'
 
 export interface BffAppDeps {
   suiClient: SuiClient
@@ -24,5 +26,7 @@ export async function buildApp(deps: BffAppDeps): Promise<FastifyInstance> {
   registerOgRoutes(app, { frontendUrl: deps.frontendUrl ?? 'http://localhost:5173' })
   registerAuthRoutes(app)
   registerGasRoutes(app, deps)
+  registerPassRoutes(app, deps)
+  registerStorageRoutes(app, deps)
   return app
 }

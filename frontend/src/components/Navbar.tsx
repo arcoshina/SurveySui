@@ -4,6 +4,7 @@ import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit'
 import { Sun, Moon, Languages, Menu, X } from 'lucide-react'
 import { useLanguage } from '../context/LanguageContext'
 import { useTheme } from '../context/ThemeContext'
+import { useT } from '../i18n'
 
 export default function Navbar() {
   const account = useCurrentAccount()
@@ -11,11 +12,12 @@ export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  // 1. Language Toggle (using global LanguageContext)
-  const { lang, toggleLang } = useLanguage()
-
-  // 2. Dark/Light Theme Toggle (using global ThemeContext)
+  const { toggleLang } = useLanguage()
   const { isDark, toggleTheme } = useTheme()
+  const t = useT('navbar')
+
+  // 有效身份：連接的 Sui 錢包
+  const activeAddress = account?.address ?? null
 
   // 點選選單外部時關閉
   useEffect(() => {
@@ -44,14 +46,14 @@ export default function Navbar() {
     `inline-flex items-center h-9 text-sm font-normal transition-colors px-3 rounded-lg ${
       isActive(path)
         ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-        : 'text-neutral-650 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
+        : 'text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
     }`
 
   const menuItemClass = (path: string) =>
     `block w-full text-left text-sm font-normal transition-colors py-2 px-3 rounded-lg ${
       isActive(path)
         ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-        : 'text-neutral-650 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
+        : 'text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
     }`
 
   return (
@@ -70,19 +72,19 @@ export default function Navbar() {
         <div className="flex items-center gap-2">
           {/* Desktop nav links */}
           <nav className="hidden sm:flex items-center gap-1">
-            {account && (
+            {activeAddress && (
               <>
                 <Link to="/auth" className={linkClass('/auth')}>
-                  {lang === 'ZH' ? '誰位通證' : 'SurveyPass'}
+                  {t.surveyPass}
                 </Link>
                 <Link to="/dashboard" className={linkClass('/dashboard')}>
-                  {lang === 'ZH' ? '儀表板' : 'Dashboard'}
+                  {t.dashboard}
                 </Link>
               </>
             )}
           </nav>
 
-          {/* Wallet Connect Button (always visible) */}
+          {/* Wallet Connect Button（連接 / 帳號膠囊） */}
           <div className="[&_button]:shadow-none! [&_button]:h-9 [&_button]:py-0 [&_button]:px-3 [&_button]:text-sm [&_button]:leading-none">
             <ConnectButton />
           </div>
@@ -92,8 +94,8 @@ export default function Navbar() {
             type="button"
             onClick={toggleLang}
             className="hidden sm:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
-            aria-label={lang === 'ZH' ? '切換為英文' : 'Switch to Chinese'}
-            title={lang === 'ZH' ? '切換為英文' : 'Switch to Chinese'}
+            aria-label={t.switchLang}
+            title={t.switchLang}
           >
             <Languages size={18} />
           </button>
@@ -101,8 +103,8 @@ export default function Navbar() {
             type="button"
             onClick={toggleTheme}
             className="hidden sm:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
-            aria-label={isDark ? '切換為亮色模式' : 'Switch to Dark Mode'}
-            title={isDark ? '切換為亮色模式' : 'Switch to Dark Mode'}
+            aria-label={isDark ? t.themeToLight : t.themeToDark}
+            title={isDark ? t.themeToLight : t.themeToDark}
           >
             {isDark ? <Sun size={18} /> : <Moon size={18} />}
           </button>
@@ -113,45 +115,39 @@ export default function Navbar() {
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
               className="flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
-              aria-label="開啟選單"
+              aria-label={t.openMenu}
             >
               {menuOpen ? <X size={18} /> : <Menu size={18} />}
             </button>
 
             {menuOpen && (
-              <div className="absolute right-0 top-full mt-2 w-44 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg py-1 flex flex-col gap-0.5 px-1">
-                {account && (
+              <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg py-1 flex flex-col gap-0.5 px-1">
+                {activeAddress && (
                   <>
                     <Link to="/auth" className={menuItemClass('/auth')}>
-                      {lang === 'ZH' ? '誰位通證' : 'SurveyPass'}
+                      {t.surveyPass}
                     </Link>
                     <Link to="/dashboard" className={menuItemClass('/dashboard')}>
-                      {lang === 'ZH' ? '儀表板' : 'Dashboard'}
+                      {t.dashboard}
                     </Link>
                     <hr className="border-neutral-100 dark:border-neutral-800 my-1" />
                   </>
                 )}
                 <button
                   type="button"
-                  onClick={() => {
-                    toggleLang()
-                    setMenuOpen(false)
-                  }}
-                  className="flex items-center gap-2 w-full text-left text-sm font-semibold py-2 px-3 rounded-lg text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+                  onClick={() => { toggleLang(); setMenuOpen(false) }}
+                  className="flex items-center gap-2 w-full text-left text-sm font-normal py-2 px-3 rounded-lg text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
                 >
                   <Languages size={16} />
-                  {lang === 'ZH' ? '切換為英文' : 'Switch to Chinese'}
+                  {t.switchLang}
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    toggleTheme()
-                    setMenuOpen(false)
-                  }}
-                  className="flex items-center gap-2 w-full text-left text-sm font-semibold py-2 px-3 rounded-lg text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+                  onClick={() => { toggleTheme(); setMenuOpen(false) }}
+                  className="flex items-center gap-2 w-full text-left text-sm font-normal py-2 px-3 rounded-lg text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
                 >
                   {isDark ? <Sun size={16} /> : <Moon size={16} />}
-                  {isDark ? '切換為亮色' : '切換為深色'}
+                  {isDark ? t.themeToLight : t.themeToDark}
                 </button>
               </div>
             )}

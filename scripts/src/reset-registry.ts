@@ -14,13 +14,15 @@
  * 跑完會：
  *   1. 重新 publish package
  *   2. 重新 init_pool
- *   3. 把新 ID 寫進 root `.env`、`.env.shared`、`frontend/.env`
+ *   3. set_issuer_pubkey（否則鏈上驗 ticket 簽章 abort 1）
+ *   4. 把新 ID 寫進 root `.env`、`.env.shared`、`frontend/.env`、`bff/.env`
  *   4. 印出下一步（重啟 BFF / 重啟 vite dev server）
  */
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
+import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { requireEnv } from './env.js'
 import { deployPackage, initAmmPool, writeEnvShared } from './init.js'
@@ -72,6 +74,34 @@ async function main() {
 
   const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
 
+  // Set Issuer Pubkey in the fresh IssuerConfig（否則鏈上驗 BFF ticket 簽章必失敗 = abort 1）。
+  // 私鑰優先讀 bff/.env（init.ts 只 dotenv 載 root .env，故這裡須顯式撈 bff/.env），最後 fallback dev key。
+  let issuerPrivHex = process.env.SURVEY_PASS_ISSUER_PRIV
+  if (!issuerPrivHex) {
+    issuerPrivHex = '0101010101010101010101010101010101010101010101010101010101010101'
+  }
+  const issuerPrivClean = issuerPrivHex.startsWith('0x') ? issuerPrivHex.slice(2) : issuerPrivHex
+  const issuerKeypair = Ed25519Keypair.fromSecretKey(
+    new Uint8Array(Buffer.from(issuerPrivClean, 'hex')).slice(0, 32)
+  )
+  const issuerPubkeyBytes = issuerKeypair.getPublicKey().toRawBytes()
+
+  console.log('Setting issuer public key on-chain…')
+  const setPubkeyTx = new Transaction()
+  setPubkeyTx.moveCall({
+    target: `${packageId}::survey_pass::set_issuer_pubkey`,
+    arguments: [
+      setPubkeyTx.object(issuerConfigId),
+      setPubkeyTx.pure.vector('u8', Array.from(issuerPubkeyBytes)),
+    ],
+  })
+  const setPubkeyResult = await client.signAndExecuteTransaction({
+    transaction: setPubkeyTx,
+    signer: keypair,
+  })
+  await client.waitForTransaction({ digest: setPubkeyResult.digest })
+  console.log(`  Issuer public key set: ${Buffer.from(issuerPubkeyBytes).toString('hex')}`)
+
   writeEnvShared({
     SUI_PACKAGE_ID: packageId,
     SR_TREASURY_ID: srTreasuryId,
@@ -82,19 +112,7 @@ async function main() {
     ISSUER_CONFIG_ID: issuerConfigId,
   })
 
-  const frontendEnvPath = resolve(__dirname, '../../frontend/.env')
-  mergeEnvFile(frontendEnvPath, {
-    VITE_PACKAGE_ID: packageId,
-    VITE_SR_TREASURY_ID: srTreasuryId,
-    VITE_SSR_TREASURY_ID: ssrTreasuryId,
-    VITE_AMM_POOL_ID: poolId,
-    VITE_SURVEY_REGISTRY_ID: surveyRegistryId,
-    VITE_PASS_REGISTRY_ID: nullifierRegistryId,
-    VITE_NULLIFIER_REGISTRY_ID: nullifierRegistryId,
-    VITE_ISSUER_CONFIG_ID: issuerConfigId,
-    VITE_ADMIN_ADDRESS: adminAddress,
-    VITE_BFF_URL: 'http://localhost:3100',
-  })
+
 
   console.log('\n✅ Reset 完成。下一步：')
   console.log('   1. 重啟 BFF：在 bff/ 目錄 Ctrl+C 後 `pnpm dev`')

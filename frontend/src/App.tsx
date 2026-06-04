@@ -11,6 +11,7 @@ const LandingPage = lazy(() => import('./pages/LandingPage'))
 const SurveyPage = lazy(() => import('./pages/SurveyPage'))
 const AuthPage = lazy(() => import('./pages/AuthPage'))
 const StyleGuidePage = lazy(() => import('./pages/StyleGuidePage'))
+const GuidePage = lazy(() => import('./pages/GuidePage'))
 
 function DashboardPageWrapper() {
   const { vaultId } = useParams<{ vaultId: string }>()
@@ -35,6 +36,7 @@ export function AppRoutes() {
         <Route path="/dashboard/:vaultId" element={<DashboardPageWrapper />} />
         <Route path="/results/:vaultId" element={<ResultsPageWrapper />} />
         <Route path="/auth" element={<AuthPage />} />
+        <Route path="/guide" element={<GuidePage />} />
         <Route path="/style-guide" element={<StyleGuidePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -44,11 +46,11 @@ export function AppRoutes() {
 
 export default function App() {
   return (
-    <LanguageProvider>
-      <BrowserRouter>
+    <BrowserRouter>
+      <LanguageProvider>
         <Navbar />
         <AppRoutes />
-      </BrowserRouter>
-    </LanguageProvider>
+      </LanguageProvider>
+    </BrowserRouter>
   )
 }

@@ -11,68 +11,10 @@ import {
   type SurveyClaimedEvent,
   type DecryptedResponse,
 } from '../lib/dashboardDecrypt'
-import { parseFullSurveyMarkdown, type Question, type FullSurveyData } from '../lib/frontmatter'
+import { parseFullSurveyMarkdown, type Question, type FullSurveyData, sanitizeQuestionIds } from '../lib/frontmatter'
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
-import { useLanguage } from '../context/LanguageContext'
-
-const content = {
-  ZH: {
-    title: '問卷統計結果',
-    subtitle: '統計結果圖表',
-    loading: '正在加載問卷統計數據...',
-    errLoadFailed: '載入問卷失敗，請確認 Vault ID 是否正確。',
-    errEncrypted: '此問卷設定為「加密答卷」，答卷數據已在鏈上加密保護。只有問卷發起人可以使用錢包簽名解密並查看統計結果，無法公開展示。',
-    noResponses: '目前尚無人填答此問卷。請等待受訪者提交後再回來查看統計。',
-    statResponseCount: '回覆數',
-    statResponseProgress: '回覆進度',
-    statDeadline: '截止時間',
-    responsesTitlePublic: '統計圖表',
-    displayCount: (n: number) => `顯示 ${n} 筆`,
-    csvTooltipPublic: 'CSV 檔案將包含簡答題的明文內容，但不會包含任何受訪者錢包地址。',
-    downloadCsvPublic: '匯出數據 (CSV)',
-    questionTypeText: '簡答題',
-    textAnswersHiddenInfo: '圖表將不會列出簡答內容',
-    questionTypeSingle: '單選題',
-    questionTypeMulti: '複選題',
-    questionTypeScale: '評分題',
-    backToSurvey: '← 返回填答頁面',
-    metaUnavailable: '暫無設定資訊',
-    statusLabel: '問卷狀態',
-    statusActive: '進行中',
-    statusFull: '已額滿',
-    statusClosed: '已結束',
-    statusClosedAt: (ts: string) => `已結束於 ${ts}`,
-    questionIndex: (n: number) => `第 ${n} 題`,
-  },
-  EN: {
-    title: 'Survey Statistics',
-    subtitle: 'Statistical Results Charts',
-    loading: 'Loading statistics data...',
-    errLoadFailed: 'Failed to load survey. Please check your Vault ID.',
-    errEncrypted: 'This survey is configured with "Encrypted Responses". The response data is securely encrypted on-chain. Only the survey creator can sign with their wallet to decrypt and view results; it cannot be displayed publicly.',
-    noResponses: 'No responses yet. Please wait for submissions before checking statistics.',
-    statResponseCount: 'Responses',
-    statResponseProgress: 'Progress',
-    statDeadline: 'End Time',
-    responsesTitlePublic: 'Statistics Charts',
-    displayCount: (n: number) => `Showing ${n} entries`,
-    csvTooltipPublic: 'The CSV file will include plaintext answers for text questions, but will not contain any respondent wallet addresses.',
-    downloadCsvPublic: 'Export Data (CSV)',
-    questionTypeText: 'Text',
-    textAnswersHiddenInfo: 'Text answers are not displayed in the charts.',
-    questionTypeSingle: 'Single Choice',
-    questionTypeMulti: 'Multiple Choice',
-    questionTypeScale: 'Scale',
-    backToSurvey: '← Back to Survey Page',
-    metaUnavailable: 'No settings available',
-    statusLabel: 'Status',
-    statusActive: 'Active',
-    statusFull: 'Full',
-    statusClosed: 'Closed',
-    statusClosedAt: (ts: string) => `Closed ${ts}`,
-    questionIndex: (n: number) => `Question ${n}`,
-  },
-}
+import { useT } from '../i18n'
+import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 function normalizeSuiId(id: string): string {
   if (!id) return ''
@@ -81,6 +23,31 @@ function normalizeSuiId(id: string): string {
     cleaned = cleaned.slice(2)
   }
   return cleaned.padStart(64, '0')
+}
+
+function getOptionVec(opt: any): Uint8Array | null {
+  if (!opt) return null
+  if (Array.isArray(opt)) {
+    if (opt.length === 0) return null
+    const first = opt[0]
+    if (Array.isArray(first)) {
+      return new Uint8Array(first.map(Number))
+    } else if (typeof first === 'string') {
+      return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
+    }
+    return new Uint8Array(opt.map(Number))
+  }
+  const vec = opt.fields?.vec || opt.vec
+  if (!Array.isArray(vec) || vec.length === 0) return null
+  const first = vec[0]
+  if (Array.isArray(first)) {
+    return new Uint8Array(first.map(Number))
+  } else if (typeof first === 'string') {
+    return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
+  } else if (typeof (vec as any) === 'string') {
+    return new Uint8Array((vec as any).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
+  }
+  return new Uint8Array(vec.map(Number))
 }
 
 function formatDateTime(ms: number) {
@@ -109,8 +76,7 @@ function getPackageId(): string {
 export default function ResultsPage() {
   const { vaultId } = useParams<{ vaultId: string }>()
   const suiClient = useSuiClient()
-  const { lang } = useLanguage()
-  const t = content[lang]
+  const t = useT('results')
   const [surveyTitle, setSurveyTitle] = useState<string>('')
 
   // ── 鏈上 vault 物件 ────────────────────────────────────────────────────────
@@ -221,8 +187,6 @@ export default function ResultsPage() {
     const newHash = bytesToHex(hashBytes)
     setSchemaHashStr(newHash)
 
-    let rawContent = normalizeBytes(fields.encrypted_content)
-
     function applyMeta(data: FullSurveyData) {
       setSurveyMeta({
         minTier: data.minTier,
@@ -234,21 +198,39 @@ export default function ResultsPage() {
       })
     }
 
-    if (rawContent.length >= 32) {
+    async function loadQuestions() {
       try {
-        const md = new TextDecoder().decode(rawContent.slice(32))
-        const parsed = parseFullSurveyMarkdown(md)
-        if (parsed.ok) {
-          setQuestions(parsed.data.questions)
-          applyMeta(parsed.data)
-          if (parsed.data.title) {
-            setSurveyTitle(parsed.data.title)
+        const surveyBlobIdBytes = getOptionVec(fields.survey_blob_id)
+        let rawContent: Uint8Array
+
+        if (surveyBlobIdBytes) {
+          const blobId = new TextDecoder().decode(surveyBlobIdBytes)
+          rawContent = await downloadFromDecentralizedStorage(blobId)
+        } else {
+          const encryptedContentBytes = getOptionVec(fields.encrypted_content)
+          if (!encryptedContentBytes) {
+            throw new Error('Survey content data corrupted')
+          }
+          rawContent = encryptedContentBytes
+        }
+
+        if (rawContent.length >= 32) {
+          const md = new TextDecoder().decode(rawContent.slice(32))
+          const parsed = parseFullSurveyMarkdown(md)
+          if (parsed.ok) {
+            setQuestions(sanitizeQuestionIds(parsed.data.questions))
+            applyMeta(parsed.data)
+            if (parsed.data.title) {
+              setSurveyTitle(parsed.data.title)
+            }
           }
         }
       } catch (err) {
         console.error('[ResultsPage] Failed to parse survey questions:', err)
       }
     }
+
+    void loadQuestions()
   }, [surveyData])
 
   // 3. 獲取填答 Events (僅在確認 encryptAnswers === false 時執行)
@@ -331,12 +313,12 @@ export default function ResultsPage() {
   if (isEncrypted) {
     return (
       <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
-        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-850 shadow-xl p-8 text-center space-y-5 animate-fadeIn w-full">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-5 animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-amber-50 text-amber-500 border border-amber-100">
             <AlertTriangle size={24} />
           </div>
-          <h2 className="text-h2 text-amber-800 dark:text-amber-400">{lang === 'ZH' ? '受保護的資料' : 'Protected Data'}</h2>
-          <p role="alert" className="text-sm text-slate-600 dark:text-neutral-300 leading-relaxed text-left bg-slate-50 dark:bg-neutral-950 p-4 rounded-xl border border-neutral-100 dark:border-neutral-850">
+          <h2 className="text-h2 text-amber-800 dark:text-amber-400">{t.protectedData}</h2>
+          <p role="alert" className="text-sm text-slate-600 dark:text-neutral-300 leading-relaxed text-left bg-slate-50 dark:bg-neutral-950 p-4 rounded-xl border border-neutral-100 dark:border-neutral-800">
             {t.errEncrypted}
           </p>
           {surveyId && (

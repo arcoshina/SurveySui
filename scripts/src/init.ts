@@ -62,25 +62,39 @@ function buildPackage(): { modules: string[]; dependencies: string[] } {
   return { modules: parsed.modules, dependencies: parsed.dependencies }
 }
 
-function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
-  const existing: Record<string, string> = {}
+/**
+ * 將 `updates` 合併進 env 檔，逐行保留原檔內容（含註解、空行、排序）。
+ * 既有鍵就地換值；原檔不存在的鍵附加到檔尾。idempotent：重跑不重複附加、
+ * 不持續增生空行。
+ *
+ * 為何不重寫整檔：舊版只擷取 `KEY=VALUE` 再純值重寫，會洗掉 `.env` 的所有
+ * 註解與空行——每次 `pnpm deploy:Devnet` 都摧毀人為文件化的設定。
+ */
+export function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
+  const remaining = new Set(Object.keys(updates))
+  let lines: string[] = []
   if (existsSync(filePath)) {
-    for (const line of readFileSync(filePath, 'utf8').split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-      const idx = trimmed.indexOf('=')
-      if (idx === -1) continue
-      existing[trimmed.slice(0, idx)] = trimmed.slice(idx + 1)
-    }
+    lines = readFileSync(filePath, 'utf8')
+      .split('\n')
+      .map((line) => {
+        const trimmed = line.trim()
+        // 原樣保留註解與空行。
+        if (!trimmed || trimmed.startsWith('#')) return line
+        const idx = trimmed.indexOf('=')
+        if (idx === -1) return line
+        const key = trimmed.slice(0, idx)
+        if (key in updates) {
+          remaining.delete(key)
+          return `${key}=${updates[key]}` // 就地更新既有鍵的值
+        }
+        return line
+      })
   }
-  const merged = { ...existing, ...updates }
-  writeFileSync(
-    filePath,
-    Object.entries(merged)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n') + '\n',
-    'utf8'
-  )
+  // 移除最後一行因檔尾換行而產生的空字串，避免每次跑都多疊一行空白。
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  // 附加原檔不存在的新鍵。
+  for (const key of remaining) lines.push(`${key}=${updates[key]}`)
+  writeFileSync(filePath, lines.join('\n') + '\n', 'utf8')
 }
 
 // ── exported functions ────────────────────────────────────────────────────────
@@ -303,32 +317,7 @@ async function main() {
     ISSUER_CONFIG_ID: issuerConfigId,
   })
 
-  // 4. Write VITE_* variables to frontend/.env
-  const frontendEnvPath = resolve(__dirname, '../../frontend/.env')
-  mergeEnvFile(frontendEnvPath, {
-    VITE_PACKAGE_ID: packageId,
-    VITE_SR_TREASURY_ID: srTreasuryId,
-    VITE_SSR_TREASURY_ID: ssrTreasuryId,
-    VITE_AMM_POOL_ID: poolId,
-    VITE_SURVEY_REGISTRY_ID: surveyRegistryId,
-    VITE_PASS_REGISTRY_ID: nullifierRegistryId,
-    VITE_NULLIFIER_REGISTRY_ID: nullifierRegistryId,
-    VITE_ISSUER_CONFIG_ID: issuerConfigId,
-    VITE_ADMIN_ADDRESS: adminAddress,
-    VITE_BFF_URL: 'http://localhost:3100',
-  })
-  console.log(`\nWritten VITE_* variables to frontend/.env`)
 
-  // 5. Write variables to bff/.env
-  const bffEnvPath = resolve(__dirname, '../../bff/.env')
-  if (existsSync(bffEnvPath)) {
-    mergeEnvFile(bffEnvPath, {
-      SUI_PACKAGE_ID: packageId,
-      PASS_REGISTRY_ID: nullifierRegistryId,
-      ISSUER_CONFIG_ID: issuerConfigId,
-    })
-    console.log(`Written variables to bff/.env`)
-  }
 
   // 5. Verify pool is live
   const state = await queryPoolState(client, poolId)

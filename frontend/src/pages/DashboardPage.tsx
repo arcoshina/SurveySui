@@ -19,208 +19,46 @@ import {
   type SurveyClaimedEvent,
   type DecryptedResponse,
 } from '../lib/dashboardDecrypt'
-import { buildClosePtb } from '../lib/ptb'
-import { formatSsr, formatFullPrecision } from '../lib/format'
+import { buildClosePtb, buildPurgePtb, PURGE_GRACE_MS } from '../lib/ptb'
+import { formatSsr, formatSui, formatFullPrecision, formatCompactInt, formatCompactCoin } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
   base64urlToBytes,
   deriveCreatorKeyPair,
   decryptSurveyContent,
 } from '../lib/crypto'
-import { parseFullSurveyMarkdown, type Question, type FullSurveyData } from '../lib/frontmatter'
+import { parseFullSurveyMarkdown, type Question, type FullSurveyData, sanitizeQuestionIds } from '../lib/frontmatter'
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
 import QRCode from 'qrcode'
-import { useLanguage } from '../context/LanguageContext'
+import { useT } from '../i18n'
+import { Globe, Zap } from 'lucide-react'
+import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 const SURVEY_KEY_PREFIX = 'surveysui:survey:'
 
-const content = {
-  ZH: {
-    dashboardTitle: '我的儀表板',
-    dashboardDescPrefix: '管理您發布的所有問卷調查。',
-    dashboardDescStrong: '點擊列表中任何問卷卡片',
-    dashboardDescSuffix: '，即可進入查看詳細數據與填答明細。',
-    btnCreateSurvey: '＋ 建立問卷',
-    walletRequired: '需要連接錢包',
-    walletRequiredDesc: '請先連接您的 Sui 錢包，以讀取並管理您所發布的問卷。',
-    loadingSurveys: '正在從 Sui 區塊鏈加載問卷清單及狀態...',
-    noSurveys: '您尚未建立任何問卷',
-    noSurveysDesc: '您可以使用 Markdown 輕易設計問卷內容,並存入 SSR 獎勵注資,受訪者即可在 Sui 上進行填答。',
-    createFirstSurvey: '立即建立第一份問卷',
-    colTitle: '問卷標題',
-    colCreatedAt: '建立日期',
-    colProgress: '填答進度',
-    colStatus: '狀態',
-    mobileCreatedAt: '建立日期:',
-    mobileProgress: '填答進度:',
-    mobileStatus: '狀態:',
-    statusActive: '進行中',
-    statusFull: '待結案',
-    statusClosed: '已結束',
-    loadingShort: '載入中…',
-    surveyDefault: '問卷',
-    backToList: '← 返回我的問卷列表',
-    subtitle: '問卷儀表板',
-    statusLabel: '狀態:',
-    checking: '查詢中',
-    statusClosedAt: (ts: string) => `已結案 ${ts}`,
-    vaultLabel: 'Vault ID',
-    deadlineLabel: '截止時間',
-    identityThresholdLabel: '驗證等級',
-    perResponseLabel: '初次填答',
-    repeatLabel: '重複填答',
-    repeatDisabled: '禁止重複填答',
-    repeatEnabled: (r: number, n: number) => `每次 ${r} SSR，每地址最多 ${n} 次`,
-    tier0: 'Tier 0 - Email 驗證',
-    tier1: 'Tier 1 - OAuth 驗證',
-    tier2: 'Tier 2 - 真人驗證',
-    metaUnavailable: '解密後可查看設定',
-    claimLink: '填答連結',
-    claimLinkAria: '填答連結',
-    copied: '已複製',
-    copy: '複製',
-    qrCodeAria: '顯示二維碼',
-    statResponseCount: '回覆數',
-    statResponseProgress: '回覆進度',
-    statVaultBalance: 'Vault 餘額（鏈上）',
-    checkingShort: '查詢中…',
-    noResponses: '尚無回覆。請等待受訪者填答後再回來查看統計。',
-    decryptBtn: '解密回覆並查看統計',
-    signingMsg: '請於錢包中簽名以衍生解密金鑰…',
-    decryptingMsg: '解密中…',
-    responsesTitle: '答卷明文數據',
-    displayCount: (n: number) => `顯示 ${n} 筆`,
-    displayUniqueCount: (n: number, total: number) => `顯示 ${n} 位（共 ${total} 筆提交）`,
-    viewModeLabel: '顯示模式',
-    allSubmissions: '所有提交',
-    latestPerPerson: '每位最新一次',
-    csvTooltip: 'CSV 永遠匯出全部提交（不受顯示切換影響）',
-    downloadCsv: '下載 CSV（全部）',
-    hasRepeatsInfo: '此問卷存在重複填答;切換至「每位最新一次」可只看每位受訪者最後提交的版本。',
-    respondentHeader: '受訪者（Respondent）',
-    submittedTimeHeader: '填答時間（Submitted Time）',
-    decryptFailedCount: (n: number) => `有 ${n} 筆回覆無法解密（金鑰不符或資料毀損）。`,
-    closeSuccess: '活動已成功結束,剩餘 SSR 已退回您的錢包。',
-    btnClosed: '已結束',
-    btnClosing: '結束中…',
-    btnClose: '結束活動',
-    switchSurveys: '切換其他問卷',
-    switchSurveysDescStrong: '點擊下方任何問卷卡片',
-    switchSurveysDescSuffix: '，即可快速切換查看該問卷的數據儀表板。',
-    currentlySelected: '目前選擇',
-    qrModalTitle: '問卷填答 QR Code',
-    qrModalDesc: '受訪者可以使用手機相機掃描上方二維碼直接進入問卷填答頁面。',
-    downloadPng: '下載 PNG',
-    close: '關閉',
-    errEventsFailed: '事件載入失敗',
-    errDecryptFailed: '解密失敗',
-    errPtbBuildFailed: 'PTB 建構失敗',
-    surveyTitlePrefix: '問卷 #',
-    redirectingToSurvey: '此問卷由發起人專屬，正在帶您回到填答頁…',
-    publicResultsLink: '查看結果',
-    publicResultsCopied: '統計連結已複製',
-    responsesTitlePublic: '公開統計圖表',
-    csvTooltipPublic: 'CSV 檔案將包含簡答題的明文內容，但同樣不會包含受訪者名單。',
-    downloadCsvPublic: '匯出數據 (CSV)',
-    questionTypeText: '簡答題',
-    textAnswersHiddenInfo: '為保護個人隱私，公開統計圖表不直接列出簡答題詳細答案。您可點擊右上角「匯出數據 (CSV)」下載完整明文答案（CSV 同樣不包含受訪者名單）。',
-    questionTypeSingle: '單選題',
-    questionTypeMulti: '複選題',
-    questionTypeScale: '評分題',
-  },
-  EN: {
-    dashboardTitle: 'My Dashboard',
-    dashboardDescPrefix: 'Manage all the surveys you have published. ',
-    dashboardDescStrong: 'Click any survey card in the list',
-    dashboardDescSuffix: ' to view detailed statistics and response data.',
-    btnCreateSurvey: '+ Create Survey',
-    walletRequired: 'Wallet connection required',
-    walletRequiredDesc: 'Please connect your Sui wallet first to read and manage the surveys you have published.',
-    loadingSurveys: 'Loading survey list and status from the Sui blockchain...',
-    noSurveys: 'You have not created any surveys yet',
-    noSurveysDesc: 'You can easily design survey content using Markdown, deposit SSR rewards, and respondents can then fill them out on Sui.',
-    createFirstSurvey: 'Create your first survey now',
-    colTitle: 'Survey Title',
-    colCreatedAt: 'Created',
-    colProgress: 'Progress',
-    colStatus: 'Status',
-    mobileCreatedAt: 'Created:',
-    mobileProgress: 'Progress:',
-    mobileStatus: 'Status:',
-    statusActive: 'Active',
-    statusFull: 'Pending',
-    statusClosed: 'Closed',
-    loadingShort: 'Loading…',
-    surveyDefault: 'Survey',
-    backToList: '← Back to my survey list',
-    subtitle: 'Survey Dashboard',
-    statusLabel: 'Status:',
-    checking: 'Loading',
-    statusClosedAt: (ts: string) => `Closed ${ts}`,
-    vaultLabel: 'Vault ID',
-    deadlineLabel: 'Deadline',
-    identityThresholdLabel: 'Verification level',
-    perResponseLabel: 'First Response',
-    repeatLabel: 'Repeat Response',
-    repeatDisabled: 'Repeat answer disabled',
-    repeatEnabled: (r: number, n: number) => `${r} SSR each, up to ${n} times per address`,
-    tier0: 'Tier 0 - Email',
-    tier1: 'Tier 1 - OAuth',
-    tier2: 'Tier 2 - Individual',
-    metaUnavailable: 'Decrypt to view settings',
-    claimLink: 'Response Link',
-    claimLinkAria: 'Response link',
-    copied: 'Copied',
-    copy: 'Copy',
-    qrCodeAria: 'Show QR code',
-    statResponseCount: 'Responses',
-    statResponseProgress: 'Progress',
-    statVaultBalance: 'Vault Balance (On-chain)',
-    checkingShort: 'Loading…',
-    noResponses: 'No responses yet. Please wait for respondents to fill the survey before checking statistics.',
-    decryptBtn: 'Decrypt responses and view statistics',
-    signingMsg: 'Please sign in your wallet to derive the decryption key…',
-    decryptingMsg: 'Decrypting…',
-    responsesTitle: 'Response Plaintext Data',
-    displayCount: (n: number) => `Showing ${n} entries`,
-    displayUniqueCount: (n: number, total: number) => `Showing ${n} respondents (out of ${total} submissions)`,
-    viewModeLabel: 'View mode',
-    allSubmissions: 'All submissions',
-    latestPerPerson: 'Latest per respondent',
-    csvTooltip: 'CSV always exports all submissions (regardless of view mode)',
-    downloadCsv: 'Download CSV (All)',
-    hasRepeatsInfo: 'This survey contains repeat responses; switch to "Latest per respondent" to see only each respondent\'s most recent submission.',
-    respondentHeader: 'Respondent',
-    submittedTimeHeader: 'Submitted Time',
-    decryptFailedCount: (n: number) => `${n} responses could not be decrypted (key mismatch or data corruption).`,
-    closeSuccess: 'Activity successfully closed. Remaining SSR has been returned to your wallet.',
-    btnClosed: 'Closed',
-    btnClosing: 'Closing…',
-    btnClose: 'Close Activity',
-    switchSurveys: 'Switch to other surveys',
-    switchSurveysDescStrong: 'Click any survey card below',
-    switchSurveysDescSuffix: ' to quickly switch and view that survey\'s dashboard.',
-    currentlySelected: 'Selected',
-    qrModalTitle: 'Survey Response QR Code',
-    qrModalDesc: 'Respondents can scan the QR code above with their phone camera to directly access the survey.',
-    downloadPng: 'Download PNG',
-    close: 'Close',
-    errEventsFailed: 'Failed to load events',
-    errDecryptFailed: 'Decryption failed',
-    errPtbBuildFailed: 'PTB build failed',
-    surveyTitlePrefix: 'Survey #',
-    redirectingToSurvey: 'This dashboard is creator-only. Redirecting you to the survey page…',
-    publicResultsLink: 'Show Results',
-    publicResultsCopied: 'Results link copied',
-    responsesTitlePublic: 'Public Statistics Charts',
-    csvTooltipPublic: 'The CSV file will include plaintext answers for text questions, but will not contain the list of respondents.',
-    downloadCsvPublic: 'Export Data (CSV)',
-    questionTypeText: 'Text',
-    textAnswersHiddenInfo: 'To protect personal privacy, public statistics charts do not directly list detailed answers for text questions. You can click "Export Data (CSV)" in the top right to download full plaintext answers (CSV also excludes respondent list).',
-    questionTypeSingle: 'Single Choice',
-    questionTypeMulti: 'Multiple Choice',
-    questionTypeScale: 'Scale',
-  },
+function getOptionVec(opt: any): Uint8Array | null {
+  if (!opt) return null
+  if (Array.isArray(opt)) {
+    if (opt.length === 0) return null
+    const first = opt[0]
+    if (Array.isArray(first)) {
+      return new Uint8Array(first.map(Number))
+    } else if (typeof first === 'string') {
+      return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
+    }
+    return new Uint8Array(opt.map(Number))
+  }
+  const vec = opt.fields?.vec || opt.vec
+  if (!Array.isArray(vec) || vec.length === 0) return null
+  const first = vec[0]
+  if (Array.isArray(first)) {
+    return new Uint8Array(first.map(Number))
+  } else if (typeof first === 'string') {
+    return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
+  } else if (typeof (vec as any) === 'string') {
+    return new Uint8Array((vec as any).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
+  }
+  return new Uint8Array(vec.map(Number))
 }
 
 function normalizeSuiId(id: string): string {
@@ -277,6 +115,9 @@ function getPackageId(): string {
   return import.meta.env.VITE_PACKAGE_ID ?? ''
 }
 
+/** Configured purge grace period, rendered as whole days for user notices. */
+const PURGE_GRACE_DAYS = Math.max(1, Math.round(Number(PURGE_GRACE_MS) / 86_400_000))
+
 interface VaultFields {
   creator: string
   balance: string
@@ -284,6 +125,10 @@ interface VaultFields {
   claimed_count: string
   max_responses: string
   closed_at_ms?: string
+  gas_balance: string
+  gas_compensation_amount: string
+  sponsor_address: string
+  purge_grace_ms?: string
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -307,8 +152,7 @@ export default function DashboardPage() {
   const suiClient = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
-  const { lang } = useLanguage()
-  const t = content[lang]
+  const t = useT('dashboard')
 
   const contentKeyB64 = useMemo(() => {
     let key = location.hash.startsWith('#') ? location.hash.slice(1) : ''
@@ -380,6 +224,7 @@ export default function DashboardPage() {
   const [surveyResolveFailed, setSurveyResolveFailed] = useState(false)
   const [surveyData, setSurveyData] = useState<any>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
+  const [detailSurveyTitle, setDetailSurveyTitle] = useState<string | null>(null)
   const [surveyMeta, setSurveyMeta] = useState<{
     minTier: number
     repeatReward: number
@@ -420,6 +265,7 @@ export default function DashboardPage() {
     if (!vaultId) return
     let cancelled = false
     setSurveyResolveFailed(false)
+    setDetailSurveyTitle(null)
     async function resolveSurvey() {
       if (
         !suiClient ||
@@ -580,67 +426,80 @@ export default function DashboardPage() {
           options: { showContent: true },
         })
 
-        const details: CreatorSurveyDetail[] = []
+        const details = await Promise.all(
+          creatorSurveys.map(async (s, i) => {
+            const surveyObj = surveyObjs[i]
+            const vaultObj = vaultObjs[i]
 
-        for (let i = 0; i < creatorSurveys.length; i++) {
-          const s = creatorSurveys[i]
-          const surveyObj = surveyObjs[i]
-          const vaultObj = vaultObjs[i]
+            let title = `${t.surveyTitlePrefix}${s.survey_id.slice(0, 6)}`
+            let status = 0
+            let claimed_count = 0
+            let max_responses = 0
 
-          let title = `${t.surveyTitlePrefix}${s.survey_id.slice(0, 6)}`
-          let status = 0
-          let claimed_count = 0
-          let max_responses = 0
+            const sFields = (surveyObj?.data?.content as any)?.fields
+            if (sFields) {
+              status = sFields.status !== undefined ? Number(sFields.status) : 0
 
-          const sFields = (surveyObj?.data?.content as any)?.fields
-          if (sFields) {
-            status = sFields.status !== undefined ? Number(sFields.status) : 0
-            const encContent = sFields.encrypted_content
-              ? normalizeBytes(sFields.encrypted_content)
-              : null
-            if (encContent) {
-              try {
-                const savedKey = getSavedContentKey(s.vault_id)
-                if (savedKey) {
-                  const keyBytes = base64urlToBytes(savedKey.slice(1))
-                  const dec = await decryptSurveyContent(encContent, keyBytes)
-                  const parsed = parseFullSurveyMarkdown(dec.markdown)
-                  if (parsed.ok && parsed.data.title) {
-                    title = parsed.data.title
-                  }
-                } else if (encContent.length >= 32) {
-                  const md = new TextDecoder().decode(encContent.slice(32))
-                  const parsed = parseFullSurveyMarkdown(md)
-                  if (parsed.ok && parsed.data.title) {
-                    title = parsed.data.title
-                  }
+              const surveyBlobIdBytes = getOptionVec(sFields.survey_blob_id)
+              let rawContent: Uint8Array | null = null
+
+              if (surveyBlobIdBytes) {
+                try {
+                  const blobId = new TextDecoder().decode(surveyBlobIdBytes)
+                  rawContent = await downloadFromDecentralizedStorage(blobId)
+                } catch (e) {
+                  console.warn('Failed to download decentralized storage title for list item:', s.survey_id, e)
                 }
-              } catch (e) {
-                console.warn('Failed to decrypt title for list item:', s.survey_id, e)
+              } else {
+                rawContent = sFields.encrypted_content
+                  ? normalizeBytes(sFields.encrypted_content)
+                  : null
+              }
+
+              if (rawContent) {
+                try {
+                  const savedKey = getSavedContentKey(s.vault_id)
+                  if (savedKey) {
+                    const keyBytes = base64urlToBytes(savedKey.slice(1))
+                    const dec = await decryptSurveyContent(rawContent, keyBytes)
+                    const parsed = parseFullSurveyMarkdown(dec.markdown)
+                    if (parsed.ok && parsed.data.title) {
+                      title = parsed.data.title
+                    }
+                  } else if (rawContent.length >= 32) {
+                    const md = new TextDecoder().decode(rawContent.slice(32))
+                    const parsed = parseFullSurveyMarkdown(md)
+                    if (parsed.ok && parsed.data.title) {
+                      title = parsed.data.title
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Failed to decrypt title for list item:', s.survey_id, e)
+                }
               }
             }
-          }
 
-          const vFields = (vaultObj?.data?.content as any)?.fields
-          if (vFields) {
-            claimed_count = vFields.claimed_count !== undefined ? Number(vFields.claimed_count) : 0
-            max_responses = vFields.max_responses !== undefined ? Number(vFields.max_responses) : 0
-            if (vFields.status !== undefined) {
-              status = Number(vFields.status)
+            const vFields = (vaultObj?.data?.content as any)?.fields
+            if (vFields) {
+              claimed_count = vFields.claimed_count !== undefined ? Number(vFields.claimed_count) : 0
+              max_responses = vFields.max_responses !== undefined ? Number(vFields.max_responses) : 0
+              if (vFields.status !== undefined) {
+                status = Number(vFields.status)
+              }
             }
-          }
 
-          details.push({
-            vault_id: s.vault_id,
-            survey_id: s.survey_id,
-            title,
-            question_count: s.question_count,
-            registered_at_ms: s.registered_at_ms,
-            status,
-            claimed_count,
-            max_responses,
+            return {
+              vault_id: s.vault_id,
+              survey_id: s.survey_id,
+              title,
+              question_count: s.question_count,
+              registered_at_ms: s.registered_at_ms,
+              status,
+              claimed_count,
+              max_responses,
+            }
           })
-        }
+        )
 
         if (!cancelled) {
           setSurveyDetails((prev) => {
@@ -688,8 +547,6 @@ export default function DashboardPage() {
 
     // Determine contentKey (already computed via useMemo at the top)
 
-    let rawContent = normalizeBytes(fields.encrypted_content)
-
     function applyMeta(data: FullSurveyData) {
       const next = {
         minTier: data.minTier,
@@ -714,29 +571,51 @@ export default function DashboardPage() {
 
     async function loadQuestions() {
       try {
+        const surveyBlobIdBytes = getOptionVec(fields.survey_blob_id)
+        let rawContent: Uint8Array
+
+        if (surveyBlobIdBytes) {
+          const blobId = new TextDecoder().decode(surveyBlobIdBytes)
+          rawContent = await downloadFromDecentralizedStorage(blobId)
+        } else {
+          const encryptedContentBytes = getOptionVec(fields.encrypted_content)
+          if (!encryptedContentBytes) {
+            throw new Error('Survey content data corrupted')
+          }
+          rawContent = encryptedContentBytes
+        }
+
         if (contentKeyB64) {
           const keyBytes = base64urlToBytes(contentKeyB64)
           const dec = await decryptSurveyContent(rawContent, keyBytes)
           const parsed = parseFullSurveyMarkdown(dec.markdown)
           if (parsed.ok) {
-            setQuestions((prev) =>
-              JSON.stringify(prev) === JSON.stringify(parsed.data.questions)
+            setQuestions((prev) => {
+              const sanitized = sanitizeQuestionIds(parsed.data.questions)
+              return JSON.stringify(prev) === JSON.stringify(sanitized)
                 ? prev
-                : parsed.data.questions
-            )
+                : sanitized
+            })
             applyMeta(parsed.data)
+            if (parsed.data.title) {
+              setDetailSurveyTitle(parsed.data.title)
+            }
           }
         } else {
           if (rawContent.length >= 32) {
             const md = new TextDecoder().decode(rawContent.slice(32))
             const parsed = parseFullSurveyMarkdown(md)
             if (parsed.ok) {
-              setQuestions((prev) =>
-                JSON.stringify(prev) === JSON.stringify(parsed.data.questions)
+              setQuestions((prev) => {
+                const sanitized = sanitizeQuestionIds(parsed.data.questions)
+                return JSON.stringify(prev) === JSON.stringify(sanitized)
                   ? prev
-                  : parsed.data.questions
-              )
+                  : sanitized
+              })
               applyMeta(parsed.data)
+              if (parsed.data.title) {
+                setDetailSurveyTitle(parsed.data.title)
+              }
             }
           }
         }
@@ -812,7 +691,7 @@ export default function DashboardPage() {
       setDecryptStatus('decrypting')
       const { responses } = await decryptAllResponses(
         events,
-        kp.privateKey,
+        kp,
         questions || [],
         schemaHashStr || ''
       )
@@ -901,6 +780,8 @@ export default function DashboardPage() {
   // ── 結束活動 ──────────────────────────────────────────────────────────────
   const [closeStatus, setCloseStatus] = useState<'idle' | 'signing' | 'success' | 'error'>('idle')
   const [closeError, setCloseError] = useState<string | null>(null)
+  const [purgeStatus, setPurgeStatus] = useState<'idle' | 'confirm' | 'signing' | 'success' | 'error'>('idle')
+  const [purgeError, setPurgeError] = useState<string | null>(null)
 
   const canClose = isActive && closeStatus !== 'signing' && closeStatus !== 'success'
 
@@ -932,8 +813,45 @@ export default function DashboardPage() {
     )
   }
 
+  // Creator-initiated immediate purge of a closed survey (bypasses the grace
+  // window — the contract permits this only for the creator on a closed vault).
+  function handlePurge() {
+    if (!vaultId || !surveyId || isActive) return
+    const registryId = import.meta.env.VITE_SURVEY_REGISTRY_ID as string | undefined
+    if (!registryId) {
+      setPurgeError(t.errNoRegistry)
+      setPurgeStatus('error')
+      return
+    }
+    setPurgeError(null)
+    setPurgeStatus('signing')
+    let tx
+    try {
+      tx = buildPurgePtb({ packageId: getPackageId(), registryId, surveyId, vaultId })
+    } catch (err) {
+      setPurgeError(err instanceof Error ? err.message : t.errPtbBuildFailed)
+      setPurgeStatus('error')
+      return
+    }
+    signAndExecute(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { transaction: tx as any },
+      {
+        onSuccess: () => {
+          setPurgeStatus('success')
+          setTimeout(() => navigate('/dashboard'), 1200)
+        },
+        onError: (err) => {
+          setPurgeError(err.message)
+          setPurgeStatus('error')
+        },
+      }
+    )
+  }
+
   // ── 顯示 ──────────────────────────────────────────────────────────────────
-  const displayBalanceSsr = vault ? formatSsr(vault.balance) : null
+  const displayBalanceSsr = vault ? formatCompactCoin(vault.balance) : null
+  const displayGasBalance = vault ? formatCompactCoin(vault.gas_balance) : null
 
   // QR Code 用的 fullUrl 與繪製 effect 必須宣告在任何 early return 之前，
   // 否則 isAccessDenied 在同一 mount 內由 false 翻 true 時會違反 Rules of Hooks。
@@ -985,6 +903,7 @@ export default function DashboardPage() {
             <p className="text-muted mt-1">
               {t.dashboardDescPrefix}<strong>{t.dashboardDescStrong}</strong>{t.dashboardDescSuffix}
             </p>
+            <p className="text-muted mt-2">{t.listPurgeReminder(PURGE_GRACE_DAYS)}</p>
           </div>
           {account && !loadingDetails && surveyDetails.length > 0 && (
             <Link
@@ -1125,7 +1044,7 @@ export default function DashboardPage() {
   }
 
   const currentSurvey = surveyDetails.find((s) => s.vault_id === vaultId)
-  const surveyTitle = currentSurvey ? currentSurvey.title : loadingDetails ? t.loadingShort : t.surveyDefault
+  const surveyTitle = detailSurveyTitle || (currentSurvey ? currentSurvey.title : loadingDetails ? t.loadingShort : t.surveyDefault)
 
   return (
     <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
@@ -1182,7 +1101,7 @@ export default function DashboardPage() {
                 to={`/results/${vaultId}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-3 py-1.5 text-sm rounded-xl font-normal transition-all bg-emerald-700 hover:bg-emerald-800 text-white dark:bg-emerald-800 dark:hover:bg-emerald-650 cursor-pointer"
+                className="px-3 py-1.5 text-sm rounded-xl font-normal transition-all bg-emerald-700 hover:bg-emerald-800 text-white dark:bg-emerald-800 dark:hover:bg-emerald-700 cursor-pointer"
               >
                 {t.publicResultsLink}
               </Link>
@@ -1197,23 +1116,29 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
           <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statResponseCount}</p>
-          <p className="text-2xl font-normal text-slate-900 dark:text-neutral-100" aria-label="response-count">
-            {responseCount}
+          <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="response-count" title={String(responseCount)}>
+            {formatCompactInt(responseCount)}
           </p>
         </div>
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
           <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statResponseProgress}</p>
-          <p className="text-2xl font-normal text-slate-900 dark:text-neutral-100" aria-label="received-over-max">
-            {responseCount} / {vault ? vault.max_responses : '—'}
+          <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="received-over-max" title={vault ? `${responseCount} / ${vault.max_responses}` : undefined}>
+            {formatCompactInt(responseCount)} / {vault ? formatCompactInt(vault.max_responses) : '—'}
           </p>
         </div>
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
           <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statVaultBalance}</p>
-          <p className="text-2xl font-normal text-slate-900 dark:text-neutral-100" aria-label="vault-balance" title={vault ? `${formatFullPrecision(vault.balance)} SSR` : undefined}>
-            {displayBalanceSsr !== null ? `${displayBalanceSsr} SSR` : t.checkingShort}
+          <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="vault-balance" title={vault ? `${formatFullPrecision(vault.balance)} SSR` : undefined}>
+            {displayBalanceSsr !== null ? displayBalanceSsr : t.checkingShort}
+          </p>
+        </div>
+        <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
+          <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statGasBalance}</p>
+          <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="gas-balance" title={vault ? `${formatFullPrecision(vault.gas_balance)} SUI` : undefined}>
+            {displayGasBalance !== null ? displayGasBalance : t.checkingShort}
           </p>
         </div>
       </div>
@@ -1252,6 +1177,41 @@ export default function DashboardPage() {
             })()}
           </dd>
 
+          {vault?.closed_at_ms && Number(vault.closed_at_ms) > 0 && (
+            <>
+              <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.purgeLabel}</dt>
+              <dd className="text-muted">
+                {t.purgeNoticeAt(
+                  formatDateTime(
+                    Number(vault.closed_at_ms) +
+                      (vault.purge_grace_ms ? Number(vault.purge_grace_ms) : Number(PURGE_GRACE_MS))
+                  )
+                )}
+              </dd>
+            </>
+          )}
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.storageLocationLabel}</dt>
+          <dd className="text-body flex items-center gap-1.5">
+            {surveyData ? (
+              (() => {
+                const fields = surveyData.content?.fields as any
+                const surveyBlobIdBytes = getOptionVec(fields?.survey_blob_id)
+                return surveyBlobIdBytes ? (
+                  <span className="badge-decentralized shrink-0 inline-flex items-center gap-1">
+                    {t.storageDecentralized}
+                  </span>
+                ) : (
+                  <span className="badge-direct shrink-0 inline-flex items-center gap-1">
+                    {t.storageDirect}
+                  </span>
+                )
+              })()
+            ) : (
+              t.checkingShort
+            )}
+          </dd>
+
           <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.deadlineLabel}</dt>
           <dd className="text-body">{surveyMeta ? formatDateTime(surveyMeta.deadlineMs) : '—'}</dd>
 
@@ -1276,6 +1236,16 @@ export default function DashboardPage() {
                 ? t.repeatDisabled
                 : t.repeatEnabled(surveyMeta.repeatReward, surveyMeta.repeatMaxTimes)
               : '—'}
+          </dd>
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.gasCompensationLabel}</dt>
+          <dd className="text-body">
+            {vault ? `${formatSui(vault.gas_compensation_amount)} SUI` : '—'}
+          </dd>
+
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.sponsorAddressLabel}</dt>
+          <dd className="font-mono break-all text-body">
+            {vault ? vault.sponsor_address : '—'}
           </dd>
         </dl>
         {!surveyMeta && (
@@ -1388,7 +1358,7 @@ export default function DashboardPage() {
                         type="button"
                         onClick={handleDownloadCsv}
                         title={isPublicSurvey ? t.csvTooltipPublic : t.csvTooltip}
-                        className="bg-emerald-700 hover:bg-emerald-800 text-neutral-100 font-normal px-5 py-2 rounded-xl transition-all text-base flex items-center justify-center gap-1.5 shadow-sm dark:bg-emerald-800 dark:hover:bg-emerald-650"
+                 className="bg-emerald-700 hover:bg-emerald-800 text-neutral-100 font-normal px-5 py-2 rounded-xl transition-all text-base flex items-center justify-center gap-1.5 shadow-sm dark:bg-emerald-800 dark:hover:bg-emerald-700"
                       >
                         <svg
                           className="w-4 h-4"
@@ -1637,6 +1607,10 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {isCreator && isActive && (
+            <p className="text-muted mb-2">{t.closeWarning(PURGE_GRACE_DAYS)}</p>
+          )}
+
           {isCreator && (
             <button
               type="button"
@@ -1650,6 +1624,46 @@ export default function DashboardPage() {
             >
               {!isActive ? t.btnClosed : closeStatus === 'signing' ? t.btnClosing : t.btnClose}
             </button>
+          )}
+
+          {isCreator && !isActive && (
+            <div className="mt-4">
+              {purgeStatus === 'success' ? (
+                <div role="status" className="alert-success">
+                  <span>{t.purgeSuccess}</span>
+                </div>
+              ) : purgeStatus === 'confirm' ? (
+                <div className="space-y-2">
+                  <p className="text-muted">{t.purgeConfirm}</p>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={handlePurge} className="btn-danger">
+                      {t.purgeConfirmBtn}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPurgeStatus('idle')}
+                      className="btn-secondary"
+                    >
+                      {t.purgeCancel}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setPurgeStatus('confirm')}
+                  disabled={purgeStatus === 'signing'}
+                  className="btn-danger"
+                >
+                  {purgeStatus === 'signing' ? t.purging : t.btnPurge}
+                </button>
+              )}
+              {purgeStatus === 'error' && purgeError && (
+                <div role="alert" className="alert-error mt-2 break-all">
+                  <span>{purgeError}</span>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

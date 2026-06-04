@@ -1,0 +1,32 @@
+const results = {
+  title: '問卷統計結果',
+  subtitle: '統計結果圖表',
+  loading: '正在加載問卷統計數據...',
+  errLoadFailed: '載入問卷失敗，請確認 Vault ID 是否正確。',
+  errEncrypted: '此問卷設定為「加密答卷」，答卷數據已在鏈上加密保護。只有問卷發起人可以使用錢包簽名解密並查看統計結果，無法公開展示。',
+  noResponses: '目前尚無人填答此問卷。請等待受訪者提交後再回來查看統計。',
+  statResponseCount: '回覆數',
+  statResponseProgress: '回覆進度',
+  statDeadline: '截止時間',
+  responsesTitlePublic: '統計圖表',
+  displayCount: (n: number) => `顯示 ${n} 筆`,
+  csvTooltipPublic: 'CSV 檔案將包含簡答題的明文內容，但不會包含任何受訪者錢包地址。',
+  downloadCsvPublic: '匯出數據 (CSV)',
+  questionTypeText: '簡答題',
+  textAnswersHiddenInfo: '圖表將不會列出簡答內容',
+  questionTypeSingle: '單選題',
+  questionTypeMulti: '複選題',
+  questionTypeScale: '評分題',
+  backToSurvey: '⬅ 返回填答頁面',
+  metaUnavailable: '暫無設定資訊',
+  statusLabel: '問卷狀態',
+  statusActive: '進行中',
+  statusFull: '已額滿',
+  statusClosed: '已結束',
+  statusClosedAt: (ts: string) => `已結束於 ${ts}`,
+  questionIndex: (n: number) => `第 ${n} 題`,
+  protectedData: '受保護的資料',
+}
+
+export type ResultsDict = typeof results
+export default results

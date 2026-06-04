@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Trash2, AlertTriangle, Plus } from 'lucide-react'
+import { Trash2, AlertTriangle, Plus, Info } from 'lucide-react'
 import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit'
 import { renderMarkdown } from '../lib/markdown'
 import {
@@ -11,9 +11,10 @@ import {
   parseFullSurveyMarkdown,
   serializeFullSurveyToMarkdown,
 } from '../lib/frontmatter'
-import { estimateFundCostV2 } from '../lib/ptb'
+import { estimateFundCostV2, PURGE_GRACE_MS } from '../lib/ptb'
 import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
-import { useLanguage } from '../context/LanguageContext'
+import { useT } from '../i18n'
+import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
 
 const DRAFT_KEY_PREFIX = 'surveysui:draft:'
 
@@ -66,153 +67,33 @@ function readDraft(draftId: string | undefined): DraftEntry | null {
   }
 }
 
-const content = {
-  ZH: {
-    typeSingleChoice: '單選',
-    typeMultiChoice: '複選',
-    typeText: '簡答',
-    typeScale: '量表（1-5）',
-    typeScaleShort: '量表 (1-5)',
-    createSurvey: '建立問卷',
-    surveyDesc: '請在下方設計您的問卷內容與設定。完成後，下一步可進行互動預覽、下載 Markdown 草稿並發佈至 Sui 鏈上。',
-    basicInfo: '基本資訊',
-    surveyTitle: '問卷標題',
-    placeholderTitle: '請輸入問卷標題...',
-    surveyIntro: '問卷說明（顯示給填寫者）',
-    placeholderIntro: '請輸入問卷前言、注意事項或說明...',
-    rewardsTitle: '獎勵與限制',
-    perResponseReward: '每份填答獎勵 (SSR)',
-    placeholderSsr: '請輸入 SSR 數額',
-    maxResponses: '限制名額上限',
-    placeholderMaxResponses: '請輸入最大份數',
-    deadline: '截止時間 ({tz})',
-    identityThreshold: '驗證等級門檻',
-    tier0: 'Tier 0 - Email 驗證',
-    tier1: 'Tier 1 - OAuth 驗證',
-    tier2: 'Tier 2 - 真人驗證',
-    repeatReward: '每次重填獎勵 (SSR)',
-    placeholderRepeatSsr: '0 = 禁止重複填答',
-    maxRepeatTimes: '每地址最多重填次數',
-    warningPreFund: '需預注最大獎勵資金',
-    warningPreFundDesc: '若預注不足，下一步注資頁將無法發佈。鏈上事件歷史不可抹除，舊版本答卷密文仍可被解出。',
-    costEstimation: '簡易費用估計',
-    currentAmmCurve: '基於當前 AMM 曲線',
-    ssrOffset: '既有 SSR 折抵',
-    newMintSsr: '新鑄 SSR (AMM)',
-    platformFee: '平台手續費 (fee)',
-    suiConsumption: '預估 SUI 消耗',
-    questionsList: '題目列表',
-    questionIndex: '第 {index} 題',
-    required: '必填',
-    questionType: '題型',
-    questionPrompt: '問題內容 (Prompt)',
-    placeholderPrompt: '請輸入題目內容...',
-    optionListLabel: '選項列表 (按 Enter 新增下一項，空值按 Backspace 刪除)',
-    placeholderOption: '選項 {index}',
-    addOption: '新增選項',
-    addQuestion: '新增題目',
-    addQuestionDesc: '支援單選、複選、簡答及量表（1-5）等題型',
-    btnExport: '匯出',
-    btnImport: '匯入 (.md)',
-    btnNext: '下一步：預覽問卷 ➡',
-
-    // 錯誤和警告提示
-    errTitleRequired: '請填寫問卷標題',
-    errPerResponsePositive: 'perResponse 必須為正整數',
-    errRepeatRewardNonNegative: 'repeatReward 必須為非負整數（0 = 禁止重複填答）',
-    errRepeatMaxTimesPositive: 'repeatMaxTimes 必須為正整數',
-    errMaxResponsesPositive: 'maxResponses 必須為正整數',
-    errDeadlineInvalid: 'deadline 格式無效',
-    errDeadlineFuture: 'deadline 須為未來時間',
-    errMinTierInvalid: 'minTier 必須為 0-2',
-    errQuestionRequired: '至少需要一題',
-    errQuestionIdRequired: '題目 id 不可為空',
-    errQuestionPromptRequired: '題目 {id} 不可為空',
-    errOptionRequired: '題目 {id} 至少需要一個選項',
-    errQuestionIdDuplicate: '題目 id 重複：{id}',
-    confirmOverwrite: '將以上傳檔案覆蓋目前內容，確定嗎？',
-    confirmNoRequired: '沒有「必填」題目，這樣受訪者可以交白卷。確定要繼續嗎？',
-    errReadFileFailed: '讀取檔案失敗',
-    errUploadParseFailed: '上傳檔案解析失敗：{error}'
-  },
-  EN: {
-    typeSingleChoice: 'Single Choice',
-    typeMultiChoice: 'Multiple Choice',
-    typeText: 'Text',
-    typeScale: 'Scale (1-5)',
-    typeScaleShort: 'Scale (1-5)',
-    createSurvey: 'Create Survey',
-    surveyDesc: 'Design your survey questions and configurations below. You can preview, download a Markdown draft, and publish to Sui chain in the next step.',
-    basicInfo: 'Basic Info',
-    surveyTitle: 'Survey Title',
-    placeholderTitle: 'Enter survey title...',
-    surveyIntro: 'Survey Description (Shown to respondents)',
-    placeholderIntro: 'Enter introduction, guidelines, or instructions...',
-    rewardsTitle: 'Rewards & Limits',
-    perResponseReward: 'Reward per Response (SSR)',
-    placeholderSsr: 'Enter SSR amount',
-    maxResponses: 'Max Responses Limit',
-    placeholderMaxResponses: 'Enter max responses count',
-    deadline: 'Deadline (your timezone: {tz})',
-    identityThreshold: 'Verification level threshold',
-    tier0: 'Tier 0 - Email',
-    tier1: 'Tier 1 - OAuth',
-    tier2: 'Tier 2 - Individual',
-    repeatReward: 'Repeat Reward (SSR)',
-    placeholderRepeatSsr: '0 = Disable repeat submissions',
-    maxRepeatTimes: 'Max Repeats per Wallet',
-    warningPreFund: 'Pre-fund Required for Max Rewards',
-    warningPreFundDesc: 'If pre-funded funds are insufficient, the vault cannot be published in the next step. Note: On-chain history is immutable, encrypted responses of old versions can still be decrypted.',
-    costEstimation: 'Fee Estimation',
-    currentAmmCurve: 'Based on current AMM curve',
-    ssrOffset: 'Existing SSR offset',
-    newMintSsr: 'New Minted SSR (AMM)',
-    platformFee: 'Platform fee',
-    suiConsumption: 'Estimated SUI cost',
-    questionsList: 'Questions List',
-    questionIndex: 'Q{index}',
-    required: 'Required',
-    questionType: 'Question Type',
-    questionPrompt: 'Question Prompt',
-    placeholderPrompt: 'Enter question text...',
-    optionListLabel: 'Options List (Press Enter to add next, Backspace on empty to delete)',
-    placeholderOption: 'Option {index}',
-    addOption: 'Add Option',
-    addQuestion: 'Add Question',
-    addQuestionDesc: 'Supports Single, Multiple, Text, and Scale (1-5) types',
-    btnExport: 'Export',
-    btnImport: 'Import (.md)',
-    btnNext: 'Next: Preview Survey ➡',
-
-    // 錯誤和警告提示
-    errTitleRequired: 'Please enter survey title',
-    errPerResponsePositive: 'perResponse must be a positive integer',
-    errRepeatRewardNonNegative: 'repeatReward must be non-negative (0 = disable repeat)',
-    errRepeatMaxTimesPositive: 'repeatMaxTimes must be a positive integer',
-    errMaxResponsesPositive: 'maxResponses must be a positive integer',
-    errDeadlineInvalid: 'Invalid deadline format',
-    errDeadlineFuture: 'Deadline must be a future time',
-    errMinTierInvalid: 'minTier must be 0-2',
-    errQuestionRequired: 'At least one question is required',
-    errQuestionIdRequired: 'Question ID cannot be empty',
-    errQuestionPromptRequired: 'Question {id} prompt cannot be empty',
-    errOptionRequired: 'Question {id} needs at least one option',
-    errQuestionIdDuplicate: 'Duplicate question ID: {id}',
-    confirmOverwrite: 'This will overwrite your current progress with the uploaded file. Are you sure?',
-    confirmNoRequired: '"Required" question not found. Respondents can submit blank answers. Continue anyway?',
-    errReadFileFailed: 'Failed to read file',
-    errUploadParseFailed: 'Failed to parse uploaded file: {error}'
-  }
-}
-
 export default function CreatePage() {
   const navigate = useNavigate()
   const { draftId } = useParams<{ draftId: string }>()
   const [data, setData] = useState<FullSurveyData>(makeBlankSurveyData)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { lang } = useLanguage()
-  const t = content[lang]
+  const t = useT('create')
+  const purgeGraceDays = Math.max(1, Math.round(Number(PURGE_GRACE_MS) / 86_400_000))
+
+  const maxDeadlineMs = useMemo(() => {
+    const d = new Date()
+    d.setMonth(d.getMonth() + 3)
+    return d.getTime()
+  }, [])
+
+  const deadlineErrorMsg = useMemo(() => {
+    if (!data.deadlineMs || isNaN(data.deadlineMs)) return null
+    if (data.deadlineMs <= Date.now()) {
+      return t.errDeadlineFuture
+    }
+    const maxDeadline = new Date()
+    maxDeadline.setMonth(maxDeadline.getMonth() + 3)
+    if (data.deadlineMs > maxDeadline.getTime()) {
+      return t.errDeadlineMaxExceeded
+    }
+    return null
+  }, [data.deadlineMs, t.errDeadlineFuture, t.errDeadlineMaxExceeded])
 
   const TYPE_LABELS_INFO: Record<QuestionType, { label: string }> = {
     single_choice: { label: t.typeSingleChoice },
@@ -278,6 +159,64 @@ export default function CreatePage() {
     if (!coinsData) return 0n
     return coinsData.data.reduce((sum, c) => sum + BigInt(c.balance), 0n)
   }, [coinsData])
+
+  const [gasHealth, setGasHealth] = useState<GasHealth | null>(null)
+
+  useEffect(() => {
+    const backendUrl = import.meta.env.VITE_BFF_URL ?? ''
+    void probeGasSponsorHealth({ backendUrl }).then((res) => {
+      setGasHealth(res)
+    })
+  }, [])
+
+  const gasCompensationAmount = useMemo(() => {
+    if (!gasHealth?.available) return 0n
+    return BigInt(gasHealth.gasCompensationAmount ?? '0')
+  }, [gasHealth])
+
+  const requiredGas = useMemo(() => {
+    if (data.perResponse <= 0 || data.maxResponses <= 0 || !gasCompensationAmount) return 0n
+    const repeatMaxTimes = BigInt(data.repeatMaxTimes ?? 1)
+    if (data.repeatReward > 0) {
+      return BigInt(data.maxResponses) * (1n + repeatMaxTimes) * gasCompensationAmount
+    } else {
+      return BigInt(data.maxResponses) * gasCompensationAmount
+    }
+  }, [data.perResponse, data.maxResponses, data.repeatReward, data.repeatMaxTimes, gasCompensationAmount])
+
+  const currentRate = useMemo(() => {
+    const decay = 1_000_000_000_000n
+    const initialSsrPerSui = 1000n
+    const numer = Number(initialSsrPerSui * decay)
+    const denom = Number(decay + totalSuiInvested)
+    return numer / denom
+  }, [totalSuiInvested])
+
+  const totalSsrNum = useMemo(() => {
+    const repeatMaxTimes = BigInt(data.repeatMaxTimes ?? 1)
+    const base = BigInt(data.perResponse * data.maxResponses)
+    const repeat = BigInt(data.repeatReward * data.maxResponses) * repeatMaxTimes
+    return base + repeat
+  }, [data.perResponse, data.maxResponses, data.repeatReward, data.repeatMaxTimes])
+
+  const SURVEY_SIZE_THRESHOLD_KB = Number(import.meta.env.VITE_SURVEY_SIZE_THRESHOLD_KB || '10')
+
+  const serializedSurvey = useMemo(() => {
+    try {
+      return serializeFullSurveyToMarkdown(data, { draftStamp: previewDraftStamp })
+    } catch {
+      return ''
+    }
+  }, [data, previewDraftStamp])
+
+  const surveySizeKb = useMemo(() => {
+    const bytes = new TextEncoder().encode(serializedSurvey).length
+    return bytes / 1024
+  }, [serializedSurvey])
+
+  const isLargeSurvey = useMemo(() => {
+    return surveySizeKb > SURVEY_SIZE_THRESHOLD_KB
+  }, [surveySizeKb, SURVEY_SIZE_THRESHOLD_KB])
 
   const [costBreakdown, setCostBreakdown] = useState<{
     netSsrBase: bigint
@@ -347,6 +286,7 @@ export default function CreatePage() {
           prompt: '',
           options_json: ['', ''],
           required: false,
+          shuffle: false,
         },
       ],
     }))
@@ -369,12 +309,21 @@ export default function CreatePage() {
 
   function changeQuestionType(index: number, newType: QuestionType) {
     const needsOptions = newType === 'single_choice' || newType === 'multi_choice'
-    updateQuestion(index, {
-      type: newType,
-      options_json: needsOptions
-        ? (data.questions[index].options_json ?? ['', ''])
-        : null,
-    })
+    setData((prev) => ({
+      ...prev,
+      questions: prev.questions.map((q, i) => {
+        if (i !== index) return q
+        const { maxLen, ...rest } = q
+        return {
+          ...rest,
+          type: newType,
+          options_json: needsOptions
+            ? (q.options_json ?? ['', ''])
+            : null,
+          ...(newType === 'text' ? { maxLen: 100 } : {}),
+        }
+      }),
+    }))
   }
 
   function updateOption(qIndex: number, optIndex: number, value: string) {
@@ -470,16 +419,31 @@ export default function CreatePage() {
       return t.errMaxResponsesPositive
     if (!data.deadlineMs || isNaN(data.deadlineMs)) return t.errDeadlineInvalid
     if (data.deadlineMs <= Date.now()) return t.errDeadlineFuture
+    const maxDeadline = new Date()
+    maxDeadline.setMonth(maxDeadline.getMonth() + 3)
+    if (data.deadlineMs > maxDeadline.getTime()) return t.errDeadlineMaxExceeded
     if (data.minTier < 0 || data.minTier > 2) return t.errMinTierInvalid
     if (data.questions.length === 0) return t.errQuestionRequired
     for (const q of data.questions) {
       if (!q.id.trim()) return t.errQuestionIdRequired
       if (!q.prompt.trim()) return t.errQuestionPromptRequired.replace('{id}', q.id)
-      if (
-        (q.type === 'single_choice' || q.type === 'multi_choice') &&
-        (!q.options_json || q.options_json.length === 0)
-      ) {
-        return t.errOptionRequired.replace('{id}', q.id)
+      if (q.type === 'single_choice' || q.type === 'multi_choice') {
+        if (!q.options_json || q.options_json.length === 0) {
+          return t.errOptionRequired.replace('{id}', q.id)
+        }
+        const trimmedOpts = q.options_json.map(o => o.trim())
+        if (trimmedOpts.some(o => o === '')) {
+          return t.errEmptyOption(q.id)
+        }
+        const uniqueOpts = new Set(trimmedOpts)
+        if (uniqueOpts.size !== trimmedOpts.length) {
+          return t.errDuplicateOption(q.id)
+        }
+      }
+      if (q.type === 'text' && q.maxLen !== undefined) {
+        if (!Number.isInteger(q.maxLen) || q.maxLen <= 0) {
+          return t.errCharLimitPositive
+        }
       }
     }
     const ids = new Set<string>()
@@ -563,6 +527,267 @@ export default function CreatePage() {
               </label>
             </section>
 
+            {/* 題目區 */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-h2">{t.questionsList}</h2>
+              </div>
+
+              {data.questions.map((q, idx) => (
+                <div
+                  key={idx}
+                  className="border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-4 bg-slate-50/50 dark:bg-neutral-900/30 hover:bg-slate-50 dark:hover:bg-neutral-800/40 transition-colors relative animate-fadeIn"
+                  aria-label={`題目 ${q.id}`}
+                >
+                  <div className="flex items-center justify-between border-b pb-2 border-slate-200/60 dark:border-neutral-800">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-sm font-normal transition-colors ${q.required ? 'text-rose-800 dark:text-rose-400' : 'text-slate-700 dark:text-neutral-300'}`}>
+                        {t.questionIndex.replace('{index}', String(idx + 1))}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          id={`required-${idx}`}
+                          type="checkbox"
+                          checked={q.required}
+                          onChange={(e) => updateQuestion(idx, { required: e.target.checked })}
+                          className={`checkbox-dark ${q.required
+                            ? 'checked:bg-rose-700 checked:border-rose-700 dark:checked:bg-rose-950 dark:checked:border-rose-600 focus:ring-rose-500'
+                            : 'checked:bg-blue-600 checked:border-blue-600'
+                            }`}
+                        />
+                        <label
+                          htmlFor={`required-${idx}`}
+                          className={`text-sm font-normal cursor-pointer select-none transition-colors ${q.required ? 'text-rose-800 dark:text-rose-400' : 'text-slate-500 dark:text-neutral-400'
+                            }`}
+                        >
+                          {t.required}
+                        </label>
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => moveQuestion(idx, -1)}
+                        disabled={idx === 0}
+                        className="w-7 h-7 flex items-center justify-center text-sm border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 rounded-lg disabled:opacity-30 disabled:hover:bg-white dark:disabled:hover:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 transition-colors"
+                        aria-label={`上移 ${q.id}`}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveQuestion(idx, 1)}
+                        disabled={idx === data.questions.length - 1}
+                        className="w-7 h-7 flex items-center justify-center text-sm border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 rounded-lg disabled:opacity-30 disabled:hover:bg-white dark:disabled:hover:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 transition-colors"
+                        aria-label={`下移 ${q.id}`}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(t.confirmDeleteQuestion)) {
+                            deleteQuestion(idx)
+                          }
+                        }}
+                        className="w-7 h-7 flex items-center justify-center border border-red-200 dark:border-red-900/30 bg-white dark:bg-neutral-900 text-red-500 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                        aria-label={`刪除 ${q.id}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <span className="form-label">{t.questionType}</span>
+                      <div className="flex flex-wrap gap-2 mt-1.5">
+                        {(Object.keys(TYPE_LABELS_INFO) as QuestionType[]).map((tType) => (
+                          <button
+                            key={tType}
+                            type="button"
+                            onClick={() => changeQuestionType(idx, tType)}
+                            className={`px-3 py-1.5 rounded-xl border text-sm font-normal transition-all flex items-center gap-1.5 ${q.type === tType
+                              ? 'bg-blue-700 border-blue-700 text-white dark:bg-blue-800 dark:border-blue-800 dark:text-neutral-200'
+                              : 'bg-white dark:bg-neutral-900 border-slate-200 dark:border-neutral-700 text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-800'
+                              }`}
+                          >
+                            <span>{TYPE_LABELS_INFO[tType].label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <label className="block">
+                      <span className="form-label">{t.questionPrompt}</span>
+                      <textarea
+                        value={q.prompt}
+                        onChange={(e) => {
+                          updateQuestion(idx, { prompt: e.target.value })
+                          e.target.style.height = 'auto'
+                          e.target.style.height = `${e.target.scrollHeight}px`
+                        }}
+                        ref={(el) => {
+                          if (el) {
+                            el.style.height = 'auto'
+                            el.style.height = `${el.scrollHeight}px`
+                          }
+                        }}
+                        rows={1}
+                        className="mt-1.5 form-input resize-none overflow-hidden py-2"
+                        placeholder={t.placeholderPrompt}
+                        aria-label={`prompt ${q.id}`}
+                      />
+                    </label>
+
+                    {q.type === 'text' && (
+                      <div className="flex items-center gap-4 mt-2">
+                        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={q.maxLen !== undefined}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                updateQuestion(idx, { maxLen: 100 })
+                              } else {
+                                setData((prev) => ({
+                                  ...prev,
+                                  questions: prev.questions.map((item, i) => {
+                                    if (i !== idx) return item
+                                    const { maxLen, ...rest } = item
+                                    return rest
+                                  }),
+                                }))
+                              }
+                            }}
+                            className="checkbox-dark checked:bg-blue-600 checked:border-blue-600"
+                          />
+                          <span className="text-sm font-medium text-slate-700 dark:text-neutral-200">
+                            {t.setCharacterLimit}
+                          </span>
+                        </label>
+                        {q.maxLen !== undefined && (
+                          <div className="flex items-center gap-1.5 animate-fadeIn">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              value={q.maxLen ?? ''}
+                              onChange={(e) => {
+                                const v = e.target.value.replace(/\D/g, '')
+                                const val = v === '' ? 0 : Number(v)
+                                updateQuestion(idx, { maxLen: val })
+                              }}
+                              className="w-24 form-input py-1 text-sm text-center"
+                              placeholder="100"
+                              aria-label={`字數上限 ${q.id}`}
+                            />
+                            <span className="text-sm text-slate-500 dark:text-neutral-400">
+                              {t.charactersUnit}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {(q.type === 'single_choice' || q.type === 'multi_choice') &&
+                      q.options_json && (
+                        <div className="space-y-2 pt-2">
+                          <span className="form-label">
+                            {t.optionListLabel}
+                          </span>
+                          <div className="space-y-1.5">
+                            {q.options_json.map((opt, oi) => (
+                              <div key={oi} className="flex gap-2 items-center">
+                                <span className="text-slate-400 dark:text-neutral-500 text-sm select-none">
+                                  {oi + 1}.
+                                </span>
+                                <textarea
+                                  value={opt}
+                                  onChange={(e) => {
+                                    updateOption(idx, oi, e.target.value)
+                                    e.target.style.height = 'auto'
+                                    e.target.style.height = `${e.target.scrollHeight}px`
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault()
+                                      addOption(idx)
+                                    } else if (
+                                      e.key === 'Backspace' &&
+                                      opt === '' &&
+                                      q.options_json &&
+                                      q.options_json.length > 1
+                                    ) {
+                                      e.preventDefault()
+                                      removeOption(idx, oi)
+                                    }
+                                  }}
+                                  ref={(el) => {
+                                    if (el) {
+                                      el.style.height = 'auto'
+                                      el.style.height = `${el.scrollHeight}px`
+                                    }
+                                  }}
+                                  rows={1}
+                                  className="flex-1 form-input py-1 text-sm resize-none overflow-hidden"
+                                  placeholder={t.placeholderOption.replace('{index}', String(oi + 1))}
+                                  aria-label={`選項 ${q.id} #${oi + 1}`}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeOption(idx, oi)}
+                                  className="w-7 h-7 flex items-center justify-center border border-red-100 dark:border-red-900/30 text-red-500 dark:text-red-400 bg-white dark:bg-neutral-900 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors text-sm"
+                                  aria-label={`刪除選項 ${q.id} #${oi + 1}`}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => addOption(idx)}
+                            className="text-sm font-normal text-slate-500 dark:text-neutral-450 hover:text-slate-700 dark:hover:text-neutral-200 transition-colors flex items-center gap-1 mt-1"
+                          >
+                            {t.addOption}
+                          </button>
+
+                          <div className="flex items-center gap-2 mt-3 select-none animate-fadeIn">
+                            <input
+                              id={`shuffle-${idx}`}
+                              type="checkbox"
+                              checked={q.shuffle ?? false}
+                              onChange={(e) => updateQuestion(idx, { shuffle: e.target.checked })}
+                              className="checkbox-dark checked:bg-blue-600 checked:border-blue-600"
+                            />
+                            <label
+                              htmlFor={`shuffle-${idx}`}
+                              className="text-sm font-medium text-slate-700 dark:text-neutral-350 cursor-pointer"
+                            >
+                              {t.shuffleOptions}
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                  </div>
+                </div>
+              ))}
+              {/* 虛線框加號按鈕 */}
+              <button
+                type="button"
+                onClick={addQuestion}
+                className="w-full py-8 border-2 border-dashed border-slate-200 dark:border-neutral-800 hover:border-blue-500 dark:hover:border-blue-400 hover:bg-blue-50/30 dark:hover:bg-blue-900/10 rounded-2xl flex flex-col items-center justify-center gap-2 group transition-all text-slate-450 dark:text-neutral-500 hover:text-blue-600 dark:hover:text-blue-400"
+              >
+                <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-neutral-800 group-hover:bg-blue-100 dark:group-hover:bg-blue-900/50 flex items-center justify-center transition-colors">
+                  <Plus size={20} className="text-slate-500 dark:text-neutral-400 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
+                </div>
+                <div className="text-lg font-normal">{t.addQuestion}</div>
+                <div className="text-sm text-slate-400 dark:text-neutral-500 group-hover:text-blue-500/80 dark:group-hover:text-blue-400/80 font-normal">
+                  {t.addQuestionDesc}
+                </div>
+              </button>
+            </section>
             {/* 獎勵與限制設定 */}
             <section className="bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-4 transition-colors">
               <h2 className="text-h2 flex items-center gap-1.5 border-b pb-2 border-slate-100 dark:border-neutral-800">
@@ -615,9 +840,18 @@ export default function CreatePage() {
                       const ms = new Date(e.target.value).getTime()
                       if (!isNaN(ms)) updateField('deadlineMs', ms)
                     }}
-                    className="mt-1.5 form-input"
+                    max={deadlineMsToLocalInput(maxDeadlineMs)}
+                    className={`mt-1.5 form-input ${deadlineErrorMsg ? 'border-red-500 focus:ring-red-500 focus:border-red-500 dark:border-red-600' : ''}`}
                     aria-label="deadline"
                   />
+                  {deadlineErrorMsg && (
+                    <span className="text-xs text-rose-600 dark:text-rose-400 mt-1.5 block">
+                      {deadlineErrorMsg}
+                    </span>
+                  )}
+                  <span className="text-muted mt-1.5 block">
+                    {t.purgeLifecycleNotice(purgeGraceDays)}
+                  </span>
                 </label>
 
                 <label className="block">
@@ -697,37 +931,105 @@ export default function CreatePage() {
 
               {/* 簡易試算卡片 */}
               {data.perResponse > 0 && data.maxResponses > 0 && costBreakdown && (
-                <div className="bg-blue-50/50 dark:bg-blue-950/10 border border-blue-100 dark:border-blue-900/30 rounded-2xl p-5 space-y-2 mt-2 transition-colors">
-                  <div className="flex justify-between items-center text-sm border-b border-blue-100 dark:border-blue-900/20 pb-1.5">
+                <div className="bg-blue-50/50 dark:bg-blue-950/10 border border-blue-100 dark:border-blue-900/30 rounded-2xl p-5 space-y-3 mt-2 transition-colors">
+                  <div className="flex justify-between items-center text-sm border-b border-blue-100 dark:border-blue-900/20 pb-1.5 flex-wrap gap-2">
                     <span className="font-medium text-blue-800 dark:text-blue-400 text-base">{t.costEstimation}</span>
-                    <span className="text-sm text-blue-700 dark:text-blue-500 font-medium">{t.currentAmmCurve}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500 dark:text-neutral-400">
+                        {t.estSize(surveySizeKb.toFixed(2))}
+                      </span>
+                      {isLargeSurvey ? (
+                        <span className="badge-decentralized shrink-0">
+                          {t.storageDecentralized}
+                        </span>
+                      ) : (
+                        <span className="badge-direct shrink-0">
+                          {t.storageDirect}
+                        </span>
+                      )}
+                    </div>
                   </div>
+
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-slate-600 dark:text-neutral-400 font-medium">{t.ssrOffset}</span>
-                      <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.offsetIn)} SSR`}>
-                        {formatSsr(costBreakdown.offsetIn)} SSR
-                      </span>
+                    {/* SSR 預算明細組 */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
+                        <span>{t.totalSsrLabel}</span>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300">
+                          {totalSsrNum.toString()} SSR
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
+                        <span>{t.platformFeeLabel}</span>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR`}>
+                          {formatSsr((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-t border-slate-100 dark:border-neutral-800/50 pt-1.5 font-medium text-slate-700 dark:text-neutral-200">
+                        <span>{t.totalSsrRequiredLabel}</span>
+                        <span className="font-bold text-blue-700 dark:text-blue-400" title={`${formatFullPrecision(costBreakdown.grossSsrBase)} SSR`}>
+                          {formatSsr(costBreakdown.grossSsrBase)} SSR
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600 dark:text-neutral-400 font-medium">{t.newMintSsr}</span>
-                      <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.minted)} SSR`}>
-                        {formatSsr(costBreakdown.minted)} SSR
-                      </span>
+
+                    {/* 來源分拆組 */}
+                    <div className="border-t border-slate-100 dark:border-neutral-800/80 pt-2 space-y-1">
+                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
+                        <span>{t.ssrOffsetLabel}</span>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.offsetIn)} SSR`}>
+                          - {formatSsr(costBreakdown.offsetIn)} SSR
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
+                        <span>{t.newMintSsrLabel}</span>
+                        <span className="font-bold text-slate-800 dark:text-neutral-200" title={`${formatFullPrecision(costBreakdown.minted)} SSR`}>
+                          {formatSsr(costBreakdown.minted)} SSR
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-555 dark:text-neutral-400 font-medium">{t.platformFee}</span>
-                      <span className="font-bold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR`}>
-                        {formatSsr(
-                          (costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n
-                        )}{' '}
-                        SSR
-                      </span>
+
+                    {/* SUI 支付項目組 */}
+                    <div className="border-t border-slate-100 dark:border-neutral-800/80 pt-2 space-y-1.5">
+                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
+                        <div className="flex items-center gap-1">
+                          <span>{t.mintSuiCostLabel}</span>
+                          <div className="group relative inline-block">
+                            <Info size={13} className="text-slate-400 hover:text-slate-600 dark:text-neutral-500 dark:hover:text-neutral-300 cursor-pointer" />
+                            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 bg-slate-900 text-white dark:bg-neutral-800 dark:text-neutral-100 text-xs rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none leading-relaxed font-normal">
+                              <p className="font-semibold">{t.exchangeRateLabel} 1 SUI ≈ {currentRate.toFixed(2)} SSR</p>
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900 dark:border-t-neutral-800" />
+                            </div>
+                          </div>
+                        </div>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.suiToInvest)} SUI`}>
+                          {formatSui(costBreakdown.suiToInvest)} SUI
+                        </span>
+                      </div>
+                      {requiredGas > 0n && (
+                        <div className="flex justify-between items-center text-slate-600 dark:text-neutral-400">
+                          <div className="flex items-center gap-1">
+                            <span>{t.gasFundLabel}</span>
+                            <div className="group relative inline-block">
+                              <Info size={13} className="text-slate-400 hover:text-slate-600 dark:text-neutral-500 dark:hover:text-neutral-300 cursor-pointer" />
+                              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 bg-slate-900 text-white dark:bg-neutral-800 dark:text-neutral-100 text-xs rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none leading-relaxed font-normal">
+                                {t.gasFundDesc}
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900 dark:border-t-neutral-800" />
+                              </div>
+                            </div>
+                          </div>
+                          <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(requiredGas)} SUI`}>
+                            {formatSui(requiredGas)} SUI
+                          </span>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2 font-bold">
-                      <span className="text-slate-700 dark:text-neutral-300">{t.suiConsumption}</span>
-                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono" title={`${formatFullPrecision(costBreakdown.suiToInvest)} SUI`}>
-                        {formatSui(costBreakdown.suiToInvest)} SUI
+
+                    {/* 最終總結組 */}
+                    <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2.5 font-bold">
+                      <span className="text-slate-800 dark:text-neutral-200">{t.totalSuiCostLabel}</span>
+                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono" title={`${formatFullPrecision(costBreakdown.suiToInvest + requiredGas)} SUI`}>
+                        {formatSui(costBreakdown.suiToInvest + requiredGas)} SUI
                       </span>
                     </div>
                   </div>
@@ -735,181 +1037,6 @@ export default function CreatePage() {
               )}
             </section>
 
-            {/* 題目區 */}
-            <section className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-h2">{t.questionsList}</h2>
-              </div>
-
-              {data.questions.map((q, idx) => (
-                <div
-                  key={idx}
-                  className="border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-4 bg-slate-50/50 dark:bg-neutral-900/30 hover:bg-slate-50 dark:hover:bg-neutral-800/40 transition-colors relative animate-fadeIn"
-                  aria-label={`題目 ${q.id}`}
-                >
-                  <div className="flex items-center justify-between border-b pb-2 border-slate-200/60 dark:border-neutral-800">
-                    <div className="flex items-center gap-3">
-                      <span className={`text-sm font-normal transition-colors ${q.required ? 'text-rose-800 dark:text-rose-400' : 'text-slate-700 dark:text-neutral-300'}`}>
-                        {t.questionIndex.replace('{index}', String(idx + 1))}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          id={`required-${idx}`}
-                          type="checkbox"
-                          checked={q.required}
-                          onChange={(e) => updateQuestion(idx, { required: e.target.checked })}
-                          className={`checkbox-dark ${q.required
-                            ? 'checked:bg-rose-700 checked:border-rose-700 dark:checked:bg-rose-950 dark:checked:border-rose-600 focus:ring-rose-500'
-                            : 'checked:bg-blue-600 checked:border-blue-600'
-                            }`}
-                        />
-                        <label
-                          htmlFor={`required-${idx}`}
-                          className={`text-sm font-normal cursor-pointer select-none transition-colors ${q.required ? 'text-rose-800 dark:text-rose-400' : 'text-slate-500 dark:text-neutral-400'
-                            }`}
-                        >
-                          {t.required}
-                        </label>
-                      </div>
-                    </div>
-                    <div className="flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => moveQuestion(idx, -1)}
-                        disabled={idx === 0}
-                        className="w-7 h-7 flex items-center justify-center text-sm border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 rounded-lg disabled:opacity-30 disabled:hover:bg-white dark:disabled:hover:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 transition-colors"
-                        aria-label={`上移 ${q.id}`}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => moveQuestion(idx, 1)}
-                        disabled={idx === data.questions.length - 1}
-                        className="w-7 h-7 flex items-center justify-center text-sm border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 rounded-lg disabled:opacity-30 disabled:hover:bg-white dark:disabled:hover:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 transition-colors"
-                        aria-label={`下移 ${q.id}`}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm(lang === 'ZH' ? '確定要刪除這道題目嗎？' : 'Are you sure you want to delete this question?')) {
-                            deleteQuestion(idx)
-                          }
-                        }}
-                        className="w-7 h-7 flex items-center justify-center border border-red-200 dark:border-red-900/30 bg-white dark:bg-neutral-900 text-red-500 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
-                        aria-label={`刪除 ${q.id}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div>
-                      <span className="form-label">{t.questionType}</span>
-                      <div className="flex flex-wrap gap-2 mt-1.5">
-                        {(Object.keys(TYPE_LABELS_INFO) as QuestionType[]).map((tType) => (
-                          <button
-                            key={tType}
-                            type="button"
-                            onClick={() => changeQuestionType(idx, tType)}
-                            className={`px-3 py-1.5 rounded-xl border text-sm font-normal transition-all flex items-center gap-1.5 ${q.type === tType
-                              ? 'bg-blue-700 border-blue-700 text-white dark:bg-blue-800 dark:border-blue-800 dark:text-neutral-200'
-                              : 'bg-white dark:bg-neutral-900 border-slate-200 dark:border-neutral-700 text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-800'
-                              }`}
-                          >
-                            <span>{TYPE_LABELS_INFO[tType].label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <label className="block">
-                      <span className="form-label">{t.questionPrompt}</span>
-                      <input
-                        type="text"
-                        value={q.prompt}
-                        onChange={(e) => updateQuestion(idx, { prompt: e.target.value })}
-                        className="mt-1.5 form-input"
-                        placeholder={t.placeholderPrompt}
-                        aria-label={`prompt ${q.id}`}
-                      />
-                    </label>
-
-                    {(q.type === 'single_choice' || q.type === 'multi_choice') &&
-                      q.options_json && (
-                        <div className="space-y-2 pt-2">
-                          <span className="form-label">
-                            {t.optionListLabel}
-                          </span>
-                          <div className="space-y-1.5">
-                            {q.options_json.map((opt, oi) => (
-                              <div key={oi} className="flex gap-2 items-center">
-                                <span className="text-slate-400 dark:text-neutral-500 text-sm select-none">
-                                  {oi + 1}.
-                                </span>
-                                <input
-                                  type="text"
-                                  value={opt}
-                                  onChange={(e) => updateOption(idx, oi, e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault()
-                                      addOption(idx)
-                                    } else if (
-                                      e.key === 'Backspace' &&
-                                      opt === '' &&
-                                      q.options_json &&
-                                      q.options_json.length > 1
-                                    ) {
-                                      e.preventDefault()
-                                      removeOption(idx, oi)
-                                    }
-                                  }}
-                                  className="flex-1 form-input py-1 text-sm"
-                                  placeholder={t.placeholderOption.replace('{index}', String(oi + 1))}
-                                  aria-label={`選項 ${q.id} #${oi + 1}`}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => removeOption(idx, oi)}
-                                  className="w-7 h-7 flex items-center justify-center border border-red-100 dark:border-red-900/30 text-red-500 dark:text-red-400 bg-white dark:bg-neutral-900 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors text-sm"
-                                  aria-label={`刪除選項 ${q.id} #${oi + 1}`}
-                                >
-                                  ×
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => addOption(idx)}
-                            className="text-sm font-normal text-slate-500 dark:text-neutral-450 hover:text-slate-700 dark:hover:text-neutral-200 transition-colors flex items-center gap-1 mt-1"
-                          >
-                            {t.addOption}
-                          </button>
-                        </div>
-                      )}
-                  </div>
-                </div>
-              ))}
-              {/* 虛線框加號按鈕 */}
-              <button
-                type="button"
-                onClick={addQuestion}
-                className="w-full py-8 border-2 border-dashed border-slate-200 dark:border-neutral-800 hover:border-blue-500 dark:hover:border-blue-400 hover:bg-blue-50/30 dark:hover:bg-blue-900/10 rounded-2xl flex flex-col items-center justify-center gap-2 group transition-all text-slate-450 dark:text-neutral-500 hover:text-blue-600 dark:hover:text-blue-400"
-              >
-                <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-neutral-800 group-hover:bg-blue-100 dark:group-hover:bg-blue-900/50 flex items-center justify-center transition-colors">
-                  <Plus size={20} className="text-slate-500 dark:text-neutral-400 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
-                </div>
-                <div className="text-lg font-normal">{t.addQuestion}</div>
-                <div className="text-sm text-slate-400 dark:text-neutral-500 group-hover:text-blue-500/80 dark:group-hover:text-blue-400/80 font-normal">
-                  {t.addQuestionDesc}
-                </div>
-              </button>
-            </section>
           </div>
 
           {error && (

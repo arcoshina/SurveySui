@@ -1,21 +1,35 @@
 module surveysui::survey_vault;
 
 use std::bcs;
+use std::hash;
+use std::option::{Self, Option};
 use std::vector;
 use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
 use sui::event;
 use sui::table::{Self, Table};
+use sui::dynamic_field as df;
+use sui::sui::SUI;
 use surveysui::stacked_survey_reward::{Self, STACKED_SURVEY_REWARD};
 use surveysui::survey_pass::{Self, SurveyPass};
 use surveysui::amm_pool::{Self, Pool};
+use surveysui::survey_registry::{Self, Survey};
 
 const STATUS_OPEN: u8   = 0;
 const STATUS_CLOSED: u8 = 1;
 
 /// Vault deposit fee (0.3% in basis points).
 const VAULT_FEE_BPS: u64 = 30;
+
+/// Lower bound for the purge grace period (7 days). Guards against a
+/// mis-configured deployment setting an unreasonably short window.
+const MIN_PURGE_GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Default purge grace period (90 days) applied at creation. The frontend
+/// overrides this per-vault from `VITE_PURGE_GRACE_MS` via `set_purge_grace_ms`,
+/// so the window is env-tunable without recompiling; this is just the fallback.
+const DEFAULT_PURGE_GRACE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
 const ENotCreator: u64           = 0;
 const ENoQuota: u64              = 1;
@@ -27,12 +41,37 @@ const EEmptyAnswers: u64         = 6;
 const EInsufficientVaultBalance: u64 = 7;
 const EInvalidRewardConfig: u64  = 8;
 const ERepeatLimitReached: u64   = 9;
+const EInsufficientGasBalance: u64 = 10;
+const EInvalidGasDeposit: u64 = 11;
+const EDuplicateNullifier: u64 = 12;
+const EDuplicateBlobId: u64 = 13;
+const EInvalidSurveyVaultMatch: u64 = 14;
+const EPurgeTooEarly: u64 = 15;
+const EGraceTooShort: u64 = 16;
+const ENotClosed: u64 = 17;
 
+/// One stored answer, kept as a dynamic field on the vault's UID so it can be
+/// individually removed (and its storage rebated) when the vault is purged.
+/// `kind`: 0 = inline ciphertext in `payload`, 1 = `payload` is a Walrus blob id.
+public struct AnswerRecord has store, drop {
+    kind: u8,
+    payload: vector<u8>,
+    respondent: address,
+    sub_hash: vector<u8>,
+    claimed_at_ms: u64,
+}
+
+/// Metadata-only claim event. Deliberately carries **no recoverable answer
+/// payload** (only a non-reversible `content_hash`) — the ciphertext lives in a
+/// deletable dynamic field so it can be destroyed at purge. Events are immutable
+/// on Sui, so anything emitted here would be permanent.
 public struct SurveyClaimed has copy, drop {
     vault_id: ID,
     sub_hash: vector<u8>,
     respondent: address,
-    encrypted_answers: vector<u8>,
+    kind: u8,
+    content_hash: vector<u8>,
+    answer_index: u64,
     claimed_at_ms: u64,
 }
 
@@ -41,6 +80,15 @@ public struct SurveyClosed has copy, drop {
     creator: address,
     closed_at_ms: u64,
     remaining_balance_refunded: u64,
+}
+
+/// Emitted when a vault (and its survey) is permanently destroyed. No sensitive
+/// payload — just a tombstone for indexers.
+public struct VaultPurged has copy, drop {
+    vault_id: ID,
+    survey_id: ID,
+    answers_destroyed: u64,
+    purged_at_ms: u64,
 }
 
 /// Survey vault holding SSR balance for respondents.
@@ -55,10 +103,22 @@ public struct SurveyVault has key {
     deadline_ms: u64,
     claimed_count: u64,
     claim_counts: Table<vector<u8>, u64>,
+    used_nullifiers: Table<vector<u8>, address>, // scoped_key H(nullifier‖vault_id) -> owner
+    used_blob_ids: Table<vector<u8>, bool>,
     admin_treasury: address,
     creator: address,
     status: u8,
     closed_at_ms: u64,
+    gas_balance: Balance<SUI>,
+    sponsor_address: address,
+    gas_compensation_amount: u64,
+    storage_compensation_amount: u64,
+    /// Monotonic counter; also the next dynamic-field key for a stored answer.
+    answers_count: u64,
+    /// Grace period (ms) after the vault becomes terminal before it may be purged.
+    /// Stored per-vault (sourced from a deployment env at creation) so the window
+    /// is tunable without recompiling the contract.
+    purge_grace_ms: u64,
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
@@ -73,11 +133,23 @@ public fun create(
     max_responses: u64,
     deadline_ms: u64,
     admin_treasury: address,
+    gas_coin: Coin<SUI>,
+    sponsor_address: address,
+    gas_compensation_amount: u64,
+    storage_compensation_amount: u64,
     ctx: &mut TxContext,
 ): SurveyVault {
     assert!(per_response >= 1, EInvalidRewardConfig);
     assert!(repeat_max_times >= 1, EInvalidRewardConfig);
     // repeat_reward is u64, naturally non-negative; 0 means "no repeat allowed"
+
+    let per_response_sui = gas_compensation_amount + storage_compensation_amount;
+    let required_gas = if (repeat_reward > 0) {
+        max_responses * (1 + repeat_max_times) * per_response_sui
+    } else {
+        max_responses * per_response_sui
+    };
+    assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
 
     SurveyVault {
         id: object::new(ctx),
@@ -89,10 +161,18 @@ public fun create(
         deadline_ms,
         claimed_count: 0,
         claim_counts: table::new(ctx),
+        used_nullifiers: table::new(ctx),
+        used_blob_ids: table::new(ctx),
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
         closed_at_ms: 0,
+        gas_balance: coin::into_balance(gas_coin),
+        sponsor_address,
+        gas_compensation_amount,
+        storage_compensation_amount,
+        answers_count: 0,
+        purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
     }
 }
 
@@ -112,7 +192,8 @@ public fun fund(vault: &mut SurveyVault, ssr_coin: Coin<STACKED_SURVEY_REWARD>, 
 public fun claim(
     vault: &mut SurveyVault,
     pass: &SurveyPass,
-    encrypted_answers: vector<u8>,
+    encrypted_answers: Option<vector<u8>>,
+    answer_blob_id: Option<vector<u8>>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -120,7 +201,48 @@ public fun claim(
     assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
     assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
     assert!(survey_pass::owner(pass) == ctx.sender(), EInvalidPass);
-    assert!(!vector::is_empty(&encrypted_answers), EEmptyAnswers);
+
+    // Size-based storage validation. Capture (kind, payload) so the answer can be
+    // stored in a deletable dynamic field below instead of in the immutable event.
+    // kind: 0 = inline ciphertext, 1 = Walrus blob id.
+    let kind: u8;
+    let payload: vector<u8>;
+    if (option::is_some(&encrypted_answers)) {
+        let bytes = option::borrow(&encrypted_answers);
+        assert!(!vector::is_empty(bytes), EEmptyAnswers);
+        kind = 0;
+        payload = *bytes;
+    } else if (option::is_some(&answer_blob_id)) {
+        let blob_id = option::borrow(&answer_blob_id);
+        assert!(!vector::is_empty(blob_id), EEmptyAnswers);
+        // 去中心化儲存 ID 去重防範重複提交
+        assert!(!table::contains(&vault.used_blob_ids, *blob_id), EDuplicateBlobId);
+        table::add(&mut vault.used_blob_ids, *blob_id, true);
+        kind = 1;
+        payload = *blob_id;
+    } else {
+        abort EEmptyAnswers
+    };
+
+    // ── nullifier 聯集去重（scope 至本 vault，疊加於位址去重之上）──
+    // 取 Pass 上所有憑證 nullifier，逐一以 H(nullifier‖vault_id) 為 key：
+    // 已被別的身分用過 → 擋（EDuplicateNullifier）；同 owner（含重複填答）放行。
+    // 無 nullifier 的 Pass（自填／測試）聯集為空，自然退回純位址去重。
+    let vault_id_bytes = bcs::to_bytes(&object::id(vault));
+    let nullifiers = survey_pass::all_nullifiers(pass);
+    let mut n = 0;
+    let nlen = vector::length(&nullifiers);
+    while (n < nlen) {
+        let mut buf = *vector::borrow(&nullifiers, n);
+        vector::append(&mut buf, vault_id_bytes);
+        let scoped = hash::sha2_256(buf);
+        if (table::contains(&vault.used_nullifiers, scoped)) {
+            assert!(*table::borrow(&vault.used_nullifiers, scoped) == ctx.sender(), EDuplicateNullifier);
+        } else {
+            table::add(&mut vault.used_nullifiers, scoped, ctx.sender());
+        };
+        n = n + 1;
+    };
 
     let key = bcs::to_bytes(&ctx.sender());
     let prior = if (table::contains(&vault.claim_counts, key)) {
@@ -149,12 +271,28 @@ public fun claim(
         *count_ref = prior + 1;
     };
 
+    // Store the answer in a deletable dynamic field keyed by a monotonic index,
+    // so it can be individually destroyed (and storage rebated) at purge time.
+    let answer_index = vault.answers_count;
+    let now_ms = clock::timestamp_ms(clock);
+    let content_hash = hash::sha2_256(copy payload);
+    df::add(&mut vault.id, answer_index, AnswerRecord {
+        kind,
+        payload,
+        respondent: ctx.sender(),
+        sub_hash: key,
+        claimed_at_ms: now_ms,
+    });
+    vault.answers_count = answer_index + 1;
+
     event::emit(SurveyClaimed {
         vault_id: object::id(vault),
         sub_hash: key,
         respondent: ctx.sender(),
-        encrypted_answers,
-        claimed_at_ms: clock::timestamp_ms(clock),
+        kind,
+        content_hash,
+        answer_index,
+        claimed_at_ms: now_ms,
     });
 
     if (reward_amount > 0) {
@@ -164,6 +302,36 @@ public fun claim(
         );
         transfer::public_transfer(reward, ctx.sender());
     };
+
+    let sponsor_opt = tx_context::sponsor(ctx);
+    if (std::option::is_some(&sponsor_opt)) {
+        let sponsor = std::option::destroy_some(sponsor_opt);
+        if (sponsor == vault.sponsor_address) {
+            let mut total_compensation = 0;
+            if (balance::value(&vault.gas_balance) >= vault.gas_compensation_amount) {
+                total_compensation = total_compensation + vault.gas_compensation_amount;
+            };
+            if (option::is_some(&answer_blob_id) && balance::value(&vault.gas_balance) >= total_compensation + vault.storage_compensation_amount) {
+                total_compensation = total_compensation + vault.storage_compensation_amount;
+            };
+            if (total_compensation > 0) {
+                let compensation = coin::from_balance(
+                    balance::split(&mut vault.gas_balance, total_compensation),
+                    ctx
+                );
+                transfer::public_transfer(compensation, sponsor);
+            };
+        };
+    } else {
+        // 自付交易模式：若使用了去中心化儲存，將儲存補貼發還給 respondent (ctx.sender())
+        if (option::is_some(&answer_blob_id) && balance::value(&vault.gas_balance) >= vault.storage_compensation_amount) {
+            let compensation = coin::from_balance(
+                balance::split(&mut vault.gas_balance, vault.storage_compensation_amount),
+                ctx
+            );
+            transfer::public_transfer(compensation, ctx.sender());
+        };
+    };
 }
 
 /// Creator closes vault and recovers remaining SSR.
@@ -171,6 +339,7 @@ public fun claim(
 public fun close(vault: &mut SurveyVault, clock: &Clock, ctx: &mut TxContext) {
     assert!(ctx.sender() == vault.creator, ENotCreator);
     assert!(vault.status == STATUS_OPEN, EVaultClosed);
+
     let amount = balance::value(&vault.balance);
     if (amount > 0) {
         let coin = coin::from_balance(
@@ -179,6 +348,16 @@ public fun close(vault: &mut SurveyVault, clock: &Clock, ctx: &mut TxContext) {
         );
         transfer::public_transfer(coin, vault.creator);
     };
+
+    let gas_amount = balance::value(&vault.gas_balance);
+    if (gas_amount > 0) {
+        let gas_coin = coin::from_balance(
+            balance::split(&mut vault.gas_balance, gas_amount),
+            ctx
+        );
+        transfer::public_transfer(gas_coin, vault.creator);
+    };
+
     vault.status = STATUS_CLOSED;
     vault.closed_at_ms = clock::timestamp_ms(clock);
 
@@ -190,6 +369,112 @@ public fun close(vault: &mut SurveyVault, clock: &Clock, ctx: &mut TxContext) {
     });
 }
 
+/// Permanently destroy the vault and its survey once the grace period has
+/// elapsed. Anyone may call this after the gate opens — the BFF cron is the
+/// normal trigger, permissionless call is the fallback. The gate floor is the
+/// vault's terminal moment (`closed_at_ms`, or `deadline_ms` for an
+/// abandoned/expired vault) plus `purge_grace_ms`. Truly deletes every stored
+/// answer (dynamic fields) so the ciphertext is unrecoverable; storage rebate
+/// from the deleted objects goes to the transaction's gas owner.
+public fun purge(
+    registry: &mut survey_registry::SurveyRegistry,
+    survey: Survey,
+    vault: SurveyVault,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    // Survey and vault must belong together.
+    assert!(survey_registry::vault_id(&survey) == object::id(&vault), EInvalidSurveyVaultMatch);
+
+    // Gate. The creator may purge their own survey immediately — but must close
+    // it first (so respondents see a final state). Everyone else (BFF cron /
+    // permissionless fallback) must wait for the terminal anchor + grace window.
+    let now = clock::timestamp_ms(clock);
+    if (ctx.sender() == vault.creator) {
+        assert!(vault.status == STATUS_CLOSED, ENotClosed);
+    } else {
+        let anchor = if (vault.status == STATUS_CLOSED) {
+            vault.closed_at_ms
+        } else {
+            // Never closed: only purgeable once past its deadline (abandoned/expired).
+            assert!(now > vault.deadline_ms, EPurgeTooEarly);
+            vault.deadline_ms
+        };
+        assert!(now >= anchor + vault.purge_grace_ms, EPurgeTooEarly);
+    };
+
+    let vault_id = object::id(&vault);
+    let survey_id = object::id(&survey);
+
+    // Unpack the vault to delete its UID and reclaim storage.
+    let SurveyVault {
+        mut id,
+        mut balance,
+        per_response: _,
+        repeat_reward: _,
+        repeat_max_times: _,
+        max_responses: _,
+        deadline_ms: _,
+        claimed_count: _,
+        claim_counts,
+        used_nullifiers,
+        used_blob_ids,
+        admin_treasury: _,
+        creator,
+        status: _,
+        closed_at_ms: _,
+        mut gas_balance,
+        sponsor_address: _,
+        gas_compensation_amount: _,
+        storage_compensation_amount: _,
+        answers_count,
+        purge_grace_ms: _,
+    } = vault;
+
+    // Destroy every stored answer (truly deletes the ciphertext dynamic fields).
+    let mut i = 0;
+    while (i < answers_count) {
+        let AnswerRecord { .. } = df::remove<u64, AnswerRecord>(&mut id, i);
+        i = i + 1;
+    };
+
+    // Refund any residual balances to the creator. close() normally drains these,
+    // but an abandoned/expired-but-never-closed vault may still hold funds.
+    let ssr_amount = balance::value(&balance);
+    if (ssr_amount > 0) {
+        transfer::public_transfer(
+            coin::from_balance(balance::split(&mut balance, ssr_amount), ctx),
+            creator,
+        );
+    };
+    balance::destroy_zero(balance);
+    let gas_amount = balance::value(&gas_balance);
+    if (gas_amount > 0) {
+        transfer::public_transfer(
+            coin::from_balance(balance::split(&mut gas_balance, gas_amount), ctx),
+            creator,
+        );
+    };
+    balance::destroy_zero(gas_balance);
+
+    // Drop the dedup tables (contain only hashes/counts — no answer plaintext).
+    table::drop(claim_counts);
+    table::drop(used_nullifiers);
+    table::drop(used_blob_ids);
+
+    object::delete(id);
+
+    // Destroy the survey object and clean the registry index.
+    survey_registry::remove_and_destroy(registry, survey);
+
+    event::emit(VaultPurged {
+        vault_id,
+        survey_id,
+        answers_destroyed: answers_count,
+        purged_at_ms: now,
+    });
+}
+
 public fun create_empty(
     per_response: u64,
     repeat_reward: u64,
@@ -197,10 +482,22 @@ public fun create_empty(
     max_responses: u64,
     deadline_ms: u64,
     admin_treasury: address,
+    gas_coin: Coin<SUI>,
+    sponsor_address: address,
+    gas_compensation_amount: u64,
+    storage_compensation_amount: u64,
     ctx: &mut TxContext,
 ): SurveyVault {
     assert!(per_response >= 1, EInvalidRewardConfig);
     assert!(repeat_max_times >= 1, EInvalidRewardConfig);
+
+    let per_response_sui = gas_compensation_amount + storage_compensation_amount;
+    let required_gas = if (repeat_reward > 0) {
+        max_responses * (1 + repeat_max_times) * per_response_sui
+    } else {
+        max_responses * per_response_sui
+    };
+    assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
 
     SurveyVault {
         id: object::new(ctx),
@@ -212,10 +509,18 @@ public fun create_empty(
         deadline_ms,
         claimed_count: 0,
         claim_counts: table::new(ctx),
+        used_nullifiers: table::new(ctx),
+        used_blob_ids: table::new(ctx),
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
         closed_at_ms: 0,
+        gas_balance: coin::into_balance(gas_coin),
+        sponsor_address,
+        gas_compensation_amount,
+        storage_compensation_amount,
+        answers_count: 0,
+        purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
     }
 }
 
@@ -288,3 +593,69 @@ public fun fee_bps(): u64 { VAULT_FEE_BPS }
 /// Returns the on-chain ID of an (unshared or shared) vault.
 /// Exposed so PTBs can pipe `create` → `survey_registry::register` in one block.
 public fun id_of(vault: &SurveyVault): ID { object::id(vault) }
+
+/// Add more SUI gas to the vault.
+public fun deposit_gas(vault: &mut SurveyVault, gas_coin: Coin<SUI>) {
+    assert!(coin::value(&gas_coin) > 0, EInvalidGasDeposit);
+    balance::join(&mut vault.gas_balance, coin::into_balance(gas_coin));
+}
+
+public fun gas_balance_value(vault: &SurveyVault): u64 {
+    balance::value(&vault.gas_balance)
+}
+
+public fun sponsor_address(vault: &SurveyVault): address {
+    vault.sponsor_address
+}
+
+public fun gas_compensation_amount(vault: &SurveyVault): u64 {
+    vault.gas_compensation_amount
+}
+
+public fun set_sponsor_address(vault: &mut SurveyVault, new_sponsor: address, ctx: &TxContext) {
+    assert!(ctx.sender() == vault.creator, ENotCreator);
+    vault.sponsor_address = new_sponsor;
+}
+
+public fun set_gas_compensation_amount(vault: &mut SurveyVault, new_amount: u64, ctx: &TxContext) {
+    assert!(ctx.sender() == vault.creator, ENotCreator);
+    vault.gas_compensation_amount = new_amount;
+}
+
+/// Override the per-vault purge grace period. Creator-only; the create PTB calls
+/// this with the deployment's `VITE_PURGE_GRACE_MS` so the auto-destroy window is
+/// env-configurable. Must be at least `MIN_PURGE_GRACE_MS`.
+public fun set_purge_grace_ms(vault: &mut SurveyVault, new_grace_ms: u64, ctx: &TxContext) {
+    assert!(ctx.sender() == vault.creator, ENotCreator);
+    assert!(new_grace_ms >= MIN_PURGE_GRACE_MS, EGraceTooShort);
+    vault.purge_grace_ms = new_grace_ms;
+}
+
+public fun storage_compensation_amount(vault: &SurveyVault): u64 {
+    vault.storage_compensation_amount
+}
+
+public fun purge_grace_ms(vault: &SurveyVault): u64 { vault.purge_grace_ms }
+
+public fun answers_count(vault: &SurveyVault): u64 { vault.answers_count }
+
+/// True iff the dynamic field for answer `index` still exists.
+public fun has_answer(vault: &SurveyVault, index: u64): bool {
+    df::exists_(&vault.id, index)
+}
+
+// ── test helpers ──────────────────────────────────────────────────────────────
+
+#[test_only]
+/// Inject a stored answer the same way `claim` does, without the full claim path.
+public fun add_answer_for_testing(vault: &mut SurveyVault, payload: vector<u8>) {
+    let idx = vault.answers_count;
+    df::add(&mut vault.id, idx, AnswerRecord {
+        kind: 0,
+        payload,
+        respondent: @0x0,
+        sub_hash: vector::empty(),
+        claimed_at_ms: 0,
+    });
+    vault.answers_count = idx + 1;
+}

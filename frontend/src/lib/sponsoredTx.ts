@@ -1,11 +1,14 @@
 import { Transaction } from '@mysten/sui/transactions'
 import type { SuiClient } from '@mysten/sui/client'
+import { bcs } from '@mysten/sui/bcs'
 
 export interface ClaimPtbParams {
   packageId: string
   vaultId: string
+  surveyId: string
   passId: string
-  encryptedAnswers: string // hex string
+  encryptedAnswers?: string // optional hex string
+  answerBlobId?: string // optional pointer string
 }
 
 export interface SponsoredTxResult {
@@ -37,14 +40,23 @@ function bytesToBase64(bytes: Uint8Array): string {
 export function buildClaimPtb(params: ClaimPtbParams): Transaction {
   const tx = new Transaction()
 
-  const encryptedAnswersBytes = hexToBytes(params.encryptedAnswers)
+  const encryptedAnswersOpt = params.encryptedAnswers
+    ? hexToBytes(params.encryptedAnswers)
+    : null
+  const answerBlobIdOpt = params.answerBlobId
+    ? Array.from(new TextEncoder().encode(params.answerBlobId))
+    : null
+
+  const encryptedAnswersArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes())
+  const answerBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes())
 
   tx.moveCall({
     target: `${params.packageId}::survey_vault::claim`,
     arguments: [
       tx.object(params.vaultId),
       tx.object(params.passId),
-      tx.pure.vector('u8', encryptedAnswersBytes),
+      encryptedAnswersArg,
+      answerBlobIdArg,
       tx.object('0x6'), // clock
     ],
   })
@@ -83,7 +95,7 @@ export async function dryRunAndSponsorTx(params: {
     const err = await res
       .json()
       .catch(() => ({ error: 'unknown', message: 'Sponsorship request failed' }))
-    const msg = err.message || `Sponsorship failed with status ${res.status}`
+    const msg = err.message || err.error || `Sponsorship failed with status ${res.status}`
     // Treat any 422 or server-reported dry-run/move-abort failure as a
     // pre-flight rejection — the user has not paid gas in this branch.
     if (res.status === 422 || /dry\s*run|MoveAbort/i.test(msg)) {
@@ -105,6 +117,8 @@ export type FallbackResult =
 export interface GasHealth {
   available: boolean
   reason?: 'no_key' | 'low_balance' | 'unknown' | 'bff_down'
+  sponsorAddress?: string
+  gasCompensationAmount?: string
 }
 
 /**
@@ -146,9 +160,11 @@ export async function executeTxWithFallback(params: {
   client: SuiClient
   backendUrl?: string
   signAndExecute: SignAndExecuteFn
-  onSelfPaidFallback?: (gasEstimateMist: bigint) => Promise<boolean>
+  onSelfPaidFallback?: (gasEstimateMist: bigint, bffError?: Error) => Promise<boolean>
 }): Promise<FallbackResult> {
   const { tx, senderAddress, client, backendUrl = '', signAndExecute, onSelfPaidFallback } = params
+
+  let bffError: Error | undefined = undefined
 
   // Path 1: Try BFF-sponsored
   try {
@@ -163,7 +179,8 @@ export async function executeTxWithFallback(params: {
     if (err.message?.startsWith('DRY_RUN_REJECTED')) {
       throw err // Contract rejected — do NOT fallback to self-paid
     }
-    // Any other error (network, 5xx) → BFF unreachable, attempt client dry-run
+    bffError = err
+    // Any other error (network, 5xx, limit reached) → BFF fallback, attempt client dry-run
   }
 
   // Path 2: Client-side dry-run to validate before asking user to pay gas
@@ -177,9 +194,10 @@ export async function executeTxWithFallback(params: {
   }
 
   // Telemetry: emit warning + DOM event for observability
-  console.warn('[gas-fallback] BFF unreachable, switching to self-paid gas mode')
+  const reason = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED' ? 'limit_reached' : 'bff_unreachable'
+  console.warn(`[gas-fallback] BFF sponsorship failed (${reason}), switching to self-paid gas mode`)
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('gas-fallback', { detail: { reason: 'bff_unreachable' } }))
+    window.dispatchEvent(new CustomEvent('gas-fallback', { detail: { reason } }))
   }
 
   // Ask the UI for explicit user consent before charging gas
@@ -189,7 +207,7 @@ export async function executeTxWithFallback(params: {
       BigInt(gasUsed.computationCost) +
       BigInt(gasUsed.storageCost) -
       BigInt(gasUsed.storageRebate)
-    const approved = await onSelfPaidFallback(estimate > 0n ? estimate : 0n)
+    const approved = await onSelfPaidFallback(estimate > 0n ? estimate : 0n, bffError)
     if (!approved) {
       throw new Error(USER_DECLINED_SELF_PAID)
     }

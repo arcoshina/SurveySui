@@ -20,6 +20,7 @@ if (fs.existsSync(envPath)) {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  envDir: path.resolve(__dirname, '..'),
   define: {
     'import.meta.env.VITE_PACKAGE_ID': JSON.stringify(env.SUI_PACKAGE_ID || ''),
     'import.meta.env.VITE_AMM_POOL_ID': JSON.stringify(env.AMM_POOL_ID || ''),
@@ -37,6 +38,18 @@ export default defineConfig({
     alias: {
       '@': '/src',
     },
+  },
+  // @worldcoin/idkit 透過 new URL('idkit_wasm_bg.wasm', import.meta.url) 載入 WASM。
+  // 若被 esbuild pre-bundle，import.meta.url 會指向 .vite/deps，wasm 撲空 → dev server
+  // 回退成 index.html，IDKit 初始化時 WebAssembly.instantiate 收到 '<!do'（<!doctype）
+  // 而報 "expected magic word"。排除 pre-bundle 後走 Vite 原生 transform，wasm 才會
+  // 被正確當 asset 服務（application/wasm）。
+  optimizeDeps: {
+    exclude: ['@worldcoin/idkit', '@worldcoin/idkit-core'],
+    // idkit 內部 `import QRCodeUtil from 'qrcode/lib/core/qrcode.js'`（CJS）。
+    // 排除 idkit 後若不單獨 pre-bundle 這個 CJS 深層路徑，Vite 會把它當 ESM 載入，
+    // 因無 default export 而整頁崩成全黑。明確 include 讓 Vite 處理 CJS interop。
+    include: ['qrcode/lib/core/qrcode.js'],
   },
   build: {
     rollupOptions: {
@@ -60,7 +73,10 @@ export default defineConfig({
       '/auth': {
         target: 'http://localhost:3100',
         bypass: (req) => {
-          if (req.headers.accept?.includes('html')) {
+          // 只對 /auth 精確路徑（SPA 頁面）bypass；/auth/:provider/* 必須打到 BFF
+          const url = req.url ?? ''
+          const isSpaPage = url === '/auth' || url.startsWith('/auth?')
+          if (isSpaPage && req.headers.accept?.includes('html')) {
             return '/index.html'
           }
         },

@@ -93,3 +93,69 @@ export function formatFullPrecision(base: bigint | number | string): string {
 
   return isNegative ? `-${formatted}` : formatted
 }
+
+/**
+ * Formats a raw integer (like response counts, no decimals) compactly (e.g., 1.5K, 2M).
+ */
+export function formatCompactInt(val: number | bigint | string): string {
+  const num = Number(val)
+  if (isNaN(num)) return '0'
+  const isNegative = num < 0
+  const absNum = Math.abs(num)
+  
+  if (absNum < 1000) {
+    return String(num)
+  }
+  
+  const suffixes = [
+    { value: 1e9, symbol: 'B' },
+    { value: 1e6, symbol: 'M' },
+    { value: 1e3, symbol: 'K' }
+  ]
+  
+  for (const { value, symbol } of suffixes) {
+    if (absNum >= value) {
+      const formatted = (absNum / value).toFixed(1)
+      const cleanFormatted = formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted
+      const prefix = isNegative ? '-' : ''
+      return `${prefix}${cleanFormatted}${symbol}`
+    }
+  }
+  
+  return String(num)
+}
+
+/**
+ * Formats a base unit amount of coin (SSR/SUI, 9 decimals) compactly (e.g., 1.2K, 3.4M).
+ */
+export function formatCompactCoin(base: bigint | number | string): string {
+  const val = BigInt(base)
+  const isNegative = val < 0n
+  const absVal = isNegative ? -val : val
+  
+  const oneUnit = 1_000_000_000n
+  
+  if (absVal < 1000n * oneUnit) {
+    return formatSsr(val)
+  }
+  
+  const humanVal = Number(absVal) / 1e9
+  
+  const suffixes = [
+    { value: 1e9, symbol: 'B' },
+    { value: 1e6, symbol: 'M' },
+    { value: 1e3, symbol: 'K' }
+  ]
+  
+  for (const { value, symbol } of suffixes) {
+    if (humanVal >= value) {
+      const formatted = (humanVal / value).toFixed(1)
+      const cleanFormatted = formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted
+      const prefix = isNegative ? '-' : ''
+      return `${prefix}${cleanFormatted}${symbol}`
+    }
+  }
+  
+  return formatSsr(val)
+}
+
