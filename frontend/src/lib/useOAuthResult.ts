@@ -1,33 +1,39 @@
 import { useState, useEffect } from 'react'
 
-export interface OAuthTicket {
+export interface OAuthResultTicket {
   bff_sig: string
   expires_at: string
   nullifiers: string[]
   source: number
+}
+
+export interface OAuthResult {
+  tickets: OAuthResultTicket[]
   provider: string
 }
 
 export function useOAuthResult(): {
-  oauthTicket: OAuthTicket | null
+  oauthResult: OAuthResult | null
   clearOAuthResult: () => void
 } {
-  const [oauthTicket, setOauthTicket] = useState<OAuthTicket | null>(null)
+  const [oauthResult, setOauthResult] = useState<OAuthResult | null>(null)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
 
     // 標準 Social OAuth callback
-    const rawTicket = params.get('oauth_result')
-    if (rawTicket) {
+    const rawResult = params.get('oauth_result')
+    if (rawResult) {
       try {
-        let base64 = rawTicket.replace(/-/g, '+').replace(/_/g, '/')
+        let base64 = rawResult.replace(/-/g, '+').replace(/_/g, '/')
         while (base64.length % 4) {
           base64 += '='
         }
         const decoded = atob(base64)
-        const ticket = JSON.parse(decoded) as OAuthTicket
-        setOauthTicket(ticket)
+        const result = JSON.parse(decoded) as OAuthResult
+        if (result && Array.isArray(result.tickets)) {
+          setOauthResult(result)
+        }
       } catch {
         // malformed — ignore silently
       }
@@ -45,7 +51,7 @@ export function useOAuthResult(): {
   }, [])
 
   return {
-    oauthTicket,
-    clearOAuthResult: () => setOauthTicket(null),
+    oauthResult,
+    clearOAuthResult: () => setOauthResult(null),
   }
 }

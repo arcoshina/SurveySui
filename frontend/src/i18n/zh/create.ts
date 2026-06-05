@@ -87,6 +87,20 @@ const create = {
   confirmDeleteQuestion: '確定要刪除這道題目嗎？',
   shuffleOptions: '隨機排序選項',
   estSize: (kb: string) => `問卷預估大小: ${kb} KB`,
+  allowedNftTypeLabel: '應持有的 NFT',
+  placeholderAllowedNftType: '例如 0x2::devnet_nft::DevnetNFT',
+  errAllowedNftTypeRequired: '必須填寫限制持有的 NFT 類型',
+  errAllowedNftTypeInvalid: 'NFT 類型格式無效，須為類似 0x...::...::... 的結構',
+  allowedSourcesLabel: '接受的驗證（複選）',
+  errAllowedSourcesRequired: '請至少勾選一種憑證驗證來源',
+  limitNftLabel: 'NFT',
+  sourceSelfReport: '自我宣告',
+  sourceEmail: 'Email 驗證',
+  sourceSocial: '社群驗證',
+  sourceSelfProtocol: '自我協定',
+  sourceWorldId: 'World ID 驗證',
+  sourceGoogle: 'Google 驗證',
+  sourceGithub: 'GitHub 驗證',
 }
 
 export type CreateDict = typeof create

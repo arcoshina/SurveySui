@@ -20,9 +20,21 @@ export const SSR_BASE_PER_UNIT = 1_000_000_000n
  * data may be purged. Env-tunable via `VITE_PURGE_GRACE_MS`; falls back to the
  * contract default (90 days). The create PTB writes this onto the vault.
  */
-export const PURGE_GRACE_MS = BigInt(
-  import.meta.env.VITE_PURGE_GRACE_MS ?? 90 * 24 * 60 * 60 * 1000
-)
+const getPurgeGraceMs = (): number => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      return Number(import.meta.env.VITE_PURGE_GRACE_MS ?? 90 * 24 * 60 * 60 * 1000)
+    }
+  } catch {}
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      return Number(process.env.VITE_PURGE_GRACE_MS ?? 90 * 24 * 60 * 60 * 1000)
+    }
+  } catch {}
+  return 90 * 24 * 60 * 60 * 1000
+}
+
+export const PURGE_GRACE_MS = BigInt(getPurgeGraceMs())
 
 // ── estimate fund cost ────────────────────────────────────────────────────────
 
@@ -182,8 +194,8 @@ export interface BuildCreateSurveyPtbParams {
   encryptedContent: Uint8Array
   /** MIST amount of SUI to invest into the pool. */
   suiToSpend: bigint
-  /** 身分門檻：0 無門檻，1-3 對應 KYC tier。預設 0 以維持既有測試呼叫相容。 */
-  minTier?: number
+  /** 允許的憑證來源：如 [2, 6, 7, 5] (對應 Email=2, Google=6, GitHub=7, WorldID=5) */
+  allowedSources?: number[]
 
   // Hybrid decentralized storage parameters
   surveyBlobId?: Uint8Array
@@ -205,6 +217,8 @@ export interface BuildCreateSurveyPtbParams {
   creatorSsrCoins?: { coinObjectId: string; balance: string }[]
   sponsorAddress?: string
   gasCompensationAmount?: bigint
+  premiumFee?: bigint
+  allowedNftType?: string
 }
 
 /**
@@ -232,14 +246,16 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   const repeatMaxTimes = BigInt(p.repeatMaxTimes ?? 1)
   const gasCompensationAmount = p.gasCompensationAmount ?? 0n
   const storageCompensationAmount = p.storageCompensationAmount ?? 0n
+  const premiumFee = p.premiumFee ?? 0n
 
   const perResponseSui = gasCompensationAmount + storageCompensationAmount
+  const perResponseGasAndFee = perResponseSui + premiumFee
   let requiredGas = 0n
-  if (perResponseSui > 0n) {
+  if (perResponseGasAndFee > 0n) {
     if (repeatReward > 0n) {
-      requiredGas = BigInt(p.maxResponses) * (1n + repeatMaxTimes) * perResponseSui
+      requiredGas = BigInt(p.maxResponses) * (1n + repeatMaxTimes) * perResponseGasAndFee
     } else {
-      requiredGas = BigInt(p.maxResponses) * perResponseSui
+      requiredGas = BigInt(p.maxResponses) * perResponseGasAndFee
     }
   }
 
@@ -257,6 +273,14 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
 
   const sponsorAddr = p.sponsorAddress || '0x0000000000000000000000000000000000000000000000000000000000000000'
 
+  const allowedNftTypeOpt = p.allowedNftType
+    ? Array.from(new TextEncoder().encode(p.allowedNftType))
+    : null
+
+  const allowedNftTypeArg = tx.pure(
+    bcs.option(bcs.vector(bcs.u8())).serialize(allowedNftTypeOpt).toBytes()
+  )
+
   const [vault] = tx.moveCall({
     target: `${p.packageId}::survey_vault::create_empty`,
     arguments: [
@@ -270,6 +294,8 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.address(sponsorAddr),
       tx.pure.u64(gasCompensationAmount),
       tx.pure.u64(storageCompensationAmount),
+      tx.pure.u64(premiumFee.toString()),
+      allowedNftTypeArg,
     ],
   })
 
@@ -409,7 +435,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.vector('u8', Array.from(schemaHash)),
       tx.pure.vector('u8', Array.from(creatorPubKey)),
       questionsVec,
-      tx.pure.u8(p.minTier ?? 0),
+      tx.pure.vector('u8', p.allowedSources ?? [2]),
       tx.object('0x6'), // Clock
     ],
   })

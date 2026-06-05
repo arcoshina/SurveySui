@@ -66,8 +66,10 @@ async function main() {
   // ── creator hybrid key pair（隨機簽章模擬錢包簽名）──
   const fakeSig = new Uint8Array(64)
   webcrypto.getRandomValues(fakeSig)
-  const kp = await deriveCreatorKeyPair(fakeSig)
-  const creatorPubKey = buildCreatorPubKey(kp)
+  const salt = new Uint8Array(32)
+  webcrypto.getRandomValues(salt)
+  const kp = await deriveCreatorKeyPair(fakeSig, salt)
+  const creatorPubKey = buildCreatorPubKey(kp, salt)
   console.log('creator_pub_key length:', creatorPubKey.length, 'bytes')
 
   // ── 1. 建立 vault + survey ──
@@ -108,7 +110,7 @@ async function main() {
     schemaHash: new Uint8Array(32),
     creatorPubKey,
     questions: [],
-    minTier: 0,
+    allowedSources: [2],
     offsetIn: 0n,
     creatorSsrCoins: [],
     gasCompensationAmount: 0n,

@@ -30,6 +30,8 @@ fun setup(sc: &mut ts::Scenario, clk: &clock::Clock): ID {
         @0x0,       // sponsor_address
         0,          // gas_compensation_amount
         0,          // storage_compensation_amount
+        0,          // premium_fee
+        option::none(),
         ts::ctx(sc),
     );
     survey_vault::set_purge_grace_ms(&mut vault, GRACE_MS, ts::ctx(sc));
@@ -49,7 +51,7 @@ fun setup(sc: &mut ts::Scenario, clk: &clock::Clock): ID {
         b"schema-hash",
         b"creator-pub-key",
         vector<Question>[],
-        0,
+        vector[2],
         clk,
         ts::ctx(sc),
     );

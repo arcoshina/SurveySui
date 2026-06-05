@@ -54,6 +54,7 @@ export function buildClaimPtb(params: ClaimPtbParams): Transaction {
     target: `${params.packageId}::survey_vault::claim`,
     arguments: [
       tx.object(params.vaultId),
+      tx.object(params.surveyId),
       tx.object(params.passId),
       encryptedAnswersArg,
       answerBlobIdArg,
@@ -239,4 +240,85 @@ export async function executeSponsoredTx(params: {
   })
 
   return result
+}
+
+export interface ClaimWithTicketParams {
+  packageId: string
+  vaultId: string
+  issuerConfigId: string
+  ticketSig: string
+  ephemeralNullifier: string
+  expiresAt: string
+  encryptedAnswers?: string
+  answerBlobId?: string
+}
+
+export function buildClaimWithTicketPtb(params: ClaimWithTicketParams): Transaction {
+  const tx = new Transaction()
+
+  const encryptedAnswersOpt = params.encryptedAnswers
+    ? hexToBytes(params.encryptedAnswers)
+    : null
+  const answerBlobIdOpt = params.answerBlobId
+    ? Array.from(new TextEncoder().encode(params.answerBlobId))
+    : null
+
+  const encryptedAnswersArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes())
+  const answerBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes())
+
+  const ticketSigBytes = hexToBytes(params.ticketSig)
+  const ephemeralNullifierBytes = hexToBytes(params.ephemeralNullifier)
+
+  tx.moveCall({
+    target: `${params.packageId}::survey_vault::claim_with_ticket`,
+    arguments: [
+      tx.object(params.vaultId),
+      tx.object(params.issuerConfigId),
+      tx.pure(bcs.vector(bcs.u8()).serialize(ticketSigBytes).toBytes()),
+      tx.pure(bcs.vector(bcs.u8()).serialize(ephemeralNullifierBytes).toBytes()),
+      tx.pure(bcs.u64().serialize(params.expiresAt).toBytes()),
+      encryptedAnswersArg,
+      answerBlobIdArg,
+      tx.object('0x6'), // clock
+    ],
+  })
+
+  return tx
+}
+
+export interface ClaimWithNftMarkingParams {
+  packageId: string
+  vaultId: string
+  nftId: string
+  nftType: string
+  encryptedAnswers?: string
+  answerBlobId?: string
+}
+
+export function buildClaimWithNftMarkingPtb(params: ClaimWithNftMarkingParams): Transaction {
+  const tx = new Transaction()
+
+  const encryptedAnswersOpt = params.encryptedAnswers
+    ? hexToBytes(params.encryptedAnswers)
+    : null
+  const answerBlobIdOpt = params.answerBlobId
+    ? Array.from(new TextEncoder().encode(params.answerBlobId))
+    : null
+
+  const encryptedAnswersArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes())
+  const answerBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes())
+
+  tx.moveCall({
+    target: `${params.packageId}::survey_vault::claim_with_nft_marking`,
+    typeArguments: [params.nftType],
+    arguments: [
+      tx.object(params.vaultId),
+      tx.object(params.nftId),
+      encryptedAnswersArg,
+      answerBlobIdArg,
+      tx.object('0x6'), // clock
+    ],
+  })
+
+  return tx
 }

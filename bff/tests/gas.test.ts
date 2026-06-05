@@ -35,18 +35,33 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
           status: { status: 'success' },
         },
       }),
-      // 預設模擬金庫詳情：假設金庫 Gas 餘額足夠 (第一層代付有效)
-      getObject: vi.fn().mockResolvedValue({
-        data: {
-          objectId: '0x0000000000000000000000000000000000000000000000000000000000000008',
-          content: {
-            dataType: 'moveObject',
-            fields: {
-              gas_balance: '100000000', // 100M MIST (0.1 SUI)
-              gas_compensation_amount: '5000000', // 5M MIST
+      // 預設模擬物件詳情
+      getObject: vi.fn().mockImplementation(async ({ id }: { id: string }) => {
+        if (id === '0x0000000000000000000000000000000000000000000000000000000000000009') {
+          return {
+            data: {
+              objectId: id,
+              content: {
+                dataType: 'moveObject',
+                fields: {
+                  credential_sources: [6], // Google 登入
+                },
+              },
+            },
+          }
+        }
+        return {
+          data: {
+            objectId: id,
+            content: {
+              dataType: 'moveObject',
+              fields: {
+                gas_balance: '100000000', // 100M MIST (0.1 SUI)
+                gas_compensation_amount: '5000000', // 5M MIST
+              },
             },
           },
-        },
+        }
       }),
       getNormalizedMoveFunction: vi.fn().mockImplementation(async ({ function: func }) => {
         if (func === 'claim') {
@@ -141,18 +156,33 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
 
   // 2. 限流：當金庫 Gas 不足時，限制同一錢包每日平台墊付最多 3 次
   it('should restrict daily platform sponsorships to 3 times per wallet when first-layer gas is insufficient', async () => {
-    // 模擬金庫 Gas 餘額不足 (例如為 0)
-    mockSuiClient.getObject.mockResolvedValue({
-      data: {
-        objectId: '0x0000000000000000000000000000000000000000000000000000000000000008',
-        content: {
-          dataType: 'moveObject',
-          fields: {
-            gas_balance: '0',
-            gas_compensation_amount: '5000000',
+    // 模擬金庫 Gas 餘額不足 (例如為 0)，同時保留 Pass 的憑證欄位
+    mockSuiClient.getObject.mockImplementation(async ({ id }: { id: string }) => {
+      if (id === '0x0000000000000000000000000000000000000000000000000000000000000009') {
+        return {
+          data: {
+            objectId: id,
+            content: {
+              dataType: 'moveObject',
+              fields: {
+                credential_sources: [6], // Google
+              },
+            },
+          },
+        }
+      }
+      return {
+        data: {
+          objectId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+          content: {
+            dataType: 'moveObject',
+            fields: {
+              gas_balance: '0',
+              gas_compensation_amount: '5000000',
+            },
           },
         },
-      },
+      }
     })
 
     const tx = new Transaction()

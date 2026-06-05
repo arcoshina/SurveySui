@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit'
-import { Sun, Moon, Languages, Menu, X } from 'lucide-react'
+import { Sun, Moon, Languages, Menu, X, AlertTriangle } from 'lucide-react'
 import { useLanguage } from '../context/LanguageContext'
 import { useTheme } from '../context/ThemeContext'
 import { useT } from '../i18n'
@@ -43,7 +43,7 @@ export default function Navbar() {
   }
 
   const linkClass = (path: string) =>
-    `inline-flex items-center h-9 text-sm font-normal transition-colors px-3 rounded-lg ${
+    `inline-flex items-center shrink-0 h-9 text-sm font-normal transition-colors px-3 rounded-lg ${
       isActive(path)
         ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
         : 'text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
@@ -71,7 +71,7 @@ export default function Navbar() {
         {/* Right Side: Navigation + Controls */}
         <div className="flex items-center gap-2">
           {/* Desktop nav links */}
-          <nav className="hidden sm:flex items-center gap-1">
+          <nav className="hidden md:flex items-center gap-1">
             {activeAddress && (
               <>
                 <Link to="/auth" className={linkClass('/auth')}>
@@ -93,7 +93,7 @@ export default function Navbar() {
           <button
             type="button"
             onClick={toggleLang}
-            className="hidden sm:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
+            className="hidden md:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
             aria-label={t.switchLang}
             title={t.switchLang}
           >
@@ -102,7 +102,7 @@ export default function Navbar() {
           <button
             type="button"
             onClick={toggleTheme}
-            className="hidden sm:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
+            className="hidden md:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
             aria-label={isDark ? t.themeToLight : t.themeToDark}
             title={isDark ? t.themeToLight : t.themeToDark}
           >
@@ -110,7 +110,7 @@ export default function Navbar() {
           </button>
 
           {/* Mobile: Hamburger */}
-          <div className="relative sm:hidden" ref={menuRef}>
+          <div className="relative md:hidden" ref={menuRef}>
             <button
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
@@ -153,6 +153,11 @@ export default function Navbar() {
             )}
           </div>
         </div>
+      </div>
+      {/* 測試警告橫列 */}
+      <div className="bg-amber-50 dark:bg-amber-600/10 text-amber-900 dark:text-amber-200 border-t border-amber-200 dark:border-amber-700/40 py-2 px-6 flex items-center justify-center gap-2 text-sm font-normal transition-colors">
+        <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+        <span>{t.betaWarning}</span>
       </div>
     </header>
   )

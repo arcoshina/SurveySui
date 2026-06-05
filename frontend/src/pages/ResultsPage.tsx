@@ -104,7 +104,8 @@ export default function ResultsPage() {
   const [surveyData, setSurveyData] = useState<any>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [surveyMeta, setSurveyMeta] = useState<{
-    minTier: number
+    allowedSources: number[]
+    allowedNftType: string | null
     repeatReward: number
     repeatMaxTimes: number
     perResponse: number
@@ -189,7 +190,8 @@ export default function ResultsPage() {
 
     function applyMeta(data: FullSurveyData) {
       setSurveyMeta({
-        minTier: data.minTier,
+        allowedSources: data.allowedSources,
+        allowedNftType: data.allowedNftType || null,
         repeatReward: data.repeatReward,
         repeatMaxTimes: data.repeatMaxTimes,
         perResponse: data.perResponse,
@@ -480,8 +482,8 @@ export default function ResultsPage() {
                     </h4>
 
                     <div className="space-y-4">
-                      {displayOptions.map((opt) => {
-                        const count = counts[opt] || 0
+                      {q.options_json?.map((opt, optIdx) => {
+                        const count = counts[String(optIdx)] || counts[optIdx] || 0
                         const pct = totalAnswers > 0 ? (count / totalAnswers) * 100 : 0
                         const displayPct = pct.toFixed(1)
 

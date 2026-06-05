@@ -53,9 +53,10 @@ questions:
       repeatMaxTimes: 3,
       maxResponses: 10,
       deadlineMs: new Date("2028-12-31T23:59:59.000Z").getTime(),
-      minTier: 0,
+      allowedSources: [2, 3, 5, 6, 7],
       encryptAnswers: true,
       storageCompensationAmount: 0.01,
+      allowedNftType: '',
       description: "問卷說明內容",
       questions: [
         {
@@ -190,7 +191,7 @@ questions:
     }
   })
 
-  it('should sanitize duplicate question IDs and duplicate options correctly', () => {
+  it('should sanitize duplicate question IDs correctly but leave duplicate options intact', () => {
     const questions = [
       { id: 'q1', type: 'text', prompt: 'P1', options_json: null, required: true },
       { id: 'q1', type: 'text', prompt: 'P2', options_json: null, required: false },
@@ -204,6 +205,6 @@ questions:
     expect(sanitized[1].id).toBe('q1_1')
     expect(sanitized[2].id).toBe('q_3')
     expect(sanitized[3].id).toBe('q1_2')
-    expect(sanitized[3].options_json).toEqual(['A', 'A_1', 'B', 'A_2'])
+    expect(sanitized[3].options_json).toEqual(['A', 'A', 'B', 'A'])
   })
 })

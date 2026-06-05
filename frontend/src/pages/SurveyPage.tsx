@@ -5,6 +5,7 @@ import {
   ConnectButton,
   useCurrentWallet,
   useSuiClient,
+  useSignPersonalMessage,
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import { fromBase64 } from '@mysten/sui/utils'
@@ -12,6 +13,7 @@ import { PURGE_GRACE_MS } from '../lib/ptb'
 import { useActiveSigner } from '../lib/useActiveSigner'
 import {
   buildClaimPtb,
+  buildClaimWithNftMarkingPtb,
   executeSponsoredTx,
   executeTxWithFallback,
   probeGasSponsorHealth,
@@ -21,7 +23,7 @@ import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/c
 import { parseFullSurveyMarkdown, type QuestionType, sanitizeQuestionIds } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
-import { fetchActivePass, SurveyPassData } from '../lib/surveyPass'
+import { fetchActivePass, fetchPassCredentials, SurveyPassData } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { formatSui } from '../lib/format'
@@ -54,6 +56,11 @@ interface Question {
   options_json: string[] | null
   required: boolean
   maxLen?: number
+  shuffle?: boolean
+  shuffledOptions?: Array<{
+    text: string
+    originalIndex: number
+  }>
 }
 
 interface Survey {
@@ -72,9 +79,10 @@ interface Survey {
   schemaHash: string
   encryptAnswers?: boolean
   isDecentralized?: boolean
+  allowedNftType: string | null
 }
 
-type Answers = Record<string, string | string[]>
+type Answers = Record<string, string | string[] | number | number[]>
 type Phase =
   | 'loading'
   | 'filling'
@@ -111,13 +119,14 @@ export default function SurveyPage() {
   const [txHash, setTxHash] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [creatorPubKey, setCreatorPubKey] = useState<Uint8Array | null>(null)
-  const [surveyMinTier, setSurveyMinTier] = useState(0)
+  const [surveyAllowedSources, setSurveyAllowedSources] = useState<number[]>([2])
 
   // Wallet & Client integration
   const { connectionStatus } = useCurrentWallet()
   const isWalletConnecting = connectionStatus === 'connecting'
   const suiClient = useSuiClient()
   const activeSigner = useActiveSigner()
+  const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
   const [selfPaidMode, setSelfPaidMode] = useState(false)
   const [isUploadingAnswer, setIsUploadingAnswer] = useState(false)
   const [gasMode, setGasMode] = useState<'unknown' | 'sponsored' | 'self_paid_warning' | 'limit_reached_warning'>('unknown')
@@ -133,14 +142,68 @@ export default function SurveyPage() {
   const configId = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
 
   const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
+  const [passCredentials, setPassCredentials] = useState<any[]>([])
   const [isPassLoading, setIsPassLoading] = useState(true)
 
   /** How many times the connected wallet has already claimed for this survey. */
   const [myClaimCount, setMyClaimCount] = useState(0)
 
+  // 弱匿名 (Weak KYC)
+  const [ownedNfts, setOwnedNfts] = useState<Array<{ objectId: string; type: string }>>([])
+  const [selectedNftId, setSelectedNftId] = useState<string>('')
+  const [isNftsLoading, setIsNftsLoading] = useState(false)
+  const [nftError, setNftError] = useState<string | null>(null)
+
+
+
+  // 弱匿名模式：自動查詢符合條件的 NFT
+  useEffect(() => {
+    if (!survey || !survey.allowedNftType || !activeSigner?.address) {
+      setOwnedNfts([])
+      setSelectedNftId('')
+      return
+    }
+    let cancelled = false
+    async function checkNfts() {
+      setIsNftsLoading(true)
+      setNftError(null)
+      try {
+        const res = await suiClient.getOwnedObjects({
+          owner: activeSigner!.address,
+          filter: { StructType: survey!.allowedNftType! },
+          options: { showType: true }
+        })
+        if (cancelled) return
+        const nfts = (res.data || []).map(item => ({
+          objectId: item.data?.objectId ?? '',
+          type: item.data?.type ?? '',
+        })).filter(x => x.objectId !== '')
+        setOwnedNfts(nfts)
+        if (nfts.length > 0) {
+          setSelectedNftId(nfts[0].objectId)
+        } else {
+          setSelectedNftId('')
+          setNftError(t.nftNotOwnedError(survey!.allowedNftType!))
+        }
+      } catch (err: any) {
+        if (cancelled) return
+        setNftError(err.message || t.nftQueryFailed)
+      } finally {
+        if (!cancelled) setIsNftsLoading(false)
+      }
+    }
+    checkNfts()
+    return () => {
+      cancelled = true
+    }
+  }, [survey, activeSigner?.address, suiClient])
+
+
+
   const fetchPass = async () => {
     if (!activeSigner?.address || !registryId) {
       setActivePass(null)
+      setPassCredentials([])
       setIsPassLoading(false)
       return
     }
@@ -148,9 +211,16 @@ export default function SurveyPage() {
     try {
       const pass = await fetchActivePass(suiClient, activeSigner.address, registryId)
       setActivePass(pass)
+      if (pass) {
+        const creds = await fetchPassCredentials(suiClient, pass.objectId)
+        setPassCredentials(creds)
+      } else {
+        setPassCredentials([])
+      }
     } catch (err) {
       console.error('Failed to fetch active pass:', err)
       setActivePass(null)
+      setPassCredentials([])
     } finally {
       setIsPassLoading(false)
     }
@@ -161,16 +231,102 @@ export default function SurveyPage() {
   }, [activeSigner?.address, registryId])
 
 
+  // ── Pass / NFT eligibility (必須在任何 early return 之前) ──────────────
+  const isPassResolving = isWalletConnecting || isPassLoading
+  const isPassRevoked = !!activePass && activePass.status === 3
+  const isPassExpired =
+    !!activePass && activePass.expiresAt > 0 && activePass.expiresAt <= Date.now()
+
+  const hasEligibleSource = useMemo(() => {
+    if (!activePass || passCredentials.length === 0) return false
+    return passCredentials.some(
+      (cred) =>
+        surveyAllowedSources.includes(cred.source) &&
+        (cred.expiresAt === 0 || cred.expiresAt > Date.now())
+    )
+  }, [activePass, passCredentials, surveyAllowedSources])
+
+  const isCredentialInsufficient =
+    !!activePass && !isPassRevoked && !isPassExpired && !hasEligibleSource
+
+  const isPassValid =
+    !isPassResolving && !!activePass && !isPassRevoked && !isPassExpired
+
+  const isPassQualified = isPassValid && hasEligibleSource
+  const isNftQualified = ownedNfts.length > 0 && !!selectedNftId
+
+  // Repeat-submission gate
+  const repeatsEnabled = !!survey && survey.repeat_reward > 0
+  const maxTotalSubmissions = survey ? (repeatsEnabled ? 1 + survey.repeat_max_times : 1) : 1
+  const remainingSubmissions = Math.max(0, maxTotalSubmissions - myClaimCount)
+  const atSubmissionLimit = myClaimCount >= maxTotalSubmissions
+
+  const { submitDisabled, submitLabel } = useMemo(() => {
+    if (!survey) {
+      return { submitDisabled: true, submitLabel: t.loadingSurvey }
+    }
+    if ((phase as string) === 'submitting') {
+      return { submitDisabled: true, submitLabel: t.submitting }
+    }
+    if (atSubmissionLimit) {
+      return { submitDisabled: true, submitLabel: t.submitLabelLimit }
+    }
+
+    const hasNftLimit = !!survey.allowedNftType
+
+    if (hasNftLimit) {
+      if (isNftsLoading || isPassResolving) {
+        return { submitDisabled: true, submitLabel: t.verifyingEligibility }
+      }
+      if (!isPassQualified && !isNftQualified) {
+        return { submitDisabled: true, submitLabel: t.needCredentialOrNft }
+      }
+    } else {
+      if (isPassResolving) {
+        return { submitDisabled: true, submitLabel: t.verifyingPass }
+      }
+      if (isPassRevoked) {
+        return { submitDisabled: true, submitLabel: t.submitLabelRevoked }
+      }
+      if (isPassExpired) {
+        return { submitDisabled: true, submitLabel: t.submitLabelExpired }
+      }
+      if (!isPassValid || isCredentialInsufficient) {
+        return { submitDisabled: true, submitLabel: t.submitLabelNeedAuth }
+      }
+    }
+
+    return {
+      submitDisabled: false,
+      submitLabel: myClaimCount > 0 ? t.submitLabelPreviewRepeat : t.submitLabelPreview
+    }
+  }, [
+    phase,
+    survey,
+    survey?.allowedNftType,
+    atSubmissionLimit,
+    isNftsLoading,
+    isPassResolving,
+    isPassRevoked,
+    isPassExpired,
+    isPassValid,
+    isCredentialInsufficient,
+    isPassQualified,
+    isNftQualified,
+    myClaimCount,
+    t
+  ])
+
   // Debug output to trace variables
   useEffect(() => {
     console.log('[SurveyPage Debug]', {
       PACKAGE_ID,
       accountAddress: activeSigner?.address,
       activePass,
-      surveyMinTier,
+      surveyAllowedSources,
       phase,
     })
-  }, [activeSigner?.address, activePass, surveyMinTier, phase])
+  }, [activeSigner?.address, activePass, surveyAllowedSources, phase])
 
   // Probe BFF gas sponsor health when entering review phase
   useEffect(() => {
@@ -306,6 +462,9 @@ export default function SurveyPage() {
           return new Uint8Array(vec.map(Number))
         }
 
+        const allowedNftTypeBytes = getOptionVec(vaultFields.allowed_nft_type)
+        const allowedNftType = allowedNftTypeBytes ? new TextDecoder().decode(allowedNftTypeBytes) : null
+
         const surveyBlobIdBytes = getOptionVec(fields.survey_blob_id)
         let rawContent: Uint8Array
 
@@ -372,10 +531,14 @@ export default function SurveyPage() {
         }
 
         const sanitizedQuestions = sanitizeQuestionIds(parsed.data.questions).map((q) => {
-          if (q.shuffle && q.options_json && q.options_json.length > 0) {
+          if (q.options_json && q.options_json.length > 0) {
+            const mappedOpts = q.options_json.map((text, originalIndex) => ({
+              text,
+              originalIndex,
+            }))
             return {
               ...q,
-              options_json: shuffleArray(q.options_json),
+              shuffledOptions: q.shuffle ? shuffleArray(mappedOpts) : mappedOpts,
             }
           }
           return q
@@ -395,6 +558,7 @@ export default function SurveyPage() {
           schemaHash: schemaHashHex,
           encryptAnswers: parsed.data.encryptAnswers !== false,
           isDecentralized: !!surveyBlobIdBytes,
+          allowedNftType,
         })
 
         // Count this wallet's prior claims on this vault (events filtered client-side).
@@ -433,11 +597,8 @@ export default function SurveyPage() {
         }
         // Answer encryption uses the hybrid (X25519 + ML-KEM-768) pubkey published
         // on-chain in creator_pub_key, NOT the 32B X25519 header in the content blob.
-        const onChainCreatorPubKey = fields.creator_pub_key
-          ? normalizeBytes(fields.creator_pub_key)
-          : creatorPublicKeyBytes
-        setCreatorPubKey(onChainCreatorPubKey)
-        setSurveyMinTier(Number(fields.min_tier ?? 0))
+        setCreatorPubKey(normalizeBytes(fields.creator_pub_key))
+        setSurveyAllowedSources(fields.allowed_sources || [2])
         // 還原導向 /auth 領 Pass 前暫存的作答
         try {
           const saved = sessionStorage.getItem(ANSWERS_KEY)
@@ -458,9 +619,31 @@ export default function SurveyPage() {
 
   function getAnswerDisplay(q: Question): string {
     const ans = answers[q.id]
-    if (!ans) return t.notFilled
+    if (ans === undefined || ans === null) return t.notFilled
+
+    if (q.type === 'single_choice' && q.options_json) {
+      const idx = Number(ans)
+      if (!isNaN(idx) && idx >= 0 && idx < q.options_json.length) {
+        return q.options_json[idx]
+      }
+      return t.notFilled
+    }
+
+    if (q.type === 'multi_choice' && q.options_json) {
+      if (Array.isArray(ans)) {
+        const texts = ans
+          .map((item) => {
+            const idx = Number(item)
+            return idx >= 0 && idx < q.options_json!.length ? q.options_json![idx] : ''
+          })
+          .filter((t) => t !== '')
+        return texts.length > 0 ? texts.join(t.multiSep) : t.notFilled
+      }
+      return t.notFilled
+    }
+
     if (Array.isArray(ans)) return ans.length > 0 ? ans.join(t.multiSep) : t.notFilled
-    return ans.trim() !== '' ? ans : t.notFilled
+    return String(ans).trim() !== '' ? String(ans) : t.notFilled
   }
 
   function validateAndPreview() {
@@ -468,9 +651,9 @@ export default function SurveyPage() {
     const missing = survey.questions.filter((q) => {
       if (!q.required) return false
       const ans = answers[q.id]
-      if (!ans) return true
+      if (ans === undefined || ans === null) return true
       if (Array.isArray(ans)) return ans.length === 0
-      return ans.trim() === ''
+      return String(ans).trim() === ''
     })
     if (missing.length > 0) {
       setValidationError(t.errRequired)
@@ -493,15 +676,38 @@ export default function SurveyPage() {
     }
     setValidationError(null)
 
-    // Check if SurveyPass exists
-    if (!activePass) {
-      goToAuth()
-    } else if (activePass.status === 3) {
-      setValidationError(t.errPassRevokedFull)
-    } else if (activePass.expiresAt > 0 && activePass.expiresAt < Date.now()) {
-      setValidationError(t.errPassExpiredFull)
-    } else {
+    // 門檻驗證（Pass 憑證與 NFT 視為平行 OR 聯集）
+    const hasNftLimit = !!survey.allowedNftType
+
+    if (hasNftLimit) {
+      if (!isPassQualified && !isNftQualified) {
+        setValidationError(t.needCredentialOrNft)
+        return
+      }
       setPhase('review')
+    } else {
+      // none: 原本的 SurveyPass 驗證
+      if (!activePass) {
+        goToAuth()
+      } else if (activePass.status === 3) {
+        setValidationError(t.errPassRevokedFull)
+      } else if (!hasEligibleSource) {
+        const sourcesText = surveyAllowedSources.map((src) => {
+          switch (src) {
+            case 1: return t.sourceSelfReport || '自我宣告'
+            case 2: return t.sourceEmail || 'Email'
+            case 3: return t.sourceSocial || '社群驗證'
+            case 4: return t.sourceSelfProtocol || '自我協定'
+            case 5: return t.sourceWorldId || 'World ID'
+            case 6: return t.sourceGoogle || 'Google'
+            case 7: return t.sourceGithub || 'GitHub'
+            default: return `Source ${src}`
+          }
+        }).join(', ')
+        setValidationError(t.credentialInsufficientDesc(sourcesText))
+      } else {
+        setPhase('review')
+      }
     }
   }
 
@@ -511,17 +717,40 @@ export default function SurveyPage() {
       setSubmitError(t.errNeedConnectSign)
       return
     }
-    if (!activePass) {
-      goToAuth()
-      return
-    }
-    if (activePass.status === 3) {
-      setSubmitError(t.errPassRevokedShort)
-      return
-    }
-    if (activePass.expiresAt > 0 && activePass.expiresAt < Date.now()) {
-      setSubmitError(t.errPassExpiredShort)
-      return
+
+    // 門檻驗證
+    const hasNftLimit = !!survey.allowedNftType
+
+    if (hasNftLimit) {
+      if (!isPassQualified && !isNftQualified) {
+        setSubmitError(t.needCredentialOrNft)
+        return
+      }
+    } else {
+      if (!activePass) {
+        goToAuth()
+        return
+      }
+      if (activePass.status === 3) {
+        setSubmitError(t.errPassRevokedShort)
+        return
+      }
+      if (!hasEligibleSource) {
+        const sourcesText = surveyAllowedSources.map((src) => {
+          switch (src) {
+            case 1: return t.sourceSelfReport || '自我宣告'
+            case 2: return t.sourceEmail || 'Email'
+            case 3: return t.sourceSocial || '社群驗證'
+            case 4: return t.sourceSelfProtocol || '自我協定'
+            case 5: return t.sourceWorldId || 'World ID'
+            case 6: return t.sourceGoogle || 'Google'
+            case 7: return t.sourceGithub || 'GitHub'
+            default: return `Source ${src}`
+          }
+        }).join(', ')
+        setSubmitError(t.credentialInsufficientDesc(sourcesText))
+        return
+      }
     }
 
     setPhase('submitting')
@@ -530,6 +759,38 @@ export default function SurveyPage() {
     let lastBffError: any = undefined
 
     try {
+      // 0. 前端 Schema 邊界校驗（防範選項注入與非法提交）
+      for (const q of survey.questions) {
+        const ans = answers[q.id]
+        const isAnswerEmpty =
+          ans === undefined ||
+          ans === null ||
+          (Array.isArray(ans) && ans.length === 0) ||
+          (typeof ans === 'string' && ans.trim() === '')
+        if (q.required && isAnswerEmpty) {
+          throw new Error(`題目 "${q.prompt}" 是必填的`)
+        }
+        if (ans !== undefined && ans !== null && q.options_json && q.options_json.length > 0) {
+          if (q.type === 'single_choice') {
+            const idx = Number(ans)
+            if (isNaN(idx) || idx < 0 || idx >= q.options_json.length) {
+              throw new Error(`題目 "${q.prompt}" 提交了非法的選項值`)
+            }
+          } else if (q.type === 'multi_choice') {
+            if (Array.isArray(ans)) {
+              for (const val of ans) {
+                const idx = Number(val)
+                if (isNaN(idx) || idx < 0 || idx >= q.options_json.length) {
+                  throw new Error(`題目 "${q.prompt}" 提交了非法的選項值`)
+                }
+              }
+            } else {
+              throw new Error(`多選題 "${q.prompt}" 的答案格式不正確`)
+            }
+          }
+        }
+      }
+
       // 1. Encrypt answers using ECIES
       const encodedPayload = encodeAnswers(answers, survey.questions, survey.schemaHash)
       const payloadStr = JSON.stringify(encodedPayload)
@@ -575,14 +836,28 @@ export default function SurveyPage() {
       }
 
       // 2. Build Claim PTB
-      const tx = buildClaimPtb({
-        packageId: PACKAGE_ID,
-        vaultId: survey.vaultObjectId,
-        surveyId: survey.id,
-        passId: activePass.objectId,
-        encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
-        answerBlobId: answerBlobId,
-      })
+      let tx: Transaction
+      const useNftRoute = hasNftLimit && isNftQualified && !isPassQualified
+
+      if (useNftRoute) {
+        tx = buildClaimWithNftMarkingPtb({
+          packageId: PACKAGE_ID,
+          vaultId: survey.vaultObjectId,
+          nftId: selectedNftId,
+          nftType: survey.allowedNftType!,
+          encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
+          answerBlobId: answerBlobId,
+        })
+      } else {
+        tx = buildClaimPtb({
+          packageId: PACKAGE_ID,
+          vaultId: survey.vaultObjectId,
+          surveyId: survey.id,
+          passId: activePass!.objectId,
+          encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
+          answerBlobId: answerBlobId,
+        })
+      }
 
       // 3. Try sponsored path; auto-fallback to self-paid if BFF unreachable.
       // When fallback would charge the user, surface a confirm dialog first.
@@ -660,7 +935,7 @@ export default function SurveyPage() {
     }
   }
 
-  function handleAnswerChange(qId: string, value: string | string[]) {
+  function handleAnswerChange(qId: string, value: string | string[] | number | number[]) {
     setAnswers((prev) => ({ ...prev, [qId]: value }))
     setValidationError(null)
   }
@@ -684,7 +959,15 @@ export default function SurveyPage() {
           <p className="text-muted leading-relaxed">
             {t.connectWalletDesc}
           </p>
-          <div className="my-3 scale-110">
+          <div className="my-3 scale-110 flex flex-col items-center gap-3">
+            <a
+              href="/guide"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-secondary shadow-none inline-flex items-center justify-center text-sm font-normal px-4 py-2"
+            >
+              {t.btnGuide}
+            </a>
             <ConnectButton />
           </div>
           <p className="text-xs text-slate-400 dark:text-neutral-500">{t.connectWalletHint}</p>
@@ -969,39 +1252,6 @@ export default function SurveyPage() {
   }
 
   // ── filling ───────────────────────────────────────────────────────────────
-  const isPassResolving = isWalletConnecting || isPassLoading
-  const isPassRevoked = !!activePass && activePass.status === 3
-  const isPassExpired =
-    !!activePass && activePass.expiresAt > 0 && activePass.expiresAt <= Date.now()
-  const isTierInsufficient =
-    !!activePass && !isPassRevoked && !isPassExpired && activePass.effectiveTier < surveyMinTier
-  const isPassValid =
-    !isPassResolving && !!activePass && !isPassRevoked && !isPassExpired
-
-  // Repeat-submission gate
-  const repeatsEnabled = !!survey && survey.repeat_reward > 0
-  const maxTotalSubmissions = survey ? (repeatsEnabled ? 1 + survey.repeat_max_times : 1) : 1
-  const remainingSubmissions = Math.max(0, maxTotalSubmissions - myClaimCount)
-  const atSubmissionLimit = myClaimCount >= maxTotalSubmissions
-
-  const submitDisabled =
-    (phase as string) === 'submitting' ||
-    isPassResolving ||
-    !isPassValid ||
-    isTierInsufficient ||
-    atSubmissionLimit
-
-  const submitLabel = atSubmissionLimit
-    ? t.submitLabelLimit
-    : isPassRevoked
-      ? t.submitLabelRevoked
-      : isPassExpired
-        ? t.submitLabelExpired
-        : !isPassValid || isTierInsufficient
-          ? t.submitLabelNeedAuth
-          : myClaimCount > 0
-            ? t.submitLabelPreviewRepeat
-            : t.submitLabelPreview
 
   if (!survey) return null
 
@@ -1080,7 +1330,7 @@ export default function SurveyPage() {
           </div>
         )}
 
-        {isPassValid && (
+        {isPassQualified && (
           <span
             data-testid="tier-badge"
             className="inline-flex items-center gap-1.5 text-xs text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-full px-3 py-1 mb-2 font-bold w-fit"
@@ -1092,6 +1342,63 @@ export default function SurveyPage() {
                 ? t.tier1
                 : t.tier2}
           </span>
+        )}
+
+        {!!survey.allowedNftType && (
+          <div className="bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 p-5 rounded-2xl animate-fadeIn space-y-3.5 text-sm">
+            <div className="flex items-center gap-2 border-b pb-2.5 border-slate-200/60 dark:border-neutral-800">
+              <Globe className="text-blue-500 shrink-0" size={16} />
+              <span className="font-bold text-slate-800 dark:text-neutral-200">{t.nftThresholdTitle}</span>
+            </div>
+
+            {isNftsLoading ? (
+              <p className="text-slate-500 dark:text-neutral-450 animate-pulse font-normal">{t.queryingNft}</p>
+            ) : nftError ? (
+              <div className="alert-error text-xs p-3">
+                <AlertTriangle size={14} className="shrink-0" />
+                <span>{nftError}</span>
+              </div>
+            ) : ownedNfts.length > 0 ? (
+              <div className="space-y-2">
+                <label className="block">
+                  <span className="text-slate-500 dark:text-neutral-450 font-bold block mb-1">{t.ownedNftLabel}</span>
+                  <select
+                    value={selectedNftId}
+                    onChange={(e) => setSelectedNftId(e.target.value)}
+                    className="form-input bg-white dark:bg-neutral-900 text-xs py-1.5 w-full max-w-md"
+                  >
+                    {ownedNfts.map((nft) => (
+                      <option key={nft.objectId} value={nft.objectId}>
+                        {nft.objectId.slice(0, 14)}...{nft.objectId.slice(-10)} ({nft.type.split('::').pop()})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {isPassQualified ? (
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">
+                    {t.passQualifiedPriority}
+                  </p>
+                ) : (
+                  <p className="text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1">
+                    {t.nftQualifiedUse}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div>
+                <p className="text-rose-500 font-semibold animate-pulse">{t.nftNotOwnedWarning(survey.allowedNftType)}</p>
+                {isPassQualified ? (
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">
+                    {t.nftNotOwnedPassQualified}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-450 dark:text-neutral-400 mt-1 font-normal">
+                    {t.nftNotOwnedAuthHint}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
 
@@ -1125,10 +1432,10 @@ export default function SurveyPage() {
               <p className="text-body">{q.prompt}</p>
 
               <div className="mt-1">
-                {q.type === 'single_choice' && q.options_json && (
+                {q.type === 'single_choice' && q.shuffledOptions && (
                   <div className="space-y-2">
-                    {q.options_json.map((opt, optIdx) => {
-                      const isChecked = answers[q.id] === opt
+                    {q.shuffledOptions.map((opt, optIdx) => {
+                      const isChecked = answers[q.id] === opt.originalIndex
                       return (
                         <label
                           key={`${q.id}-opt-${optIdx}`}
@@ -1140,46 +1447,46 @@ export default function SurveyPage() {
                           <input
                             type="radio"
                             name={q.id}
-                            value={opt}
+                            value={String(opt.originalIndex)}
                             checked={isChecked}
-                            onChange={() => handleAnswerChange(q.id, opt)}
+                            onChange={() => handleAnswerChange(q.id, opt.originalIndex)}
                             className="radio-dark"
-                            aria-label={opt}
+                            aria-label={opt.text}
                           />
-                          <span>{opt}</span>
+                          <span>{opt.text}</span>
                         </label>
                       )
                     })}
                   </div>
                 )}
 
-                {q.type === 'multi_choice' && q.options_json && (
+                {q.type === 'multi_choice' && q.shuffledOptions && (
                   <div className="space-y-2">
-                    {q.options_json.map((opt, optIdx) => {
-                      const selected = (answers[q.id] as string[] | undefined) ?? []
-                      const isChecked = selected.includes(opt)
+                    {q.shuffledOptions.map((opt, optIdx) => {
+                      const selected = (answers[q.id] as number[] | undefined) ?? []
+                      const isChecked = selected.includes(opt.originalIndex)
                       return (
                         <label
                           key={`${q.id}-opt-${optIdx}`}
                           className={`flex items-center gap-2.5 text-sm font-medium cursor-pointer border rounded-xl px-3.5 py-2.5 transition-all w-full ${isChecked
                             ? 'bg-blue-50/50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 font-semibold'
-                            : 'bg-slate-50/50 dark:bg-neutral-900/30 border-slate-100 dark:border-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/40 text-slate-600 dark:text-neutral-300'
+                            : 'bg-slate-50/50 dark:bg-neutral-900/30 border-slate-100 dark:border-neutral-800 hover:bg-slate-55 dark:hover:bg-neutral-800/40 text-slate-600 dark:text-neutral-300'
                             }`}
                         >
                           <input
                             type="checkbox"
-                            value={opt}
+                            value={String(opt.originalIndex)}
                             checked={isChecked}
                             onChange={(e) => {
                               const next = e.target.checked
-                                ? [...selected, opt]
-                                : selected.filter((s) => s !== opt)
+                                ? [...selected, opt.originalIndex]
+                                : selected.filter((idx) => idx !== opt.originalIndex)
                               handleAnswerChange(q.id, next)
                             }}
                             className="checkbox-dark checked:bg-blue-600 checked:border-blue-600"
-                            aria-label={opt}
+                            aria-label={opt.text}
                           />
-                          <span>{opt}</span>
+                          <span>{opt.text}</span>
                         </label>
                       )
                     })}
@@ -1217,10 +1524,10 @@ export default function SurveyPage() {
                         min="1"
                         max="5"
                         step="1"
-                        value={typeof answers[q.id] === 'string' ? Number(answers[q.id]) : 3}
+                        value={typeof answers[q.id] === 'string' ? (answers[q.id] as string) : '3'}
                         onChange={(e) => handleAnswerChange(q.id, e.target.value)}
                         className={`slider-custom relative z-10 ${!answers[q.id] ? 'slider-unselected' : ''}`}
-                        style={getSliderBackground(answers[q.id])}
+                        style={getSliderBackground(answers[q.id] as string | string[] | undefined)}
                       />
 
                       {/* Snap points (ticks) on the track */}
@@ -1277,7 +1584,7 @@ export default function SurveyPage() {
               </div>
             </div>
           ) : !activeSigner ? null : (
-            (!isPassValid || isTierInsufficient) && (
+            ((!isPassValid || isCredentialInsufficient) && (!survey.allowedNftType || !isNftQualified)) && (
               <div className="mt-4">
                 {isPassRevoked ? (
                   <div className="bg-rose-50/50 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900 rounded-2xl p-5 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -1332,7 +1639,17 @@ export default function SurveyPage() {
                     <div className="text-left flex items-start gap-2.5">
                       <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600 dark:text-amber-500" />
                       <div>
-                        <span className="font-semibold">{t.tierTooLowPrompt}</span>{t.tierTooLowDesc(surveyMinTier, activePass.effectiveTier)}
+                        <span className="font-semibold">憑證驗證不符</span>
+                        <p className="text-xs opacity-90 mt-1">
+                          本問卷需要以下其中一種未過期的憑證：
+                          {surveyAllowedSources.map((src) => {
+                            if (src === 2) return ' Email'
+                            if (src === 6) return ' Google'
+                            if (src === 7) return ' GitHub'
+                            if (src === 5) return ' World ID'
+                            return ' 未知'
+                          }).join(', ')}。
+                        </p>
                       </div>
                     </div>
                     <button

@@ -1,8 +1,9 @@
 import type { Question } from './frontmatter'
 
 export interface EncodedAnswersPayload {
-  answers: Array<string | string[] | null>
+  answers: Array<number | number[] | string | null>
   schema_hash: string
+  version: number
 }
 
 export function normalizeBytes(input: any): Uint8Array {
@@ -42,7 +43,7 @@ export async function computeSchemaHash(questions: Question[]): Promise<Uint8Arr
 }
 
 export function encodeAnswers(
-  answersMap: Record<string, string | string[]>,
+  answersMap: Record<string, string | number | Array<string | number>>,
   questions: Question[],
   schemaHash: string | Uint8Array
 ): EncodedAnswersPayload {
@@ -50,12 +51,41 @@ export function encodeAnswers(
 
   const answers = questions.map((q) => {
     const val = answersMap[q.id]
-    return val !== undefined ? val : null
+    if (val === undefined || val === null) return null
+
+    if (q.type === 'single_choice') {
+      if (typeof val === 'number') return val
+      if (typeof val === 'string' && q.options_json) {
+        const idx = q.options_json.indexOf(val)
+        return idx !== -1 ? idx : null
+      }
+      return null
+    }
+
+    if (q.type === 'multi_choice') {
+      if (Array.isArray(val)) {
+        return val
+          .map((item) => {
+            if (typeof item === 'number') return item
+            if (typeof item === 'string' && q.options_json) {
+              const idx = q.options_json.indexOf(item)
+              return idx !== -1 ? idx : -1
+            }
+            return -1
+          })
+          .filter((idx) => idx !== -1)
+      }
+      return null
+    }
+
+    // text / scale 題目直接返回 string
+    return String(val)
   })
 
   return {
     answers,
     schema_hash: hashStr,
+    version: 1,
   }
 }
 
@@ -63,13 +93,16 @@ export function decodeAnswers(
   payloadStr: string,
   questions: Question[],
   vaultSchemaHash: string | Uint8Array
-): Record<string, string | string[]> {
+): Record<string, string | string[] | number | number[]> {
   const payload = JSON.parse(payloadStr)
 
-  // 向後相容 V1 舊格式：
-  // 舊格式直接是 { q1: "...", q2: "..." }，不包含 "answers" 欄位，或者 answers 不是 Array
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.answers)) {
-    return payload as Record<string, string | string[]>
+    return {}
+  }
+
+  if (payload.version !== 1) {
+    console.warn(`Unsupported payload version: ${payload.version}. Discarding.`)
+    return {}
   }
 
   const expectedHash =
@@ -89,7 +122,7 @@ export function decodeAnswers(
     )
   }
 
-  const answersMap: Record<string, string | string[]> = {}
+  const answersMap: Record<string, string | string[] | number | number[]> = {}
   questions.forEach((q, index) => {
     const val = payload.answers[index]
     if (val !== undefined && val !== null) {

@@ -58,10 +58,8 @@ public struct SurveyPass has key {
     // 鑄造時支付儲存押金的一方（代付鑄造 = 項目方 admin 位址；自付鑄造 = owner）。
     // 刪除授權與儲存返還流向皆依此欄位決定，確保押金回到付款人。
     deposit_payer: address,
-    effective_tier: u8,
     credential_sources: vector<u8>,
     created_at: u64,
-    expires_at: u64,
     status: u8,
     encrypted_payload: Option<vector<u8>>,
 }
@@ -98,45 +96,16 @@ fun init(ctx: &mut TxContext) {
     });
 }
 
-// 根據專案 KYC 方案定義，計算各來源的 trust tier 級別
-fun get_source_tier(source: u8): u8 {
-    if (source == SRC_SELF_REPORT) { 0 }
-    else if (source == SRC_EMAIL) { 0 }
-    else if (source == SRC_SOCIAL) { 1 }
-    else if (source == SRC_SOCIAL_GOOGLE) { 1 }
-    else if (source == SRC_SOCIAL_GITHUB) { 1 }
-    else if (source == SRC_SELF_PROTOCOL) { 2 }
-    else if (source == SRC_WORLD_ID) { 2 }
-    else { 0 }
-}
-
-// 重新計算有效 tier 與過期時間
-fun recompute_tier_and_expiry(pass: &mut SurveyPass, clock: &Clock) {
-    let now = clock::timestamp_ms(clock);
-    let mut max_tier: u8 = 0;
-    let mut max_expiry: u64 = 0;
-    let sources = &pass.credential_sources;
-    let mut i = 0;
-    let len = vector::length(sources);
-    while (i < len) {
-        let src = *vector::borrow(sources, i);
-        let key = CredentialKey { source: src };
-        if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
-            let slot = dynamic_field::borrow<CredentialKey, CredentialSlot>(&pass.id, key);
-            if (slot.expires_at > now) {
-                let tier = get_source_tier(src);
-                if (tier > max_tier) {
-                    max_tier = tier;
-                };
-                if (slot.expires_at > max_expiry) {
-                    max_expiry = slot.expires_at;
-                };
-            };
-        };
-        i = i + 1;
-    };
-    pass.effective_tier = max_tier;
-    pass.expires_at = max_expiry;
+/// 檢查特定驗證來源是否有效且未過期
+public fun is_source_valid(pass: &SurveyPass, source: u8, clock: &Clock): bool {
+    if (pass.status != STATUS_ACTIVE) { return false };
+    let key = CredentialKey { source };
+    if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
+        let slot = dynamic_field::borrow<CredentialKey, CredentialSlot>(&pass.id, key);
+        clock::timestamp_ms(clock) < slot.expires_at
+    } else {
+        false
+    }
 }
 
 // 遍歷 nullifiers vector，全部呼叫 register_nullifier
@@ -215,10 +184,8 @@ public fun mint_pass(
         id: object::new(ctx),
         owner,
         deposit_payer,
-        effective_tier: 0,
         credential_sources: vector[source],
         created_at: clock::timestamp_ms(clock),
-        expires_at: 0,
         status: STATUS_ACTIVE,
         encrypted_payload: option::none(),
     };
@@ -236,7 +203,6 @@ public fun mint_pass(
         expires_at,
     };
     dynamic_field::add(&mut pass.id, key, slot);
-    recompute_tier_and_expiry(&mut pass, clock);
 
     transfer::share_object(pass);
 }
@@ -277,8 +243,6 @@ public fun update_pass_credential(
         };
         dynamic_field::add(&mut pass.id, key, slot);
     };
-
-    recompute_tier_and_expiry(pass, clock);
 }
 
 public fun revoke_pass(
@@ -370,10 +334,8 @@ fun do_delete(
         id,
         owner: _,
         deposit_payer: _,
-        effective_tier: _,
         credential_sources: _,
         created_at: _,
-        expires_at: _,
         status: _,
         encrypted_payload: _,
     } = pass;
@@ -390,7 +352,25 @@ public fun set_issuer_pubkey(
 }
 
 public fun is_valid(pass: &SurveyPass, clock: &Clock): bool {
-    pass.status == STATUS_ACTIVE && clock::timestamp_ms(clock) < pass.expires_at
+    if (pass.status != STATUS_ACTIVE) { return false };
+    let now = clock::timestamp_ms(clock);
+    let sources = &pass.credential_sources;
+    let mut i = 0;
+    let len = vector::length(sources);
+    let mut has_valid = false;
+    while (i < len) {
+        let src = *vector::borrow(sources, i);
+        let key = CredentialKey { source: src };
+        if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
+            let slot = dynamic_field::borrow<CredentialKey, CredentialSlot>(&pass.id, key);
+            if (slot.expires_at > now) {
+                has_valid = true;
+                break
+            };
+        };
+        i = i + 1;
+    };
+    has_valid
 }
 
 /// 回傳此 Pass 所有憑證 slot 的 nullifier 聯集（防女巫用）。
@@ -419,10 +399,10 @@ public fun all_nullifiers(pass: &SurveyPass): vector<vector<u8>> {
 
 public fun owner(pass: &SurveyPass): address { pass.owner }
 public fun status(pass: &SurveyPass): u8 { pass.status }
-public fun effective_tier(pass: &SurveyPass): u8 { pass.effective_tier }
-public fun expires_at(pass: &SurveyPass): u64 { pass.expires_at }
+public fun credential_sources(pass: &SurveyPass): vector<u8> { pass.credential_sources }
 public fun created_at(pass: &SurveyPass): u64 { pass.created_at }
 public fun admin(config: &IssuerConfig): address { config.admin }
+public fun issuer_pubkey(config: &IssuerConfig): vector<u8> { config.issuer_pubkey }
 
 #[test_only]
 public fun test_init(ctx: &mut TxContext) {
@@ -462,10 +442,8 @@ public fun mint_pass_for_testing_with_payer(
         id: object::new(ctx),
         owner,
         deposit_payer,
-        effective_tier: 0,
         credential_sources: vector[source],
         created_at: clock::timestamp_ms(clock),
-        expires_at: 0,
         status: STATUS_ACTIVE,
         encrypted_payload: option::none(),
     };
@@ -483,7 +461,6 @@ public fun mint_pass_for_testing_with_payer(
         expires_at,
     };
     dynamic_field::add(&mut pass.id, key, slot);
-    recompute_tier_and_expiry(&mut pass, clock);
 
     transfer::share_object(pass);
 }
@@ -494,17 +471,24 @@ public fun create_for_testing(
     expires_at: u64,
     ctx: &mut TxContext,
 ): SurveyPass {
-    SurveyPass {
+    let mut pass = SurveyPass {
         id: sui::object::new(ctx),
         owner,
         deposit_payer: owner,
-        effective_tier: 1,
-        credential_sources: vector[],
+        credential_sources: vector[2], // SRC_EMAIL = 2
         created_at: 0,
-        expires_at,
         status: STATUS_ACTIVE,
         encrypted_payload: std::option::none(),
-    }
+    };
+    let key = CredentialKey { source: 2 };
+    let slot = CredentialSlot {
+        commitment: vector[],
+        nullifiers: vector[],
+        issued_at: 0,
+        expires_at,
+    };
+    sui::dynamic_field::add(&mut pass.id, key, slot);
+    pass
 }
 
 #[test_only]
@@ -513,20 +497,10 @@ public fun delete_pass_for_testing(pass: SurveyPass) {
         id,
         owner: _,
         deposit_payer: _,
-        effective_tier: _,
         credential_sources: _,
         created_at: _,
-        expires_at: _,
         status: _,
         encrypted_payload: _,
     } = pass;
     sui::object::delete(id);
-}
-
-#[test]
-fun test_social_provider_sources_tier() {
-    // 具體 provider（Google=6 / GitHub=7）與泛稱社群（3）同為 tier 1
-    assert!(get_source_tier(SRC_SOCIAL) == 1, 0);
-    assert!(get_source_tier(SRC_SOCIAL_GOOGLE) == 1, 1);
-    assert!(get_source_tier(SRC_SOCIAL_GITHUB) == 1, 2);
 }

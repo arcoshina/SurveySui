@@ -89,6 +89,20 @@ const create: CreateDict = {
   confirmDeleteQuestion: 'Are you sure you want to delete this question?',
   shuffleOptions: 'Shuffle options randomly',
   estSize: (kb: string) => `Est. Size: ${kb} KB`,
+  allowedNftTypeLabel: 'Required NFT',
+  placeholderAllowedNftType: 'e.g. 0x2::devnet_nft::DevnetNFT',
+  errAllowedNftTypeRequired: 'Allowed NFT Type is required',
+  errAllowedNftTypeInvalid: 'Invalid NFT Type format, must be like 0x...::...::...',
+  allowedSourcesLabel: 'Accepted Verification (Multiple Choice)',
+  errAllowedSourcesRequired: 'At least one verification source must be selected',
+  limitNftLabel: 'NFT',
+  sourceSelfReport: 'Self Report',
+  sourceEmail: 'Email Verification',
+  sourceSocial: 'Social',
+  sourceSelfProtocol: 'Self Protocol',
+  sourceWorldId: 'World ID',
+  sourceGoogle: 'Google',
+  sourceGithub: 'GitHub',
 }
 
 export default create

@@ -7,7 +7,51 @@ function escapeHtml(text: string): string {
 }
 
 function inlineFormat(text: string): string {
-  return escapeHtml(text)
+  let escaped = escapeHtml(text)
+
+  // 1. 處理 Markdown 圖片 `![alt](url)`
+  // 匹配格式: ![alt](url)
+  // 安全過濾：將外部圖片連結轉換為 BFF Image Proxy 代理載入，防範 IP 追蹤與惡意內容載入
+  escaped = escaped.replace(/!\[([^\]]*?)\]\((.+?)\)/g, (match, altText, url) => {
+    const decodedUrl = url
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .trim()
+    
+    if (/^https?:\/\//i.test(decodedUrl)) {
+      let bffUrl = 'http://localhost:3100'
+      try {
+        bffUrl = import.meta.env?.VITE_BFF_URL || 'http://localhost:3100'
+      } catch {
+        // Fallback for node testing environments
+      }
+      const proxyUrl = `${bffUrl}/api/proxy/image?url=${encodeURIComponent(decodedUrl)}`
+      return `<img src="${proxyUrl}" alt="${altText}" />`
+    }
+    return `<img src="${url}" alt="${altText}" />`
+  })
+
+  // 2. 處理 Markdown 連結 `[text](url)`
+  // 匹配格式: [text](url)
+  // 安全過濾：防範 javascript: / data: 協定注入 XSS
+  escaped = escaped.replace(/\[([^\]]+?)\]\((.+?)\)/g, (match, linkText, url) => {
+    const decodedUrl = url
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .trim()
+
+    if (/^(javascript|data|vbscript):/i.test(decodedUrl)) {
+      return `<a href="about:blank" target="_blank" rel="noopener noreferrer">${linkText}</a>`
+    }
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${linkText}</a>`
+  })
+
+  // 3. 基本樣式轉換（粗體、斜體、行內程式碼）
+  return escaped
     .replace(/\*\*([^\*]+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^\*]+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+?)`/g, '<code>$1</code>')

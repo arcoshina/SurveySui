@@ -30,7 +30,7 @@
 
 @layer base {
   body {
-    font-family: 'Noto Sans TC', ui-sans-serif, system-ui, sans-serif;
+    font-family: 'Noto Sans TC', 'Noto Sans JP', 'Noto Sans KR', ui-sans-serif, system-ui, -apple-system, sans-serif;
     @apply bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-100 transition-colors duration-200;
   }
 
@@ -82,6 +82,18 @@
     overflow-y: auto;
     overflow-x: hidden;
   }
+
+  /* 去除連接錢包按鈕的陰影 */
+  button[data-dapp-kit],
+  [class*="sui-connect-button"] {
+    box-shadow: none !important;
+  }
+
+  /* 優化日韓文大段文字的折行體驗，維持完整單詞不碎裂 */
+  h1, h2, h3, h4, h5, h6, p, .prose {
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
 }
 
 @utility text-h1 {
@@ -105,25 +117,25 @@
 }
 
 @utility btn-primary {
-  @apply bg-blue-700 hover:bg-blue-800 text-neutral-100 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply bg-blue-700 hover:bg-blue-800 text-neutral-100 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm whitespace-nowrap;
   @apply dark:bg-blue-800 dark:hover:bg-blue-600 dark:text-neutral-200;
   @apply disabled:bg-blue-700/50 disabled:text-neutral-200 disabled:cursor-not-allowed dark:disabled:bg-blue-900/30 dark:disabled:text-neutral-600 dark:disabled:cursor-not-allowed;
 }
 
 @utility btn-secondary {
-  @apply bg-slate-100 hover:bg-slate-200 text-slate-700 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply bg-slate-100 hover:bg-slate-200 text-slate-700 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm whitespace-nowrap;
   @apply dark:bg-neutral-700 dark:hover:bg-neutral-600 dark:text-neutral-300;
   @apply disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600;
 }
 
 @utility btn-outline {
-  @apply border border-slate-200 hover:bg-slate-100 text-slate-600 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply border border-slate-200 hover:bg-slate-100 text-slate-600 font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm whitespace-nowrap;
   @apply dark:border-0 dark:bg-neutral-800 dark:hover:bg-neutral-600 dark:text-neutral-300;
   @apply disabled:border-slate-100 disabled:text-slate-300 disabled:cursor-not-allowed dark:disabled:bg-neutral-800/70 dark:disabled:text-neutral-700;
 }
 
 @utility btn-danger {
-  @apply bg-rose-800 hover:bg-rose-600 text-white font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm;
+  @apply bg-rose-800 hover:bg-rose-600 text-white font-normal px-5 py-2 rounded-xl transition-all text-base shadow-sm whitespace-nowrap;
   @apply dark:bg-rose-800 dark:hover:bg-rose-700 dark:text-neutral-200;
 }
 

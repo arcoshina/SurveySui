@@ -82,7 +82,7 @@ export const darkTheme: ThemeVars = {
     xlarge: '16px',
   },
   shadows: {
-    primaryButton: '0px 4px 12px rgba(0, 0, 0, 0.5)',
+    primaryButton: 'none',
     walletItemSelected: '0px 2px 6px rgba(0, 0, 0, 0.3)',
   },
   fontWeights: {

@@ -22,11 +22,10 @@ const EInvalidQuestionType: u64 = 2;
 const EOptionLimitExceeded: u64 = 3;
 const EEmptyQuestion: u64 = 4;
 const EDuplicateQuestionId: u64 = 5;
-const EInvalidMinTier: u64 = 6;
+const EEmptyAllowedSources: u64 = 6;
 const EEmptyContent: u64 = 7;
 
 const MAX_OPTIONS_LIMIT: u64 = 50;
-const MAX_MIN_TIER: u8 = 3;
 
 // ── structs ───────────────────────────────────────────────────────────────────
 
@@ -50,7 +49,7 @@ public struct Survey has key {
     creator_pub_key: vector<u8>,
     status: u8,
     registered_at_ms: u64,
-    min_tier: u8,
+    allowed_sources: vector<u8>,
 }
 
 /// Shared registry: indexes survey IDs by creator for on-chain queries.
@@ -71,7 +70,7 @@ public struct SurveyRegistered has copy, drop {
     schema_hash: vector<u8>,
     question_count: u64,
     registered_at_ms: u64,
-    min_tier: u8,
+    allowed_sources: vector<u8>,
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -114,7 +113,7 @@ public fun register(
     schema_hash: vector<u8>,
     pub_key: vector<u8>,
     questions: vector<Question>,
-    min_tier: u8,
+    allowed_sources: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -122,8 +121,8 @@ public fun register(
     assert!(!table::contains(&registry.registered_hashes, content_hash), EDuplicateSurvey);
     table::add(&mut registry.registered_hashes, content_hash, ctx.sender());
 
-    // 2. min_tier validation
-    assert!(min_tier <= MAX_MIN_TIER, EInvalidMinTier);
+    // 2. allowed_sources validation
+    assert!(!vector::is_empty(&allowed_sources), EEmptyAllowedSources);
 
     // 3. Option empty validation
     if (option::is_some(&encrypted_content)) {
@@ -180,7 +179,7 @@ public fun register(
         creator_pub_key: pub_key,
         status: STATUS_ACTIVE,
         registered_at_ms: now_ms,
-        min_tier,
+        allowed_sources,
     };
 
     let survey_id = object::id(&survey);
@@ -193,7 +192,7 @@ public fun register(
         schema_hash,
         question_count: num_questions,
         registered_at_ms: now_ms,
-        min_tier,
+        allowed_sources: survey.allowed_sources,
     });
 
     if (table::contains(&registry.surveys_by_creator, creator)) {
@@ -227,7 +226,7 @@ public(package) fun remove_and_destroy(registry: &mut SurveyRegistry, survey: Su
         creator_pub_key: _,
         status: _,
         registered_at_ms: _,
-        min_tier: _,
+        allowed_sources: _,
     } = survey;
 
     let survey_id = object::uid_to_inner(&id);
@@ -267,7 +266,7 @@ public fun schema_hash(survey: &Survey): vector<u8> { survey.schema_hash }
 public fun creator_pub_key(survey: &Survey): vector<u8> { survey.creator_pub_key }
 public fun status(survey: &Survey): u8              { survey.status }
 public fun registered_at_ms(survey: &Survey): u64   { survey.registered_at_ms }
-public fun min_tier(survey: &Survey): u8            { survey.min_tier }
+public fun allowed_sources(survey: &Survey): vector<u8> { survey.allowed_sources }
 public fun total_count(registry: &SurveyRegistry): u64 { registry.total_count }
 
 /// Returns the list of survey IDs registered by `creator`, or an empty vector.
@@ -288,7 +287,7 @@ public fun content_hash_from_event(event: &SurveyRegistered): vector<u8> { event
 public fun schema_hash_from_event(event: &SurveyRegistered): vector<u8> { event.schema_hash }
 public fun question_count_from_event(event: &SurveyRegistered): u64   { event.question_count }
 public fun registered_at_ms_from_event(event: &SurveyRegistered): u64   { event.registered_at_ms }
-public fun min_tier_from_event(event: &SurveyRegistered): u8           { event.min_tier }
+public fun allowed_sources_from_event(event: &SurveyRegistered): vector<u8> { event.allowed_sources }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
 
@@ -306,7 +305,7 @@ public fun create_survey_for_testing(
     survey_blob_id: Option<vector<u8>>,
     schema_hash: vector<u8>,
     creator_pub_key: vector<u8>,
-    min_tier: u8,
+    allowed_sources: vector<u8>,
     ctx: &mut TxContext,
 ): Survey {
     Survey {
@@ -320,7 +319,7 @@ public fun create_survey_for_testing(
         creator_pub_key,
         status: 0,
         registered_at_ms: 0,
-        min_tier,
+        allowed_sources,
     }
 }
 
@@ -337,7 +336,7 @@ public fun destroy_survey_for_testing(survey: Survey) {
         creator_pub_key: _,
         status: _,
         registered_at_ms: _,
-        min_tier: _,
+        allowed_sources: _,
     } = survey;
     object::delete(id);
 }

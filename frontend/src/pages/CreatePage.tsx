@@ -71,6 +71,7 @@ export default function CreatePage() {
   const navigate = useNavigate()
   const { draftId } = useParams<{ draftId: string }>()
   const [data, setData] = useState<FullSurveyData>(makeBlankSurveyData)
+  const [limitNft, setLimitNft] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const t = useT('create')
@@ -109,6 +110,7 @@ export default function CreatePage() {
         const result = parseFullSurveyMarkdown(entry.contentMd)
         if (result.ok) {
           setData(result.data)
+          setLimitNft(!!result.data.allowedNftType)
         }
       }
     }
@@ -177,12 +179,14 @@ export default function CreatePage() {
   const requiredGas = useMemo(() => {
     if (data.perResponse <= 0 || data.maxResponses <= 0 || !gasCompensationAmount) return 0n
     const repeatMaxTimes = BigInt(data.repeatMaxTimes ?? 1)
+    const premiumFee = BigInt(data.premiumFee ?? 0)
+    const perResponseGasAndFee = gasCompensationAmount + premiumFee
     if (data.repeatReward > 0) {
-      return BigInt(data.maxResponses) * (1n + repeatMaxTimes) * gasCompensationAmount
+      return BigInt(data.maxResponses) * (1n + repeatMaxTimes) * perResponseGasAndFee
     } else {
-      return BigInt(data.maxResponses) * gasCompensationAmount
+      return BigInt(data.maxResponses) * perResponseGasAndFee
     }
-  }, [data.perResponse, data.maxResponses, data.repeatReward, data.repeatMaxTimes, gasCompensationAmount])
+  }, [data.perResponse, data.maxResponses, data.repeatReward, data.repeatMaxTimes, data.premiumFee, gasCompensationAmount])
 
   const currentRate = useMemo(() => {
     const decay = 1_000_000_000_000n
@@ -422,7 +426,18 @@ export default function CreatePage() {
     const maxDeadline = new Date()
     maxDeadline.setMonth(maxDeadline.getMonth() + 3)
     if (data.deadlineMs > maxDeadline.getTime()) return t.errDeadlineMaxExceeded
-    if (data.minTier < 0 || data.minTier > 2) return t.errMinTierInvalid
+    if ((!data.allowedSources || data.allowedSources.length === 0) && !limitNft) {
+      return t.errAllowedSourcesRequired
+    }
+    if (limitNft) {
+      if (!data.allowedNftType || !data.allowedNftType.trim()) {
+        return t.errAllowedNftTypeRequired
+      }
+      const nftTypeRegex = /^0x[a-fA-F0-9]+::[a-zA-Z0-9_]+::[a-zA-Z0-9_]+$/
+      if (!nftTypeRegex.test(data.allowedNftType.trim())) {
+        return t.errAllowedNftTypeInvalid
+      }
+    }
     if (data.questions.length === 0) return t.errQuestionRequired
     for (const q of data.questions) {
       if (!q.id.trim()) return t.errQuestionIdRequired
@@ -434,10 +449,6 @@ export default function CreatePage() {
         const trimmedOpts = q.options_json.map(o => o.trim())
         if (trimmedOpts.some(o => o === '')) {
           return t.errEmptyOption(q.id)
-        }
-        const uniqueOpts = new Set(trimmedOpts)
-        if (uniqueOpts.size !== trimmedOpts.length) {
-          return t.errDuplicateOption(q.id)
         }
       }
       if (q.type === 'text' && q.maxLen !== undefined) {
@@ -788,6 +799,7 @@ export default function CreatePage() {
                 </div>
               </button>
             </section>
+
             {/* 獎勵與限制設定 */}
             <section className="bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 rounded-2xl p-5 space-y-4 transition-colors">
               <h2 className="text-h2 flex items-center gap-1.5 border-b pb-2 border-slate-100 dark:border-neutral-800">
@@ -827,45 +839,6 @@ export default function CreatePage() {
                     placeholder={t.placeholderMaxResponses}
                     aria-label="maxResponses"
                   />
-                </label>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label className="block">
-                  <span className="form-label">{t.deadline.replace('{tz}', getLocalUtcOffsetLabel())}</span>
-                  <input
-                    type="datetime-local"
-                    value={deadlineLocal}
-                    onChange={(e) => {
-                      const ms = new Date(e.target.value).getTime()
-                      if (!isNaN(ms)) updateField('deadlineMs', ms)
-                    }}
-                    max={deadlineMsToLocalInput(maxDeadlineMs)}
-                    className={`mt-1.5 form-input ${deadlineErrorMsg ? 'border-red-500 focus:ring-red-500 focus:border-red-500 dark:border-red-600' : ''}`}
-                    aria-label="deadline"
-                  />
-                  {deadlineErrorMsg && (
-                    <span className="text-xs text-rose-600 dark:text-rose-400 mt-1.5 block">
-                      {deadlineErrorMsg}
-                    </span>
-                  )}
-                  <span className="text-muted mt-1.5 block">
-                    {t.purgeLifecycleNotice(purgeGraceDays)}
-                  </span>
-                </label>
-
-                <label className="block">
-                  <span className="form-label">{t.identityThreshold}</span>
-                  <select
-                    value={data.minTier}
-                    onChange={(e) => updateField('minTier', Number(e.target.value))}
-                    className="mt-1.5 form-input bg-white dark:bg-neutral-900"
-                    aria-label="minTier"
-                  >
-                    <option value={0}>{t.tier0}</option>
-                    <option value={1}>{t.tier1}</option>
-                    <option value={2}>{t.tier2}</option>
-                  </select>
                 </label>
               </div>
 
@@ -929,6 +902,111 @@ export default function CreatePage() {
                 </div>
               )}
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="form-label">{t.deadline.replace('{tz}', getLocalUtcOffsetLabel())}</span>
+                  <input
+                    type="datetime-local"
+                    value={deadlineLocal}
+                    onChange={(e) => {
+                      const ms = new Date(e.target.value).getTime()
+                      if (!isNaN(ms)) updateField('deadlineMs', ms)
+                    }}
+                    max={deadlineMsToLocalInput(maxDeadlineMs)}
+                    className={`mt-1.5 form-input ${deadlineErrorMsg ? 'border-red-500 focus:ring-red-500 focus:border-red-500 dark:border-red-600' : ''}`}
+                    aria-label="deadline"
+                  />
+                  {deadlineErrorMsg && (
+                    <span className="text-xs text-rose-600 dark:text-rose-400 mt-1.5 block">
+                      {deadlineErrorMsg}
+                    </span>
+                  )}
+                  <span className="text-muted mt-1.5 block">
+                    {t.purgeLifecycleNotice(purgeGraceDays)}
+                  </span>
+                </label>
+
+              <div className="block">
+                <span className="form-label">{t.allowedSourcesLabel}</span>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {[
+                    { value: 2, label: 'Email' },
+                    { value: 6, label: 'Google' },
+                    { value: 7, label: 'GitHub' },
+                    { value: 5, label: 'World ID' },
+                  ].map((src) => {
+                    const checked = data.allowedSources.includes(src.value)
+                    return (
+                      <label
+                        key={src.value}
+                        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border cursor-pointer select-none transition-all ${
+                          checked
+                            ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800/80 text-blue-900 dark:text-blue-200 font-semibold'
+                            : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-400 hover:bg-slate-50 dark:hover:bg-neutral-800/40'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              updateField('allowedSources', [...data.allowedSources, src.value])
+                            } else {
+                              updateField(
+                                'allowedSources',
+                                data.allowedSources.filter((v) => v !== src.value)
+                              )
+                            }
+                          }}
+                          className="checkbox-dark checked:bg-blue-600 checked:border-blue-600"
+                        />
+                        <span className="text-sm font-medium">{src.label}</span>
+                      </label>
+                    )
+                  })}
+
+                  <label
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border cursor-pointer select-none transition-all ${
+                      limitNft
+                        ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800/80 text-blue-900 dark:text-blue-200 font-semibold'
+                        : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-400 hover:bg-slate-50 dark:hover:bg-neutral-800/40'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={limitNft}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                        setLimitNft(next)
+                        if (!next) {
+                          updateField('allowedNftType', '')
+                        }
+                      }}
+                      className="checkbox-dark checked:bg-blue-600 checked:border-blue-600"
+                    />
+                    <span className="text-sm font-medium">{t.limitNftLabel}</span>
+                  </label>
+                </div>
+              </div>
+
+              {limitNft && (
+                <div className="animate-fadeIn grid grid-cols-1 gap-4">
+                  <label className="block">
+                    <span className="form-label">{t.allowedNftTypeLabel}</span>
+                    <input
+                      type="text"
+                      value={data.allowedNftType}
+                      onChange={(e) => updateField('allowedNftType', e.target.value.trim())}
+                      className="mt-1.5 form-input"
+                      placeholder={t.placeholderAllowedNftType}
+                      aria-label="allowedNftType"
+                    />
+                  </label>
+                </div>
+              )}
+              </div>
+
+
               {/* 簡易試算卡片 */}
               {data.perResponse > 0 && data.maxResponses > 0 && costBreakdown && (
                 <div className="bg-blue-50/50 dark:bg-blue-950/10 border border-blue-100 dark:border-blue-900/30 rounded-2xl p-5 space-y-3 mt-2 transition-colors">
@@ -953,21 +1031,21 @@ export default function CreatePage() {
                   <div className="space-y-2 text-sm">
                     {/* SSR 預算明細組 */}
                     <div className="space-y-1">
-                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
-                        <span>{t.totalSsrLabel}</span>
-                        <span className="font-semibold text-slate-700 dark:text-neutral-300">
+                      <div className="flex justify-between items-center gap-x-2 text-slate-600 dark:text-neutral-400">
+                        <span className="min-w-0 break-words">{t.totalSsrLabel}</span>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right">
                           {totalSsrNum.toString()} SSR
                         </span>
                       </div>
-                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
-                        <span>{t.platformFeeLabel}</span>
-                        <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR`}>
+                      <div className="flex justify-between items-center gap-x-2 text-slate-600 dark:text-neutral-400">
+                        <span className="min-w-0 break-words">{t.platformFeeLabel}</span>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR`}>
                           {formatSsr((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR
                         </span>
                       </div>
-                      <div className="flex justify-between border-t border-slate-100 dark:border-neutral-800/50 pt-1.5 font-medium text-slate-700 dark:text-neutral-200">
-                        <span>{t.totalSsrRequiredLabel}</span>
-                        <span className="font-bold text-blue-700 dark:text-blue-400" title={`${formatFullPrecision(costBreakdown.grossSsrBase)} SSR`}>
+                      <div className="flex justify-between items-center gap-x-2 border-t border-slate-100 dark:border-neutral-800/50 pt-1.5 font-medium text-slate-700 dark:text-neutral-200">
+                        <span className="min-w-0 break-words">{t.totalSsrRequiredLabel}</span>
+                        <span className="font-bold text-blue-700 dark:text-blue-400 shrink-0 font-mono text-right" title={`${formatFullPrecision(costBreakdown.grossSsrBase)} SSR`}>
                           {formatSsr(costBreakdown.grossSsrBase)} SSR
                         </span>
                       </div>
@@ -975,15 +1053,15 @@ export default function CreatePage() {
 
                     {/* 來源分拆組 */}
                     <div className="border-t border-slate-100 dark:border-neutral-800/80 pt-2 space-y-1">
-                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
-                        <span>{t.ssrOffsetLabel}</span>
-                        <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.offsetIn)} SSR`}>
+                      <div className="flex justify-between items-center gap-x-2 text-slate-600 dark:text-neutral-400">
+                        <span className="min-w-0 break-words">{t.ssrOffsetLabel}</span>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision(costBreakdown.offsetIn)} SSR`}>
                           - {formatSsr(costBreakdown.offsetIn)} SSR
                         </span>
                       </div>
-                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
-                        <span>{t.newMintSsrLabel}</span>
-                        <span className="font-bold text-slate-800 dark:text-neutral-200" title={`${formatFullPrecision(costBreakdown.minted)} SSR`}>
+                      <div className="flex justify-between items-center gap-x-2 text-slate-600 dark:text-neutral-400">
+                        <span className="min-w-0 break-words">{t.newMintSsrLabel}</span>
+                        <span className="font-bold text-slate-800 dark:text-neutral-200 shrink-0 font-mono text-right" title={`${formatFullPrecision(costBreakdown.minted)} SSR`}>
                           {formatSsr(costBreakdown.minted)} SSR
                         </span>
                       </div>
@@ -991,10 +1069,10 @@ export default function CreatePage() {
 
                     {/* SUI 支付項目組 */}
                     <div className="border-t border-slate-100 dark:border-neutral-800/80 pt-2 space-y-1.5">
-                      <div className="flex justify-between text-slate-600 dark:text-neutral-400">
-                        <div className="flex items-center gap-1">
-                          <span>{t.mintSuiCostLabel}</span>
-                          <div className="group relative inline-block">
+                      <div className="flex justify-between items-center gap-x-2 text-slate-600 dark:text-neutral-400">
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="min-w-0 break-words">{t.mintSuiCostLabel}</span>
+                          <div className="group relative inline-block shrink-0">
                             <Info size={13} className="text-slate-400 hover:text-slate-600 dark:text-neutral-500 dark:hover:text-neutral-300 cursor-pointer" />
                             <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 bg-slate-900 text-white dark:bg-neutral-800 dark:text-neutral-100 text-xs rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none leading-relaxed font-normal">
                               <p className="font-semibold">{t.exchangeRateLabel} 1 SUI ≈ {currentRate.toFixed(2)} SSR</p>
@@ -1002,15 +1080,15 @@ export default function CreatePage() {
                             </div>
                           </div>
                         </div>
-                        <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(costBreakdown.suiToInvest)} SUI`}>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision(costBreakdown.suiToInvest)} SUI`}>
                           {formatSui(costBreakdown.suiToInvest)} SUI
                         </span>
                       </div>
                       {requiredGas > 0n && (
-                        <div className="flex justify-between items-center text-slate-600 dark:text-neutral-400">
-                          <div className="flex items-center gap-1">
-                            <span>{t.gasFundLabel}</span>
-                            <div className="group relative inline-block">
+                        <div className="flex justify-between items-center gap-x-2 text-slate-600 dark:text-neutral-400">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="min-w-0 break-words">{t.gasFundLabel}</span>
+                            <div className="group relative inline-block shrink-0">
                               <Info size={13} className="text-slate-400 hover:text-slate-600 dark:text-neutral-500 dark:hover:text-neutral-300 cursor-pointer" />
                               <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 bg-slate-900 text-white dark:bg-neutral-800 dark:text-neutral-100 text-xs rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none leading-relaxed font-normal">
                                 {t.gasFundDesc}
@@ -1018,7 +1096,7 @@ export default function CreatePage() {
                               </div>
                             </div>
                           </div>
-                          <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(requiredGas)} SUI`}>
+                          <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision(requiredGas)} SUI`}>
                             {formatSui(requiredGas)} SUI
                           </span>
                         </div>
@@ -1026,9 +1104,9 @@ export default function CreatePage() {
                     </div>
 
                     {/* 最終總結組 */}
-                    <div className="flex justify-between border-t border-slate-200 dark:border-neutral-800 pt-2.5 font-bold">
-                      <span className="text-slate-800 dark:text-neutral-200">{t.totalSuiCostLabel}</span>
-                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono" title={`${formatFullPrecision(costBreakdown.suiToInvest + requiredGas)} SUI`}>
+                    <div className="flex justify-between items-center gap-x-2 border-t border-slate-200 dark:border-neutral-800 pt-2.5 font-bold">
+                      <span className="text-slate-800 dark:text-neutral-200 min-w-0 break-words">{t.totalSuiCostLabel}</span>
+                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono shrink-0 text-right" title={`${formatFullPrecision(costBreakdown.suiToInvest + requiredGas)} SUI`}>
                         {formatSui(costBreakdown.suiToInvest + requiredGas)} SUI
                       </span>
                     </div>

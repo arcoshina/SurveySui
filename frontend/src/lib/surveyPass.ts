@@ -195,9 +195,9 @@ export async function fetchActivePass(
             objectId: passId,
             owner: fields.owner,
             depositPayer: fields.deposit_payer ?? fields.owner,
-            effectiveTier: Number(fields.effective_tier ?? 0),
+            effectiveTier: 0,
             status: Number(fields.status ?? 0),
-            expiresAt: Number(fields.expires_at ?? 0),
+            expiresAt: 0,
             credentialSources: fields.credential_sources || [],
             createdAt: Number(fields.created_at ?? 0),
           }

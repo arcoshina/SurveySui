@@ -15,6 +15,8 @@ use surveysui::stacked_survey_reward::{Self, STACKED_SURVEY_REWARD};
 use surveysui::survey_pass::{Self, SurveyPass};
 use surveysui::amm_pool::{Self, Pool};
 use surveysui::survey_registry::{Self, Survey};
+use std::type_name;
+use std::ascii;
 
 const STATUS_OPEN: u8   = 0;
 const STATUS_CLOSED: u8 = 1;
@@ -49,6 +51,9 @@ const EInvalidSurveyVaultMatch: u64 = 14;
 const EPurgeTooEarly: u64 = 15;
 const EGraceTooShort: u64 = 16;
 const ENotClosed: u64 = 17;
+const ETicketExpired: u64 = 18;
+const EInvalidTicketSig: u64 = 19;
+const EInvalidNftType: u64 = 20;
 
 /// One stored answer, kept as a dynamic field on the vault's UID so it can be
 /// individually removed (and its storage rebated) when the vault is purged.
@@ -119,6 +124,8 @@ public struct SurveyVault has key {
     /// Stored per-vault (sourced from a deployment env at creation) so the window
     /// is tunable without recompiling the contract.
     purge_grace_ms: u64,
+    premium_fee: u64,
+    allowed_nft_type: Option<vector<u8>>,
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
@@ -137,6 +144,8 @@ public fun create(
     sponsor_address: address,
     gas_compensation_amount: u64,
     storage_compensation_amount: u64,
+    premium_fee: u64,
+    allowed_nft_type: Option<vector<u8>>,
     ctx: &mut TxContext,
 ): SurveyVault {
     assert!(per_response >= 1, EInvalidRewardConfig);
@@ -145,9 +154,9 @@ public fun create(
 
     let per_response_sui = gas_compensation_amount + storage_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
-        max_responses * (1 + repeat_max_times) * per_response_sui
+        max_responses * (1 + repeat_max_times) * (per_response_sui + premium_fee)
     } else {
-        max_responses * per_response_sui
+        max_responses * (per_response_sui + premium_fee)
     };
     assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
 
@@ -173,6 +182,8 @@ public fun create(
         storage_compensation_amount,
         answers_count: 0,
         purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
+        premium_fee,
+        allowed_nft_type,
     }
 }
 
@@ -189,8 +200,25 @@ public fun fund(vault: &mut SurveyVault, ssr_coin: Coin<STACKED_SURVEY_REWARD>, 
 /// Respondent claims SSR from vault.
 /// Validates SurveyPass, applies per-address repeat policy via `claim_counts`,
 /// checks quota and deadline.
+/// Respondent claims SSR from vault.
+/// Validates SurveyPass, applies per-address repeat policy via `claim_counts`,
+/// checks quota and deadline.
+fun check_eligibility(pass: &SurveyPass, allowed_sources: &vector<u8>, clock: &Clock): bool {
+    let mut i = 0;
+    let len = vector::length(allowed_sources);
+    while (i < len) {
+        let src = *vector::borrow(allowed_sources, i);
+        if (surveysui::survey_pass::is_source_valid(pass, src, clock)) {
+            return true
+        };
+        i = i + 1;
+    };
+    false
+}
+
 public fun claim(
     vault: &mut SurveyVault,
+    survey: &Survey,
     pass: &SurveyPass,
     encrypted_answers: Option<vector<u8>>,
     answer_blob_id: Option<vector<u8>>,
@@ -199,9 +227,48 @@ public fun claim(
 ) {
     assert!(vault.status == STATUS_OPEN, EVaultClosed);
     assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
+    assert!(survey_registry::vault_id(survey) == object::id(vault), EInvalidSurveyVaultMatch);
     assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
+    assert!(check_eligibility(pass, &survey_registry::allowed_sources(survey), clock), EInvalidPass);
     assert!(survey_pass::owner(pass) == ctx.sender(), EInvalidPass);
 
+    // ── nullifier 聯集去重（scope 至本 vault，疊加於位址去重之上）──
+    // 取 Pass 上所有憑證 nullifier，逐一以 H(nullifier‖vault_id) 為 key：
+    // 已被別的身分用過 → 擋（EDuplicateNullifier）；同 owner（含重複填答）放行。
+    // 無 nullifier 的 Pass（自填／測試）聯集為空，自然退回純位址去重。
+    let vault_id_bytes = bcs::to_bytes(&object::id(vault));
+    let nullifiers = survey_pass::all_nullifiers(pass);
+    let mut n = 0;
+    let nlen = vector::length(&nullifiers);
+    while (n < nlen) {
+        let mut buf = *vector::borrow(&nullifiers, n);
+        vector::append(&mut buf, vault_id_bytes);
+        let scoped = hash::sha2_256(buf);
+        if (table::contains(&vault.used_nullifiers, scoped)) {
+            assert!(*table::borrow(&vault.used_nullifiers, scoped) == ctx.sender(), EDuplicateNullifier);
+        } else {
+            table::add(&mut vault.used_nullifiers, scoped, ctx.sender());
+        };
+        n = n + 1;
+    };
+
+    process_claim_and_payout(
+        vault,
+        encrypted_answers,
+        answer_blob_id,
+        clock,
+        ctx
+    );
+}
+
+/// 內部共用的實際填答處理與發放獎勵/補貼邏輯
+fun process_claim_and_payout(
+    vault: &mut SurveyVault,
+    encrypted_answers: Option<vector<u8>>,
+    answer_blob_id: Option<vector<u8>>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
     // Size-based storage validation. Capture (kind, payload) so the answer can be
     // stored in a deletable dynamic field below instead of in the immutable event.
     // kind: 0 = inline ciphertext, 1 = Walrus blob id.
@@ -222,26 +289,6 @@ public fun claim(
         payload = *blob_id;
     } else {
         abort EEmptyAnswers
-    };
-
-    // ── nullifier 聯集去重（scope 至本 vault，疊加於位址去重之上）──
-    // 取 Pass 上所有憑證 nullifier，逐一以 H(nullifier‖vault_id) 為 key：
-    // 已被別的身分用過 → 擋（EDuplicateNullifier）；同 owner（含重複填答）放行。
-    // 無 nullifier 的 Pass（自填／測試）聯集為空，自然退回純位址去重。
-    let vault_id_bytes = bcs::to_bytes(&object::id(vault));
-    let nullifiers = survey_pass::all_nullifiers(pass);
-    let mut n = 0;
-    let nlen = vector::length(&nullifiers);
-    while (n < nlen) {
-        let mut buf = *vector::borrow(&nullifiers, n);
-        vector::append(&mut buf, vault_id_bytes);
-        let scoped = hash::sha2_256(buf);
-        if (table::contains(&vault.used_nullifiers, scoped)) {
-            assert!(*table::borrow(&vault.used_nullifiers, scoped) == ctx.sender(), EDuplicateNullifier);
-        } else {
-            table::add(&mut vault.used_nullifiers, scoped, ctx.sender());
-        };
-        n = n + 1;
     };
 
     let key = bcs::to_bytes(&ctx.sender());
@@ -332,6 +379,107 @@ public fun claim(
             transfer::public_transfer(compensation, ctx.sender());
         };
     };
+}
+
+/// 強匿名填答 payload，須與 BFF 端的 BCS 序列化結構完全一致
+public struct RealTimeTicketPayload has copy, drop {
+    vault_id: ID,
+    ephemeral_nullifier: vector<u8>,
+    expires_at: u64,
+}
+
+/// 強匿名填答接口：使用者使用 BFF 簽發的 Ticket 進行資格驗證，無須提供 SurveyPass 且不會暴露實名錢包
+public fun claim_with_ticket(
+    vault: &mut SurveyVault,
+    config: &surveysui::survey_pass::IssuerConfig,
+    ticket_sig: vector<u8>,
+    ephemeral_nullifier: vector<u8>,
+    expires_at: u64,
+    encrypted_answers: Option<vector<u8>>,
+    answer_blob_id: Option<vector<u8>>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(vault.status == STATUS_OPEN, EVaultClosed);
+    assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
+    assert!(clock::timestamp_ms(clock) < expires_at, ETicketExpired);
+
+    // 驗證 Ticket 簽章
+    let payload = RealTimeTicketPayload {
+        vault_id: object::id(vault),
+        ephemeral_nullifier: *&ephemeral_nullifier,
+        expires_at,
+    };
+    let msg = bcs::to_bytes(&payload);
+    assert!(
+        sui::ed25519::ed25519_verify(&ticket_sig, &surveysui::survey_pass::issuer_pubkey(config), &msg),
+        EInvalidTicketSig
+    );
+
+    // 驗證並儲存去重 nullifier：SHA256(ephemeral_nullifier + vault_id)
+    let vault_id_bytes = bcs::to_bytes(&object::id(vault));
+    let mut buf = ephemeral_nullifier;
+    vector::append(&mut buf, vault_id_bytes);
+    let scoped = hash::sha2_256(buf);
+    assert!(!table::contains(&vault.used_nullifiers, scoped), EDuplicateNullifier);
+    table::add(&mut vault.used_nullifiers, scoped, ctx.sender());
+
+    // 扣除手續費給國庫
+    if (vault.premium_fee > 0) {
+        assert!(balance::value(&vault.gas_balance) >= vault.premium_fee, EInsufficientGasBalance);
+        let fee_coin = coin::from_balance(
+            balance::split(&mut vault.gas_balance, vault.premium_fee),
+            ctx
+        );
+        transfer::public_transfer(fee_coin, vault.admin_treasury);
+    };
+
+    process_claim_and_payout(
+        vault,
+        encrypted_answers,
+        answer_blob_id,
+        clock,
+        ctx
+    );
+}
+
+/// 弱匿名填答接口：使用者直接傳入持有之 NFT 物件進行驗證
+#[allow(deprecated_usage)]
+public fun claim_with_nft_marking<T: key>(
+    vault: &mut SurveyVault,
+    nft: &T,
+    encrypted_answers: Option<vector<u8>>,
+    answer_blob_id: Option<vector<u8>>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(vault.status == STATUS_OPEN, EVaultClosed);
+    assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
+
+    // 驗證 NFT 類型符合限制
+    if (option::is_some(&vault.allowed_nft_type)) {
+        let expected = option::borrow(&vault.allowed_nft_type);
+        let actual = std::type_name::into_string(std::type_name::get<T>());
+        assert!(std::ascii::into_bytes(actual) == *expected, EInvalidNftType);
+    };
+
+    // 去識別化去重：將 SHA256(nft_id + vault_id) 寫入 used_nullifiers
+    let nft_id = object::id(nft);
+    let nft_id_bytes = bcs::to_bytes(&nft_id);
+    let vault_id_bytes = bcs::to_bytes(&object::id(vault));
+    let mut buf = nft_id_bytes;
+    vector::append(&mut buf, vault_id_bytes);
+    let scoped = hash::sha2_256(buf);
+    assert!(!table::contains(&vault.used_nullifiers, scoped), EDuplicateNullifier);
+    table::add(&mut vault.used_nullifiers, scoped, ctx.sender());
+
+    process_claim_and_payout(
+        vault,
+        encrypted_answers,
+        answer_blob_id,
+        clock,
+        ctx
+    );
 }
 
 /// Creator closes vault and recovers remaining SSR.
@@ -429,6 +577,8 @@ public fun purge(
         storage_compensation_amount: _,
         answers_count,
         purge_grace_ms: _,
+        premium_fee: _,
+        allowed_nft_type: _,
     } = vault;
 
     // Destroy every stored answer (truly deletes the ciphertext dynamic fields).
@@ -486,6 +636,8 @@ public fun create_empty(
     sponsor_address: address,
     gas_compensation_amount: u64,
     storage_compensation_amount: u64,
+    premium_fee: u64,
+    allowed_nft_type: Option<vector<u8>>,
     ctx: &mut TxContext,
 ): SurveyVault {
     assert!(per_response >= 1, EInvalidRewardConfig);
@@ -493,9 +645,9 @@ public fun create_empty(
 
     let per_response_sui = gas_compensation_amount + storage_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
-        max_responses * (1 + repeat_max_times) * per_response_sui
+        max_responses * (1 + repeat_max_times) * (per_response_sui + premium_fee)
     } else {
-        max_responses * per_response_sui
+        max_responses * (per_response_sui + premium_fee)
     };
     assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
 
@@ -521,6 +673,8 @@ public fun create_empty(
         storage_compensation_amount,
         answers_count: 0,
         purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
+        premium_fee,
+        allowed_nft_type,
     }
 }
 
@@ -571,6 +725,8 @@ public fun status(vault: &SurveyVault): u8            { vault.status }
 public fun closed_at_ms(vault: &SurveyVault): u64     { vault.closed_at_ms }
 public fun creator(vault: &SurveyVault): address      { vault.creator }
 public fun admin_treasury(vault: &SurveyVault): address { vault.admin_treasury }
+public fun premium_fee(vault: &SurveyVault): u64 { vault.premium_fee }
+public fun allowed_nft_type(vault: &SurveyVault): Option<vector<u8>> { vault.allowed_nft_type }
 
 public fun has_claimed(vault: &SurveyVault, respondent: address): bool {
     let key = bcs::to_bytes(&respondent);

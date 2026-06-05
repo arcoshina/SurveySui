@@ -11,6 +11,7 @@ import { bcs } from '@mysten/sui/bcs'
 import { buildCreateSurveyPtb, estimateFundCostV2, buildMintPassPtb } from '../src/lib/ptb'
 import { buildClaimPtb } from '../src/lib/sponsoredTx'
 import { deriveCreatorKeyPair, buildCreatorPubKey, encryptAnswers, decryptAnswers } from '../src/lib/crypto'
+import { fetchClaimedEvents } from '../src/lib/dashboardDecrypt'
 import { webcrypto } from 'node:crypto'
 
 const client = new SuiClient({ url: process.env.SUI_RPC_URL! })
@@ -48,8 +49,10 @@ async function exec(tx: Transaction, label: string) {
 async function main() {
   const fakeSig = new Uint8Array(64)
   webcrypto.getRandomValues(fakeSig)
-  const kp = await deriveCreatorKeyPair(fakeSig)
-  const creatorPubKey = buildCreatorPubKey(kp)
+  const salt = new Uint8Array(32)
+  webcrypto.getRandomValues(salt)
+  const kp = await deriveCreatorKeyPair(fakeSig, salt)
+  const creatorPubKey = buildCreatorPubKey(kp, salt)
 
   const pool = await client.getObject({ id: env('AMM_POOL_ID'), options: { showContent: true } })
   const pf: any = (pool.data?.content as any)?.fields
@@ -74,18 +77,18 @@ async function main() {
       perResponse: 1n, repeatReward: 0n, repeatMaxTimes: 1, maxResponses: 5,
       deadlineMs: BigInt(Date.now() + 365 * 24 * 3600 * 1000), encryptedContent: dummyContent,
       suiToSpend: (est.suiToInvest * 12n) / 10n + 10_000_000n, contentHash,
-      schemaHash: new Uint8Array(32), creatorPubKey, questions: [], minTier: 0, offsetIn: 0n,
+      schemaHash: new Uint8Array(32), creatorPubKey, questions: [], allowedSources: [2], offsetIn: 0n,
       creatorSsrCoins: [], gasCompensationAmount: 0n, storageCompensationAmount: 0n,
     }),
     'create'
   )
   const vaultId = (createRes.objectChanges as any[]).find((c) => c.type === 'created' && String(c.objectType).endsWith('::survey_vault::SurveyVault'))?.objectId
   const surveyId = (createRes.objectChanges as any[]).find((c) => c.type === 'created' && String(c.objectType).endsWith('::survey_registry::Survey'))?.objectId
-
+ 
   // 讀回鏈上 creator_pub_key 確認長度
   const sObj = await client.getObject({ id: surveyId, options: { showContent: true } })
   const onChainPub = (sObj.data?.content as any)?.fields?.creator_pub_key
-  console.log('on-chain creator_pub_key length:', Array.isArray(onChainPub) ? onChainPub.length : '?', '(expect 1217)')
+  console.log('on-chain creator_pub_key length:', Array.isArray(onChainPub) ? onChainPub.length : '?', '(expect 1249)')
 
   const nullifier = new Uint8Array(32); webcrypto.getRandomValues(nullifier)
   const commitment = new Uint8Array(32); webcrypto.getRandomValues(commitment)
@@ -108,9 +111,12 @@ async function main() {
   )
   console.log('claim digest:', claimRes.digest)
 
-  // 從鏈上 event 抓 encrypted_answers 並解密
-  const ev = (claimRes.events as any[]).find((e) => String(e.type).endsWith('::survey_vault::SurveyClaimed'))
-  const onChainAnswerBytes = new Uint8Array(ev.parsedJson.encrypted_answers)
+  // 從鏈上 dynamic fields 抓 encrypted_answers 並解密
+  const claimedEvents = await fetchClaimedEvents(client, vaultId, PKG)
+  if (claimedEvents.length === 0) {
+    throw new Error('No claimed events/answers found in vault dynamic fields')
+  }
+  const onChainAnswerBytes = new Uint8Array(claimedEvents[0].encrypted_answers)
   console.log('event encrypted_answers length:', onChainAnswerBytes.length, '(== local blob?', onChainAnswerBytes.length === blob.length, ')')
   const decrypted = await decryptAnswers(onChainAnswerBytes, kp)
 

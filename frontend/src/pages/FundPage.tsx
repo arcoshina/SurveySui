@@ -185,9 +185,10 @@ export default function FundPage() {
 
   const requiredGas = useMemo(() => {
     if (!frontmatter?.ok) return 0n
-    const perResponseSui = gasCompensationAmount + storageCompensationAmountMIST
-    if (perResponseSui === 0n) return 0n
     const params = frontmatter.data
+    const premiumFeeMIST = BigInt(params.premiumFee ?? 0)
+    const perResponseSui = gasCompensationAmount + storageCompensationAmountMIST + premiumFeeMIST
+    if (perResponseSui === 0n) return 0n
     const repeatMaxTimes = BigInt(params.repeatMaxTimes ?? 1)
     if (params.repeatReward > 0) {
       return BigInt(params.maxResponses) * (1n + repeatMaxTimes) * perResponseSui
@@ -203,6 +204,7 @@ export default function FundPage() {
   const totalSuiToSpend = suiToSpend != null ? suiToSpend + requiredGas : null
 
   const [keypair, setKeypair] = useState<CreatorKeyPair | null>(null)
+  const [surveySalt] = useState(() => crypto.getRandomValues(new Uint8Array(32)))
   const [status, setStatus] = useState<
     'idle' | 'key-signing' | 'key-ready' | 'uploading' | 'tx-signing' | 'submitting' | 'success' | 'error'
   >('idle')
@@ -268,7 +270,7 @@ export default function FundPage() {
     try {
       const message = new TextEncoder().encode(KEY_DERIVE_MSG)
       const { signature } = await signPersonalMessageAsync({ message })
-      const kp = await deriveCreatorKeyPair(base64ToBytes(signature))
+      const kp = await deriveCreatorKeyPair(base64ToBytes(signature), surveySalt)
       setKeypair(kp)
       setStatus('key-ready')
     } catch (err) {
@@ -293,7 +295,7 @@ export default function FundPage() {
       : new Uint8Array(32) // 32-byte dummy key for non-encrypted surveys
     // Hybrid (X25519 + ML-KEM-768) pubkey published on-chain for answer encryption.
     const creatorPubKeyForChain = isKeyRequired && keypair
-      ? buildCreatorPubKey(keypair)
+      ? buildCreatorPubKey(keypair, surveySalt)
       : new Uint8Array(32) // dummy for non-encrypted surveys (answers never encrypted)
     let contentKey: Uint8Array
     let encryptedBlob: Uint8Array
@@ -401,7 +403,7 @@ export default function FundPage() {
         schemaHash,
         creatorPubKey: creatorPubKeyForChain,
         questions: fullSurvey.data.questions,
-        minTier: fullSurvey.data.minTier,
+        allowedSources: fullSurvey.data.allowedSources,
         offsetIn: cost.offsetIn,
         creatorSsrCoins: ssrCoins,
         sponsorAddress: gasHealth?.sponsorAddress,
@@ -409,6 +411,8 @@ export default function FundPage() {
         surveyBlobId,
         storageCompensationAmount: storageCompensationAmountMIST,
         requiredStorageFund,
+        premiumFee: params.premiumFee ? BigInt(params.premiumFee) : 0n,
+        allowedNftType: params.allowedNftType || undefined,
       })
     }
 

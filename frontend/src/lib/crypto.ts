@@ -124,10 +124,58 @@ export interface CreatorKeyPair {
  * @param walletSignatureBytes — raw bytes returned by wallet.signPersonalMessage
  */
 export async function deriveCreatorKeyPair(
-  walletSignatureBytes: Uint8Array
+  walletSignatureBytes: Uint8Array,
+  salt: Uint8Array | null = null
 ): Promise<CreatorKeyPair> {
-  // ── X25519: seed = SHA-256(walletSig) ──
-  const seed = new Uint8Array(await crypto.subtle.digest('SHA-256', walletSignatureBytes as any))
+  let seed: Uint8Array
+  let mlkemSeed: Uint8Array
+
+  if (salt) {
+    if (salt.length !== 32) {
+      throw new Error(`Salt must be exactly 32 bytes, got ${salt.length}`)
+    }
+    // V2: Derive seeds using HKDF-SHA256 with the survey-specific salt
+    const hkdfKey = await crypto.subtle.importKey(
+      'raw',
+      walletSignatureBytes as any,
+      'HKDF',
+      false,
+      ['deriveBits']
+    )
+    
+    // Derive 32-byte seed for X25519
+    const x25519SeedBits = await crypto.subtle.deriveBits(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: salt as any,
+        info: new TextEncoder().encode('surveysui-x25519-v2')
+      },
+      hkdfKey,
+      32 * 8
+    )
+    seed = new Uint8Array(x25519SeedBits)
+
+    // Derive 64-byte seed for ML-KEM-768
+    const mlkemSeedBits = await crypto.subtle.deriveBits(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: salt as any,
+        info: new TextEncoder().encode('surveysui-mlkem768-v2')
+      },
+      hkdfKey,
+      64 * 8
+    )
+    mlkemSeed = new Uint8Array(mlkemSeedBits)
+  } else {
+    // V1 (Legacy):
+    // ── X25519: seed = SHA-256(walletSig) ──
+    seed = new Uint8Array(await crypto.subtle.digest('SHA-256', walletSignatureBytes as any))
+    // ── ML-KEM-768: 64-byte seed = HKDF-SHA256(walletSig), domain-separated ──
+    mlkemSeed = await _deriveMlkemSeed(walletSignatureBytes)
+  }
+
   const der = seedToX25519Pkcs8(seed)
   const extractable = await crypto.subtle.importKey(
     'pkcs8',
@@ -149,8 +197,6 @@ export async function deriveCreatorKeyPair(
     ['deriveBits']
   )
 
-  // ── ML-KEM-768: 64-byte seed = HKDF-SHA256(walletSig), domain-separated ──
-  const mlkemSeed = await _deriveMlkemSeed(walletSignatureBytes)
   const { publicKey: mlkemPublicKey, secretKey: mlkemSecretKey } = ml_kem768.keygen(mlkemSeed)
 
   return { x25519PublicKeyBytes, x25519PrivateKey, mlkemPublicKey, mlkemSecretKey }
@@ -158,31 +204,61 @@ export async function deriveCreatorKeyPair(
 
 /**
  * Combined, publishable creator public key:
- *   [1B ver | 32B x25519_pub | 1184B ml_kem768_ek]
+ *   V1 (Legacy): [1B ver=0x01 | 32B x25519_pub | 1184B ml_kem768_ek]
+ *   V2 (Salted): [1B ver=0x02 | 32B salt | 32B x25519_pub | 1184B ml_kem768_ek]
  * Stored on-chain in survey_registry::creator_pub_key.
  */
-export function buildCreatorPubKey(kp: CreatorKeyPair): Uint8Array {
-  const out = new Uint8Array(1 + X25519_PUB_LEN + MLKEM_EK_LEN)
-  out[0] = HYBRID_VERSION
-  out.set(kp.x25519PublicKeyBytes, 1)
-  out.set(kp.mlkemPublicKey, 1 + X25519_PUB_LEN)
-  return out
+export function buildCreatorPubKey(kp: CreatorKeyPair, salt: Uint8Array | null = null): Uint8Array {
+  if (salt) {
+    if (salt.length !== 32) {
+      throw new Error(`Salt must be exactly 32 bytes, got ${salt.length}`)
+    }
+    const out = new Uint8Array(1 + 32 + X25519_PUB_LEN + MLKEM_EK_LEN)
+    out[0] = 0x02 // V2 version
+    out.set(salt, 1)
+    out.set(kp.x25519PublicKeyBytes, 1 + 32)
+    out.set(kp.mlkemPublicKey, 1 + 32 + X25519_PUB_LEN)
+    return out
+  } else {
+    const out = new Uint8Array(1 + X25519_PUB_LEN + MLKEM_EK_LEN)
+    out[0] = 0x01 // V1 version
+    out.set(kp.x25519PublicKeyBytes, 1)
+    out.set(kp.mlkemPublicKey, 1 + X25519_PUB_LEN)
+    return out
+  }
 }
 
 /** Reverse of {@link buildCreatorPubKey}. */
 export function parseCreatorPubKey(bytes: Uint8Array): {
+  version: number
+  salt: Uint8Array | null
   x25519Pub: Uint8Array
   mlkemEk: Uint8Array
 } {
-  if (bytes.length !== 1 + X25519_PUB_LEN + MLKEM_EK_LEN) {
-    throw new Error(`Unexpected creator pub key length: ${bytes.length}`)
-  }
-  if (bytes[0] !== HYBRID_VERSION) {
-    throw new Error(`Unsupported creator pub key version: ${bytes[0]}`)
-  }
-  return {
-    x25519Pub: bytes.slice(1, 1 + X25519_PUB_LEN),
-    mlkemEk: bytes.slice(1 + X25519_PUB_LEN),
+  const version = bytes[0]
+  if (version === 0x01) {
+    if (bytes.length !== 1 + X25519_PUB_LEN + MLKEM_EK_LEN) {
+      throw new Error(`Unexpected creator pub key length for V1: ${bytes.length}`)
+    }
+    return {
+      version,
+      salt: null,
+      x25519Pub: bytes.slice(1, 1 + X25519_PUB_LEN),
+      mlkemEk: bytes.slice(1 + X25519_PUB_LEN),
+    }
+  } else if (version === 0x02) {
+    const SALT_LEN = 32
+    if (bytes.length !== 1 + SALT_LEN + X25519_PUB_LEN + MLKEM_EK_LEN) {
+      throw new Error(`Unexpected creator pub key length for V2: ${bytes.length}`)
+    }
+    return {
+      version,
+      salt: bytes.slice(1, 1 + SALT_LEN),
+      x25519Pub: bytes.slice(1 + SALT_LEN, 1 + SALT_LEN + X25519_PUB_LEN),
+      mlkemEk: bytes.slice(1 + SALT_LEN + X25519_PUB_LEN),
+    }
+  } else {
+    throw new Error(`Unsupported creator pub key version: ${version}`)
   }
 }
 

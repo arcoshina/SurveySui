@@ -30,11 +30,14 @@ describe('useOAuthResult Hook', () => {
       expires_at: '123456',
       nullifiers: ['null1', 'null2'],
       source: 3,
+    }
+    const oauthResultData = {
+      tickets: [ticketData],
       provider: 'google',
     }
     
     // Convert to unpadded base64url
-    const jsonStr = JSON.stringify(ticketData)
+    const jsonStr = JSON.stringify(oauthResultData)
     const base64 = btoa(jsonStr)
     const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 
@@ -42,19 +45,19 @@ describe('useOAuthResult Hook', () => {
 
     const { result } = renderHook(() => useOAuthResult())
 
-    expect(result.current.oauthTicket).toEqual(ticketData)
+    expect(result.current.oauthResult).toEqual(oauthResultData)
     expect(window.history.replaceState).toHaveBeenCalled()
   })
 
   it('should return null when oauth_result is missing', () => {
     window.location.search = ''
     const { result } = renderHook(() => useOAuthResult())
-    expect(result.current.oauthTicket).toBeNull()
+    expect(result.current.oauthResult).toBeNull()
   })
 
   it('should ignore malformed JSON silently', () => {
     window.location.search = '?oauth_result=not_a_valid_json_base64url'
     const { result } = renderHook(() => useOAuthResult())
-    expect(result.current.oauthTicket).toBeNull()
+    expect(result.current.oauthResult).toBeNull()
   })
 })

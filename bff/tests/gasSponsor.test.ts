@@ -52,24 +52,87 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
           status: { status: 'success' },
         },
       }),
-      getNormalizedMoveFunction: vi.fn().mockResolvedValue({
-        visibility: 'Public',
-        isEntry: false,
-        typeParameters: [],
-        parameters: [
-          { MutableReference: { Struct: { address: packageId, module: 'survey_pass', name: 'NullifierRegistry', typeArguments: [] } } },
-          { Reference: { Struct: { address: packageId, module: 'survey_pass', name: 'IssuerConfig', typeArguments: [] } } },
-          'Address',
-          'Address',
-          'U8',
-          { Vector: 'U8' },
-          { Vector: 'U8' },
-          'U64',
-          { Vector: 'U8' },
-          { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
-          { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
-        ],
-        return_: []
+      getNormalizedMoveFunction: vi.fn().mockImplementation(async ({ module, function: func }) => {
+        if (module === 'survey_pass' && func === 'mint_pass') {
+          return {
+            visibility: 'Public',
+            isEntry: false,
+            typeParameters: [],
+            parameters: [
+              { MutableReference: { Struct: { address: packageId, module: 'survey_pass', name: 'NullifierRegistry', typeArguments: [] } } },
+              { Reference: { Struct: { address: packageId, module: 'survey_pass', name: 'IssuerConfig', typeArguments: [] } } },
+              'Address',
+              'Address',
+              'U8',
+              { Vector: 'U8' },
+              { Vector: 'U8' },
+              'U64',
+              { Vector: 'U8' },
+              { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
+              { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
+            ],
+            return_: []
+          }
+        }
+        if (module === 'survey_vault' && func === 'claim') {
+          return {
+            visibility: 'Public',
+            isEntry: false,
+            typeParameters: [],
+            parameters: [
+              { MutableReference: { Struct: { address: packageId, module: 'survey_vault', name: 'SurveyVault', typeArguments: [] } } },
+              { Reference: { Struct: { address: packageId, module: 'survey_registry', name: 'Survey', typeArguments: [] } } },
+              { Reference: { Struct: { address: packageId, module: 'survey_pass', name: 'SurveyPass', typeArguments: [] } } },
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
+              { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
+            ],
+            return_: []
+          }
+        }
+        if (module === 'survey_vault' && func === 'claim_with_ticket') {
+          return {
+            visibility: 'Public',
+            isEntry: false,
+            typeParameters: [],
+            parameters: [
+              { MutableReference: { Struct: { address: packageId, module: 'survey_vault', name: 'SurveyVault', typeArguments: [] } } },
+              { Reference: { Struct: { address: packageId, module: 'survey_pass', name: 'IssuerConfig', typeArguments: [] } } },
+              { Vector: 'U8' },
+              { Vector: 'U8' },
+              'U64',
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
+              { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
+            ],
+            return_: []
+          }
+        }
+        if (module === 'survey_vault' && func === 'claim_with_nft_marking') {
+          return {
+            visibility: 'Public',
+            isEntry: false,
+            typeParameters: [{ abilities: ['key'] }],
+            parameters: [
+              { MutableReference: { Struct: { address: packageId, module: 'survey_vault', name: 'SurveyVault', typeArguments: [] } } },
+              { Reference: { TypeParameter: 0 } },
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
+              { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
+            ],
+            return_: []
+          }
+        }
+        return {
+          visibility: 'Public',
+          isEntry: false,
+          typeParameters: [],
+          parameters: Array(10).fill('Struct'),
+          return_: []
+        }
       }),
       multiGetObjects: vi.fn().mockImplementation(async ({ ids }: { ids: string[] }) => {
         return ids.map(id => {
@@ -369,5 +432,105 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     expect(okRes.statusCode).toBe(200)
     expect(JSON.parse(okRes.payload)).toHaveProperty('sponsorSignature')
   })
+
+  it('should accept valid claim transaction', async () => {
+    const tx = new Transaction()
+    const vaultObjectId = '0x0000000000000000000000000000000000000000000000000000000000000008'
+    const surveyObjectId = '0x0000000000000000000000000000000000000000000000000000000000000009'
+    const passObjectId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      arguments: [
+        tx.object(vaultObjectId),
+        tx.object(surveyObjectId),
+        tx.object(passObjectId),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()), // encrypted_answers
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()), // answer_blob_id
+        tx.object('0x6'), // Clock
+      ],
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toHaveProperty('sponsorSignature')
+  })
+
+  it('should accept valid claim_with_ticket transaction', async () => {
+    const tx = new Transaction()
+    const vaultObjectId = '0x0000000000000000000000000000000000000000000000000000000000000008'
+    const issuerConfigObjectId = '0x000000000000000000000000000000000000000000000000000000000000000b'
+
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim_with_ticket`,
+      arguments: [
+        tx.object(vaultObjectId),
+        tx.object(issuerConfigObjectId),
+        tx.pure.vector('u8', Array.from(new Uint8Array(64))), // ticket_sig
+        tx.pure.vector('u8', Array.from(new Uint8Array(32))), // ephemeral_nullifier
+        tx.pure.u64('9999999999999'), // expires_at
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()), // encrypted_answers
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()), // answer_blob_id
+        tx.object('0x6'), // Clock
+      ],
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toHaveProperty('sponsorSignature')
+  })
+
+  it('should accept valid claim_with_nft_marking transaction', async () => {
+    const tx = new Transaction()
+    const vaultObjectId = '0x0000000000000000000000000000000000000000000000000000000000000008'
+    const nftObjectId = '0x000000000000000000000000000000000000000000000000000000000000000d'
+
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim_with_nft_marking`,
+      typeArguments: ['0x2::devnet_nft::DevNetNFT'],
+      arguments: [
+        tx.object(vaultObjectId),
+        tx.object(nftObjectId),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()), // encrypted_answers
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()), // answer_blob_id
+        tx.object('0x6'), // Clock
+      ],
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toHaveProperty('sponsorSignature')
+  })
 })
+
 

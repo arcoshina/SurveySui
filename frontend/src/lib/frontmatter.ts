@@ -8,6 +8,9 @@ export interface FrontmatterData {
   deadlineMs: number
   encryptAnswers: boolean
   storageCompensationAmount: number
+  allowedNftType?: string
+  premiumFee?: number
+  allowedSources?: number[]
 }
 
 export type FrontmatterResult = { ok: true; data: FrontmatterData } | { ok: false; error: string }
@@ -32,6 +35,7 @@ export function parseFrontmatter(md: string): FrontmatterResult {
   const repeatMaxTimesStr = getVal('repeatMaxTimes')
   const encryptAnswersStr = getVal('encryptAnswers')
   const storageCompensationAmountStr = getVal('storageCompensationAmount')
+  const allowedSourcesStr = getVal('allowedSources')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -66,7 +70,47 @@ export function parseFrontmatter(md: string): FrontmatterResult {
     return { ok: false, error: 'storageCompensationAmount 必須為非負數' }
   }
 
-  return { ok: true, data: { perResponse, repeatReward, repeatMaxTimes, maxResponses, deadlineMs, encryptAnswers, storageCompensationAmount } }
+  const allowedNftType = getVal('allowedNftType') ?? ''
+  const premiumFee = getVal('premiumFee') ? Number(getVal('premiumFee')) : 0
+
+  let allowedSources: number[] = [2]
+  if (allowedSourcesStr) {
+    try {
+      const parsed = JSON.parse(allowedSourcesStr)
+      if (Array.isArray(parsed)) {
+        allowedSources = parsed.map(Number).filter(n => !isNaN(n))
+      }
+    } catch {
+      const num = Number(allowedSourcesStr)
+      if (!isNaN(num)) {
+        allowedSources = [num]
+      }
+    }
+  } else {
+    const minTierStr = getVal('minTier')
+    if (minTierStr != null) {
+      const minTier = Number(minTierStr)
+      if (minTier === 0) allowedSources = [2, 3, 5, 6, 7]
+      else if (minTier === 1) allowedSources = [3, 5, 6, 7]
+      else if (minTier === 2) allowedSources = [5]
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      perResponse,
+      repeatReward,
+      repeatMaxTimes,
+      maxResponses,
+      deadlineMs,
+      encryptAnswers,
+      storageCompensationAmount,
+      allowedNftType,
+      premiumFee,
+      allowedSources,
+    },
+  }
 }
 
 export type QuestionType = 'single_choice' | 'multi_choice' | 'text' | 'scale'
@@ -90,10 +134,11 @@ export interface FullSurveyData {
   repeatMaxTimes: number
   maxResponses: number
   deadlineMs: number
-  /** 0 = 無門檻；1/2 對應 KYC tier */
-  minTier: number
+  allowedSources: number[]
   encryptAnswers: boolean
   storageCompensationAmount: number
+  allowedNftType: string
+  premiumFee?: number
   /** 問卷說明文字（純 markdown，frontmatter 與 questions 程式碼區塊之間） */
   description: string
   questions: Question[]
@@ -160,11 +205,13 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   const perResponseStr = getVal('perResponse')
   const maxResponsesStr = getVal('maxResponses')
   const deadlineStr = getVal('deadline')
-  const minTierStr = getVal('minTier')
+  const allowedSourcesStr = getVal('allowedSources')
   const repeatRewardStr = getVal('repeatReward')
   const repeatMaxTimesStr = getVal('repeatMaxTimes')
   const encryptAnswersStr = getVal('encryptAnswers')
   const storageCompensationAmountStr = getVal('storageCompensationAmount')
+  const allowedNftType = getVal('allowedNftType') ?? ''
+  const premiumFee = getVal('premiumFee') ? Number(getVal('premiumFee')) : 0
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -181,9 +228,27 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   const deadlineMs = new Date(deadlineStr).getTime()
   if (isNaN(deadlineMs)) return { ok: false, error: 'deadline 格式無效（需為 ISO 日期字串）' }
 
-  const minTier = minTierStr == null ? 0 : Number(minTierStr)
-  if (!Number.isInteger(minTier) || minTier < 0 || minTier > 2) {
-    return { ok: false, error: 'minTier 必須為 0-2 的整數' }
+  let allowedSources: number[] = [2]
+  if (allowedSourcesStr) {
+    try {
+      const parsed = JSON.parse(allowedSourcesStr)
+      if (Array.isArray(parsed)) {
+        allowedSources = parsed.map(Number).filter(n => !isNaN(n))
+      }
+    } catch {
+      const num = Number(allowedSourcesStr)
+      if (!isNaN(num)) {
+        allowedSources = [num]
+      }
+    }
+  } else {
+    const minTierStr = getVal('minTier')
+    if (minTierStr != null) {
+      const minTier = Number(minTierStr)
+      if (minTier === 0) allowedSources = [2, 3, 5, 6, 7]
+      else if (minTier === 1) allowedSources = [3, 5, 6, 7]
+      else if (minTier === 2) allowedSources = [5]
+    }
   }
 
   const repeatReward = repeatRewardStr == null ? 0 : Number(repeatRewardStr)
@@ -227,9 +292,11 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
       repeatMaxTimes,
       maxResponses,
       deadlineMs,
-      minTier,
+      allowedSources,
       encryptAnswers,
       storageCompensationAmount,
+      allowedNftType,
+      premiumFee,
       description,
       questions: questionsResult.questions,
     },
@@ -365,9 +432,10 @@ export function serializeFullSurveyToMarkdown(
     `repeatMaxTimes: ${data.repeatMaxTimes}`,
     `maxResponses: ${data.maxResponses}`,
     `deadline: ${quoteString(deadlineIso)}`,
-    `minTier: ${data.minTier}`,
+    `allowedSources: [${data.allowedSources.join(', ')}]`,
     `encryptAnswers: ${data.encryptAnswers !== false ? 'true' : 'false'}`,
     `storageCompensationAmount: ${data.storageCompensationAmount ?? 0.01}`,
+    `allowedNftType: ${quoteString(data.allowedNftType ?? '')}`,
     `draftStamp: ${quoteString(draftStamp)}`,
     '---',
   ]
@@ -424,9 +492,10 @@ export function makeBlankSurveyData(): FullSurveyData {
     repeatMaxTimes: 3,
     maxResponses: 5,
     deadlineMs: future.getTime(),
-    minTier: 0,
+    allowedSources: [2], // 預設需要 Email 驗證
     encryptAnswers: true,
     storageCompensationAmount: 0.01,
+    allowedNftType: '',
     description: '',
     questions: [],
   }
@@ -443,26 +512,9 @@ export function sanitizeQuestionIds(questions: Question[]): Question[] {
     }
     usedIds.add(uniqueId)
 
-    // 清洗選項列表中的重複選項
-    let sanitizedOptions: string[] | null = null
-    if (q.options_json) {
-      const usedOpts = new Set<string>()
-      sanitizedOptions = q.options_json.map((opt) => {
-        let uniqueOpt = opt
-        let optCounter = 1
-        while (usedOpts.has(uniqueOpt)) {
-          uniqueOpt = `${opt}_${optCounter}`
-          optCounter++
-        }
-        usedOpts.add(uniqueOpt)
-        return uniqueOpt
-      })
-    }
-
     return {
       ...q,
       id: uniqueId,
-      options_json: sanitizedOptions,
     }
   })
 }

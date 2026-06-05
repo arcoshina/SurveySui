@@ -114,6 +114,14 @@ export function registerAuthRoutes(app: FastifyInstance): void {
 
   app.post(
     '/auth/email/otp',
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 hour',
+        },
+      },
+    },
     async (req: FastifyRequest<{ Body: OtpRequestBody }>, reply: FastifyReply) => {
       const { email } = req.body
       if (!email || !email.includes('@')) {
@@ -311,23 +319,28 @@ export function registerAuthRoutes(app: FastifyInstance): void {
 
       // 計算 nullifiers
       const primaryNullifier = computeSocialPrimaryNullifier(provider, sub)
-      // Apple email unreliable → 不加 secondary nullifier
       const shouldAddEmail = email && !config.emailUnreliable
       const emailNullifier = shouldAddEmail ? computeEmailSecondaryNullifier(email!) : null
-      const nullifiers = emailNullifier
-        ? [primaryNullifier, emailNullifier]
-        : [primaryNullifier]
 
-      // 依 provider 決定具體 source（google=6 / github=7）；未知 provider fallback 回泛稱社群 3
       const socialSource = SOCIAL_SOURCE_BY_PROVIDER[provider] ?? SRC_SOCIAL
-
       const commitment = new Uint8Array(0)
-      const expiresAtMs = Date.now() + getPassTtlMs(socialSource)
+      const oauthExpiresAtMs = Date.now() + getPassTtlMs(socialSource)
 
-      const ticket = await signTicket(owner, socialSource, nullifiers, commitment, expiresAtMs)
+      const tickets: any[] = []
+
+      // 1. Google / GitHub OAuth Ticket
+      const oauthTicket = await signTicket(owner, socialSource, [primaryNullifier], commitment, oauthExpiresAtMs)
+      tickets.push({ ...oauthTicket, source: socialSource })
+
+      // 2. Email Ticket (如果可以獲取 email)
+      if (emailNullifier) {
+        const emailExpiresAtMs = Date.now() + getPassTtlMs(SRC_EMAIL)
+        const emailTicket = await signTicket(owner, SRC_EMAIL, [emailNullifier], commitment, emailExpiresAtMs)
+        tickets.push({ ...emailTicket, source: SRC_EMAIL })
+      }
 
       const oauthResult = Buffer.from(
-        JSON.stringify({ ...ticket, source: socialSource, provider })
+        JSON.stringify({ tickets, provider })
       ).toString('base64url')
 
       return reply.redirect(`${frontendUrl}/auth?oauth_result=${oauthResult}`)

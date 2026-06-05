@@ -26,6 +26,7 @@ import {
   base64urlToBytes,
   deriveCreatorKeyPair,
   decryptSurveyContent,
+  parseCreatorPubKey,
 } from '../lib/crypto'
 import { parseFullSurveyMarkdown, type Question, type FullSurveyData, sanitizeQuestionIds } from '../lib/frontmatter'
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
@@ -88,9 +89,10 @@ function formatDateTime(ms: number): string {
   return `${yyyy}/${mm}/${dd} ${hh}:${min}`
 }
 
-type SurveyState = 'active' | 'full' | 'closed'
+type SurveyState = 'active' | 'full' | 'closed' | 'purged'
 
 function deriveSurveyState(status: number, claimed: number, max: number): SurveyState {
+  if (status === 2) return 'purged'
   if (status !== 0) return 'closed'
   if (max > 0 && claimed >= max) return 'full'
   return 'active'
@@ -174,7 +176,7 @@ export default function DashboardPage() {
   }, [vaultId, location.hash])
 
   // ── 鏈上 vault 物件 ────────────────────────────────────────────────────────
-  const { data: vaultData, refetch: refetchVault } = useSuiClientQuery(
+  const { data: vaultData, refetch: refetchVault, isPending: isPendingVault } = useSuiClientQuery(
     'getObject',
     { id: vaultId ?? '', options: { showContent: true } },
     { enabled: !!vaultId }
@@ -226,7 +228,8 @@ export default function DashboardPage() {
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [detailSurveyTitle, setDetailSurveyTitle] = useState<string | null>(null)
   const [surveyMeta, setSurveyMeta] = useState<{
-    minTier: number
+    allowedSources: number[]
+    allowedNftType: string | null
     repeatReward: number
     repeatMaxTimes: number
     perResponse: number
@@ -251,6 +254,26 @@ export default function DashboardPage() {
 
   const [surveyDetails, setSurveyDetails] = useState<CreatorSurveyDetail[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
+
+function getAnswerText(q: any, val: any, separator: string = ', '): string {
+  if (val === undefined || val === null) return ''
+  if (q.type === 'single_choice' && q.options_json) {
+    const idx = Number(val)
+    if (!isNaN(idx) && idx >= 0 && idx < q.options_json.length) {
+      return q.options_json[idx]
+    }
+  }
+  if (q.type === 'multi_choice' && q.options_json && Array.isArray(val)) {
+    return val
+      .map((item) => {
+        const idx = Number(item)
+        return idx >= 0 && idx < q.options_json!.length ? q.options_json![idx] : ''
+      })
+      .filter((t: string) => t !== '')
+      .join(separator)
+  }
+  return String(val)
+}
 
   const sortedSurveyDetails = useMemo(() => {
     return [...surveyDetails].sort((a, b) => {
@@ -436,55 +459,62 @@ export default function DashboardPage() {
             let claimed_count = 0
             let max_responses = 0
 
-            const sFields = (surveyObj?.data?.content as any)?.fields
-            if (sFields) {
-              status = sFields.status !== undefined ? Number(sFields.status) : 0
+            const isSurveyDeleted = !surveyObj || !surveyObj.data || !!surveyObj.error
+            const isVaultDeleted = !vaultObj || !vaultObj.data || !!vaultObj.error
 
-              const surveyBlobIdBytes = getOptionVec(sFields.survey_blob_id)
-              let rawContent: Uint8Array | null = null
+            if (isSurveyDeleted && isVaultDeleted) {
+              status = 2 // 已銷毀
+            } else {
+              const sFields = (surveyObj?.data?.content as any)?.fields
+              if (sFields) {
+                status = sFields.status !== undefined ? Number(sFields.status) : 0
 
-              if (surveyBlobIdBytes) {
-                try {
-                  const blobId = new TextDecoder().decode(surveyBlobIdBytes)
-                  rawContent = await downloadFromDecentralizedStorage(blobId)
-                } catch (e) {
-                  console.warn('Failed to download decentralized storage title for list item:', s.survey_id, e)
-                }
-              } else {
-                rawContent = sFields.encrypted_content
-                  ? normalizeBytes(sFields.encrypted_content)
-                  : null
-              }
+                const surveyBlobIdBytes = getOptionVec(sFields.survey_blob_id)
+                let rawContent: Uint8Array | null = null
 
-              if (rawContent) {
-                try {
-                  const savedKey = getSavedContentKey(s.vault_id)
-                  if (savedKey) {
-                    const keyBytes = base64urlToBytes(savedKey.slice(1))
-                    const dec = await decryptSurveyContent(rawContent, keyBytes)
-                    const parsed = parseFullSurveyMarkdown(dec.markdown)
-                    if (parsed.ok && parsed.data.title) {
-                      title = parsed.data.title
-                    }
-                  } else if (rawContent.length >= 32) {
-                    const md = new TextDecoder().decode(rawContent.slice(32))
-                    const parsed = parseFullSurveyMarkdown(md)
-                    if (parsed.ok && parsed.data.title) {
-                      title = parsed.data.title
-                    }
+                if (surveyBlobIdBytes) {
+                  try {
+                    const blobId = new TextDecoder().decode(surveyBlobIdBytes)
+                    rawContent = await downloadFromDecentralizedStorage(blobId)
+                  } catch (e) {
+                    console.warn('Failed to download decentralized storage title for list item:', s.survey_id, e)
                   }
-                } catch (e) {
-                  console.warn('Failed to decrypt title for list item:', s.survey_id, e)
+                } else {
+                  rawContent = sFields.encrypted_content
+                    ? normalizeBytes(sFields.encrypted_content)
+                    : null
+                }
+
+                if (rawContent) {
+                  try {
+                    const savedKey = getSavedContentKey(s.vault_id)
+                    if (savedKey) {
+                      const keyBytes = base64urlToBytes(savedKey.slice(1))
+                      const dec = await decryptSurveyContent(rawContent, keyBytes)
+                      const parsed = parseFullSurveyMarkdown(dec.markdown)
+                      if (parsed.ok && parsed.data.title) {
+                        title = parsed.data.title
+                      }
+                    } else if (rawContent.length >= 32) {
+                      const md = new TextDecoder().decode(rawContent.slice(32))
+                      const parsed = parseFullSurveyMarkdown(md)
+                      if (parsed.ok && parsed.data.title) {
+                        title = parsed.data.title
+                      }
+                    }
+                  } catch (e) {
+                    console.warn('Failed to decrypt title for list item:', s.survey_id, e)
+                  }
                 }
               }
-            }
 
-            const vFields = (vaultObj?.data?.content as any)?.fields
-            if (vFields) {
-              claimed_count = vFields.claimed_count !== undefined ? Number(vFields.claimed_count) : 0
-              max_responses = vFields.max_responses !== undefined ? Number(vFields.max_responses) : 0
-              if (vFields.status !== undefined) {
-                status = Number(vFields.status)
+              const vFields = (vaultObj?.data?.content as any)?.fields
+              if (vFields) {
+                claimed_count = vFields.claimed_count !== undefined ? Number(vFields.claimed_count) : 0
+                max_responses = vFields.max_responses !== undefined ? Number(vFields.max_responses) : 0
+                if (vFields.status !== undefined) {
+                  status = Number(vFields.status)
+                }
               }
             }
 
@@ -549,7 +579,8 @@ export default function DashboardPage() {
 
     function applyMeta(data: FullSurveyData) {
       const next = {
-        minTier: data.minTier,
+        allowedSources: data.allowedSources,
+        allowedNftType: data.allowedNftType || null,
         repeatReward: data.repeatReward,
         repeatMaxTimes: data.repeatMaxTimes,
         perResponse: data.perResponse,
@@ -558,7 +589,8 @@ export default function DashboardPage() {
       }
       setSurveyMeta((prev) =>
         prev &&
-          prev.minTier === next.minTier &&
+          JSON.stringify(prev.allowedSources) === JSON.stringify(next.allowedSources) &&
+          prev.allowedNftType === next.allowedNftType &&
           prev.repeatReward === next.repeatReward &&
           prev.repeatMaxTimes === next.repeatMaxTimes &&
           prev.perResponse === next.perResponse &&
@@ -687,7 +719,20 @@ export default function DashboardPage() {
       const message = new TextEncoder().encode(KEY_DERIVE_MSG)
       const { signature } = await signPersonalMessageAsync({ message })
       const sigBytes = base64ToBytes(signature)
-      const kp = await deriveCreatorKeyPair(sigBytes)
+      
+      const fields = surveyData?.content?.fields
+      let salt: Uint8Array | null = null
+      if (fields?.creator_pub_key) {
+        const creatorPubKeyBytes = normalizeBytes(fields.creator_pub_key)
+        try {
+          const parsed = parseCreatorPubKey(creatorPubKeyBytes)
+          salt = parsed.salt
+        } catch (e) {
+          console.warn('[DashboardPage] Failed to parse creator_pub_key for salt:', e)
+        }
+      }
+
+      const kp = await deriveCreatorKeyPair(sigBytes, salt)
       setDecryptStatus('decrypting')
       const { responses } = await decryptAllResponses(
         events,
@@ -720,11 +765,7 @@ export default function DashboardPage() {
       const timeStr = new Date(resp.claimed_at_ms).toLocaleString('zh-TW')
       const rowAnswers = questions.map((q) => {
         const val = resp.answers[q.id]
-        if (val === undefined || val === null) return ''
-        if (Array.isArray(val)) {
-          return val.join('; ')
-        }
-        return String(val)
+        return getAnswerText(q, val, '; ')
       })
       return [resp.respondent, timeStr, ...rowAnswers]
     })
@@ -1023,12 +1064,20 @@ export default function DashboardPage() {
                         ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-200/50 dark:border-emerald-800/30'
                         : state === 'full'
                           ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 border-amber-200/50 dark:border-amber-800/30'
-                          : 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border-neutral-200/50 dark:border-neutral-700/30'
+                          : state === 'purged'
+                            ? 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border-neutral-200/50 dark:border-neutral-700/30'
+                            : 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400 border-red-200/50 dark:border-red-800/30'
                     const label =
-                      state === 'active' ? t.statusActive : state === 'full' ? t.statusFull : t.statusClosed
+                      state === 'active'
+                        ? t.statusActive
+                        : state === 'full'
+                          ? t.statusFull
+                          : state === 'purged'
+                            ? t.statusPurged
+                            : t.statusClosed
                     return (
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-normal border ${styles}`}
+                        className={`inline-flex items-center shrink-0 whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-normal border ${styles}`}
                       >
                         {label}
                       </span>
@@ -1062,7 +1111,7 @@ export default function DashboardPage() {
         {t.subtitle}
       </h2>
 
-      {surveyId && (
+      {surveyId && vault && (
         <section className="mb-6 bg-blue-100 dark:bg-blue-900/20 border border-transparent dark:border-blue-900/30 rounded-xl p-4 flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-3">
             <a
@@ -1132,27 +1181,29 @@ export default function DashboardPage() {
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
           <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statVaultBalance}</p>
           <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="vault-balance" title={vault ? `${formatFullPrecision(vault.balance)} SSR` : undefined}>
-            {displayBalanceSsr !== null ? displayBalanceSsr : t.checkingShort}
+            {displayBalanceSsr !== null ? displayBalanceSsr : isPendingVault ? t.checkingShort : '—'}
           </p>
         </div>
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
           <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statGasBalance}</p>
           <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="gas-balance" title={vault ? `${formatFullPrecision(vault.gas_balance)} SUI` : undefined}>
-            {displayGasBalance !== null ? displayGasBalance : t.checkingShort}
+            {displayGasBalance !== null ? displayGasBalance : isPendingVault ? t.checkingShort : '—'}
           </p>
         </div>
       </div>
 
       {/* ── 問卷資訊整合區塊 ────────────────────────────────────────────── */}
       <section className="mb-6 bg-slate-100 border border-slate-300 dark:bg-neutral-950 dark:border-neutral-800 rounded-xl p-4">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.vaultLabel}</dt>
+        <dl className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-y-3 md:gap-y-2 gap-x-4 text-sm">
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.vaultLabel}</dt>
           <dd className="font-mono break-all text-body">{vaultId}</dd>
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.statusLabel.replace(':', '')}</dt>
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.statusLabel.replace(':', '')}</dt>
           <dd className="text-body">
-            {!vault ? (
+            {isPendingVault ? (
               t.checking
+            ) : !vault ? (
+              <span className="text-slate-600 dark:text-neutral-400">{t.statusPurged}</span>
             ) : (() => {
               const state = deriveSurveyState(
                 vault.status,
@@ -1165,8 +1216,11 @@ export default function DashboardPage() {
               if (state === 'full') {
                 return <span className="text-amber-700 dark:text-amber-400">{t.statusFull}</span>
               }
+              if (state === 'purged') {
+                return <span className="text-slate-600 dark:text-neutral-400">{t.statusPurged}</span>
+              }
               return (
-                <span className="text-slate-600 dark:text-neutral-400">
+                <span className="text-red-700 dark:text-red-400">
                   {t.statusClosedAt(
                     vault.closed_at_ms && Number(vault.closed_at_ms) > 0
                       ? formatDateTime(Number(vault.closed_at_ms))
@@ -1179,7 +1233,7 @@ export default function DashboardPage() {
 
           {vault?.closed_at_ms && Number(vault.closed_at_ms) > 0 && (
             <>
-              <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.purgeLabel}</dt>
+              <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.purgeLabel}</dt>
               <dd className="text-muted">
                 {t.purgeNoticeAt(
                   formatDateTime(
@@ -1191,7 +1245,7 @@ export default function DashboardPage() {
             </>
           )}
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.storageLocationLabel}</dt>
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.storageLocationLabel}</dt>
           <dd className="text-body flex items-center gap-1.5">
             {surveyData ? (
               (() => {
@@ -1207,29 +1261,56 @@ export default function DashboardPage() {
                   </span>
                 )
               })()
-            ) : (
+            ) : isPendingVault ? (
               t.checkingShort
+            ) : (
+              '—'
             )}
           </dd>
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.deadlineLabel}</dt>
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.deadlineLabel}</dt>
           <dd className="text-body">{surveyMeta ? formatDateTime(surveyMeta.deadlineMs) : '—'}</dd>
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.identityThresholdLabel}</dt>
-          <dd className="text-body">
-            {surveyMeta
-              ? surveyMeta.minTier === 0
-                ? t.tier0
-                : surveyMeta.minTier === 1
-                  ? t.tier1
-                  : t.tier2
-              : '—'}
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.identityThresholdLabel}</dt>
+          <dd className="text-body flex flex-col gap-1.5 py-1">
+            {surveyMeta ? (
+              <>
+                {surveyMeta.allowedSources && surveyMeta.allowedSources.length > 0 && (
+                  <div>
+                    <span className="font-semibold text-slate-500 dark:text-neutral-450 mr-1">憑證：</span>
+                    <span>
+                      {surveyMeta.allowedSources.map((s: number) => {
+                        switch (s) {
+                          case 1: return t.sourceSelfReport || '自我宣告'
+                          case 2: return t.sourceEmail || 'Email 驗證'
+                          case 3: return t.sourceSocial || '社群驗證'
+                          case 4: return t.sourceSelfProtocol || '自我協定'
+                          case 5: return t.sourceWorldId || 'World ID'
+                          case 6: return t.sourceGoogle || 'Google'
+                          case 7: return t.sourceGithub || 'GitHub'
+                          default: return `Source ${s}`
+                        }
+                      }).join(', ')}
+                    </span>
+                  </div>
+                )}
+                {surveyMeta.allowedNftType && (
+                  <div className="flex items-start gap-1 flex-wrap">
+                    <span className="font-semibold text-slate-500 dark:text-neutral-450 shrink-0">NFT：</span>
+                    <span className="font-mono text-xs bg-slate-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-blue-600 dark:text-blue-400 break-all select-all max-w-full">
+                      {surveyMeta.allowedNftType}
+                    </span>
+                  </div>
+                )}
+                {!surveyMeta.allowedSources?.length && !surveyMeta.allowedNftType && '—'}
+              </>
+            ) : '—'}
           </dd>
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.perResponseLabel}</dt>
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.perResponseLabel}</dt>
           <dd className="text-body">{surveyMeta ? `${surveyMeta.perResponse} SSR` : '—'}</dd>
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.repeatLabel}</dt>
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.repeatLabel}</dt>
           <dd className="text-body">
             {surveyMeta
               ? surveyMeta.repeatReward === 0
@@ -1238,12 +1319,12 @@ export default function DashboardPage() {
               : '—'}
           </dd>
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.gasCompensationLabel}</dt>
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.gasCompensationLabel}</dt>
           <dd className="text-body">
             {vault ? `${formatSui(vault.gas_compensation_amount)} SUI` : '—'}
           </dd>
 
-          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 self-center">{t.sponsorAddressLabel}</dt>
+          <dt className="text-sm font-normal text-slate-600 dark:text-neutral-300 md:self-center break-words">{t.sponsorAddressLabel}</dt>
           <dd className="font-mono break-all text-body">
             {vault ? vault.sponsor_address : '—'}
           </dd>
@@ -1462,8 +1543,8 @@ export default function DashboardPage() {
                             </div>
 
                             <div className="space-y-4">
-                              {displayOptions.map((opt) => {
-                                const count = counts[opt] || 0
+                              {q.options_json?.map((opt, optIdx) => {
+                                const count = counts[String(optIdx)] || counts[optIdx] || 0
                                 const pct = totalAnswers > 0 ? (count / totalAnswers) * 100 : 0
                                 const displayPct = pct.toFixed(1)
 
@@ -1557,14 +1638,7 @@ export default function DashboardPage() {
                               </td>
                               {questions.map((q) => {
                                 const val = resp.answers[q.id]
-                                let displayVal = '—'
-                                if (val !== undefined && val !== null) {
-                                  if (Array.isArray(val)) {
-                                    displayVal = val.join(', ')
-                                  } else {
-                                    displayVal = String(val)
-                                  }
-                                }
+                                const displayVal = getAnswerText(q, val) || '—'
                                 return (
                                   <td
                                     key={q.id}
@@ -1612,57 +1686,64 @@ export default function DashboardPage() {
           )}
 
           {isCreator && (
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={!canClose}
-              className={
-                isActive
-                  ? 'btn-danger'
-                  : 'btn-secondary text-neutral-400 dark:text-neutral-500 cursor-default shadow-none'
-              }
-            >
-              {!isActive ? t.btnClosed : closeStatus === 'signing' ? t.btnClosing : t.btnClose}
-            </button>
-          )}
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleClose}
+                disabled={!canClose}
+                className={
+                  isActive
+                    ? 'btn-danger'
+                    : 'btn-secondary text-neutral-400 dark:text-neutral-500 cursor-default shadow-none'
+                }
+              >
+                {!isActive ? t.btnClosed : closeStatus === 'signing' ? t.btnClosing : t.btnClose}
+              </button>
 
-          {isCreator && !isActive && (
-            <div className="mt-4">
-              {purgeStatus === 'success' ? (
-                <div role="status" className="alert-success">
-                  <span>{t.purgeSuccess}</span>
-                </div>
-              ) : purgeStatus === 'confirm' ? (
-                <div className="space-y-2">
-                  <p className="text-muted">{t.purgeConfirm}</p>
-                  <div className="flex gap-2">
-                    <button type="button" onClick={handlePurge} className="btn-danger">
-                      {t.purgeConfirmBtn}
-                    </button>
+              {!isActive && (
+                <>
+                  {purgeStatus === 'success' && (
+                    <div role="status" className="alert-success py-1.5 px-3 text-sm">
+                      <span>{t.purgeSuccess}</span>
+                    </div>
+                  )}
+
+                  {purgeStatus === 'confirm' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setPurgeStatus('idle')}
+                        className="btn-secondary w-24 sm:w-28 flex-shrink-0 text-center"
+                      >
+                        {t.purgeCancel}
+                      </button>
+                      <button type="button" onClick={handlePurge} className="btn-danger">
+                        {t.purgeConfirmBtn}
+                      </button>
+                      <span className="text-muted flex-1 min-w-[250px]">
+                        {t.purgeConfirm}
+                      </span>
+                    </>
+                  )}
+
+                  {purgeStatus !== 'success' && purgeStatus !== 'confirm' && (
                     <button
                       type="button"
-                      onClick={() => setPurgeStatus('idle')}
-                      className="btn-secondary"
+                      onClick={() => setPurgeStatus('confirm')}
+                      disabled={purgeStatus === 'signing'}
+                      className="btn-danger w-24 sm:w-28"
                     >
-                      {t.purgeCancel}
+                      {purgeStatus === 'signing' ? t.purging : t.btnPurge}
                     </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setPurgeStatus('confirm')}
-                  disabled={purgeStatus === 'signing'}
-                  className="btn-danger"
-                >
-                  {purgeStatus === 'signing' ? t.purging : t.btnPurge}
-                </button>
+                  )}
+                </>
               )}
-              {purgeStatus === 'error' && purgeError && (
-                <div role="alert" className="alert-error mt-2 break-all">
-                  <span>{purgeError}</span>
-                </div>
-              )}
+            </div>
+          )}
+
+          {isCreator && !isActive && purgeStatus === 'error' && purgeError && (
+            <div role="alert" className="alert-error mt-3 break-all">
+              <span>{purgeError}</span>
             </div>
           )}
         </div>
@@ -1712,12 +1793,20 @@ export default function DashboardPage() {
                           ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-200/50 dark:border-emerald-800/30'
                           : state === 'full'
                             ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 border-amber-200/50 dark:border-amber-800/30'
-                            : 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border-neutral-200/50 dark:border-neutral-700/30'
+                            : state === 'purged'
+                              ? 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border-neutral-200/50 dark:border-neutral-700/30'
+                              : 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400 border-red-200/50 dark:border-red-800/30'
                       const label =
-                        state === 'active' ? t.statusActive : state === 'full' ? t.statusFull : t.statusClosed
+                        state === 'active'
+                          ? t.statusActive
+                          : state === 'full'
+                            ? t.statusFull
+                            : state === 'purged'
+                              ? t.statusPurged
+                              : t.statusClosed
                       return (
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-normal border ${styles}`}
+                          className={`inline-flex items-center shrink-0 whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-normal border ${styles}`}
                         >
                           {label}
                         </span>

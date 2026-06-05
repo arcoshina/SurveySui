@@ -197,6 +197,14 @@ export function registerGasRoutes(
 
   app.post(
     '/api/gas/sponsor',
+    {
+      config: {
+        rateLimit: {
+          max: 2,
+          timeWindow: '1 minute',
+        },
+      },
+    },
     async (req: FastifyRequest<{ Body: GasSponsorRequestBody }>, reply: FastifyReply) => {
       const { txBytes, senderAddress } = req.body
       if (!txBytes || !senderAddress) {
@@ -225,6 +233,22 @@ export function registerGasRoutes(
             error: 'invalid_transaction_commands',
             message: 'No commands in transaction',
           })
+        }
+
+        // Helpers to extract pure inputs
+        const getPureBytes = (arg: any): Uint8Array | null => {
+          if (arg && arg.$kind === 'Input') {
+            const input = tx.getData().inputs[arg.Input]
+            if (input && input.$kind === 'Pure') {
+              const pureVal = input.Pure
+              if (pureVal) {
+                if (pureVal.bytes) return new Uint8Array(Buffer.from(pureVal.bytes, 'base64'))
+                if (typeof pureVal === 'string') return new Uint8Array(Buffer.from(pureVal, 'base64'))
+                if (Array.isArray(pureVal)) return new Uint8Array(pureVal)
+              }
+            }
+          }
+          return null
         }
 
         let isPassSponsor = false
@@ -266,10 +290,14 @@ export function registerGasRoutes(
             }
             isPassSponsor = true
           } else if (call.module === 'survey_vault') {
-            if (call.function !== 'claim') {
+            if (
+              call.function !== 'claim' &&
+              call.function !== 'claim_with_ticket' &&
+              call.function !== 'claim_with_nft_marking'
+            ) {
               return reply.status(400).send({
                 error: 'invalid_transaction_commands',
-                message: 'Only claim allowed in survey_vault module',
+                message: 'Only claim, claim_with_ticket, or claim_with_nft_marking allowed in survey_vault module',
               })
             }
           } else {
@@ -282,22 +310,6 @@ export function registerGasRoutes(
 
         if (isPassSponsor) {
           const call = commands[0].MoveCall!
-
-          // Helpers to extract pure inputs
-          const getPureBytes = (arg: any): Uint8Array | null => {
-            if (arg && arg.$kind === 'Input') {
-              const input = tx.getData().inputs[arg.Input]
-              if (input && input.$kind === 'Pure') {
-                const pureVal = input.Pure
-                if (pureVal) {
-                  if (pureVal.bytes) return new Uint8Array(Buffer.from(pureVal.bytes, 'base64'))
-                  if (typeof pureVal === 'string') return new Uint8Array(Buffer.from(pureVal, 'base64'))
-                  if (Array.isArray(pureVal)) return new Uint8Array(pureVal)
-                }
-              }
-            }
-            return null
-          }
 
           // mint_pass args: [registry, config, owner, deposit_payer, source, nullifiers,
           //                  commitment, expires_at, bff_sig, clock]
@@ -396,14 +408,61 @@ export function registerGasRoutes(
         } else {
           // Extract Vault and Pass object IDs from claim call
           const call = commands[0].MoveCall!
-          const firstArg = call.arguments[0]
-          if (firstArg && firstArg.$kind === 'Input') {
-            vaultId = getObjectIdFromInput(tx.getData().inputs[firstArg.Input])
+
+          let answersArg: any = null
+          let blobIdArg: any = null
+
+          if (call.function === 'claim') {
+            answersArg = call.arguments[3]
+            blobIdArg = call.arguments[4]
+
+            const firstArg = call.arguments[0]
+            if (firstArg && firstArg.$kind === 'Input') {
+              vaultId = getObjectIdFromInput(tx.getData().inputs[firstArg.Input])
+            }
+
+            const thirdArg = call.arguments[2]
+            if (thirdArg && thirdArg.$kind === 'Input') {
+              passId = getObjectIdFromInput(tx.getData().inputs[thirdArg.Input])
+            }
+          } else if (call.function === 'claim_with_ticket') {
+            answersArg = call.arguments[5]
+            blobIdArg = call.arguments[6]
+
+            const firstArg = call.arguments[0]
+            if (firstArg && firstArg.$kind === 'Input') {
+              vaultId = getObjectIdFromInput(tx.getData().inputs[firstArg.Input])
+            }
+          } else if (call.function === 'claim_with_nft_marking') {
+            answersArg = call.arguments[2]
+            blobIdArg = call.arguments[3]
+
+            const firstArg = call.arguments[0]
+            if (firstArg && firstArg.$kind === 'Input') {
+              vaultId = getObjectIdFromInput(tx.getData().inputs[firstArg.Input])
+            }
           }
 
-          const secondArg = call.arguments[1]
-          if (secondArg && secondArg.$kind === 'Input') {
-            passId = getObjectIdFromInput(tx.getData().inputs[secondArg.Input])
+          // 限制 answers 大小以防範 DoS 攻擊
+          if (answersArg) {
+            const answersBytes = getPureBytes(answersArg)
+            if (answersBytes && answersBytes.length > 150_000) {
+              return reply.status(400).send({
+                error: 'answers_too_large',
+                message: 'Encrypted answers payload size exceeds 150KB limit; please use Walrus decentralized storage path',
+              })
+            }
+          }
+
+          // 限制 answer_blob_id 大小以防範 DoS 攻擊
+          if (blobIdArg) {
+            const blobIdBytes = getPureBytes(blobIdArg)
+            if (blobIdBytes && blobIdBytes.length > 1000) {
+              return reply.status(400).send({
+                error: 'blob_id_too_large',
+                message: 'Answer blob_id size exceeds limit',
+              })
+            }
           }
 
           if (!vaultId) {
@@ -475,12 +534,24 @@ export function registerGasRoutes(
                   message: 'Failed to read pass fields',
                 })
               }
-              const tier = Number(passFields.effective_tier ?? 0)
+              const sources: number[] = passFields.credential_sources || []
               const minPlatformSponsorTier = Number(process.env.MIN_PLATFORM_SPONSOR_TIER ?? '0')
-              if (tier < minPlatformSponsorTier) {
+              let isEligibleForSponsor = false
+              
+              if (minPlatformSponsorTier === 0) {
+                isEligibleForSponsor = sources.length > 0
+              } else if (minPlatformSponsorTier === 1) {
+                isEligibleForSponsor = sources.some((s: number) => [3, 5, 6, 7].includes(s))
+              } else if (minPlatformSponsorTier === 2) {
+                isEligibleForSponsor = sources.includes(5) // World ID
+              } else {
+                isEligibleForSponsor = sources.length > 0
+              }
+
+              if (!isEligibleForSponsor) {
                 return reply.status(403).send({
                   error: 'PLATFORM_SPONSOR_TIER_INSUFFICIENT',
-                  message: 'SurveyPass tier is insufficient for platform sponsorship',
+                  message: 'SurveyPass credentials are insufficient for platform sponsorship',
                 })
               }
             }

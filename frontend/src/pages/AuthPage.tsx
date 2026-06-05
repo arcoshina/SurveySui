@@ -11,7 +11,8 @@ import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { executeTxWithFallback, executeSponsoredTx, USER_DECLINED_SELF_PAID, probeGasSponsorHealth } from '../lib/sponsoredTx'
 import { ConnectButton } from '@mysten/dapp-kit'
-import { useOAuthResult, OAuthTicket } from '../lib/useOAuthResult'
+import { useOAuthResult, OAuthResultTicket } from '../lib/useOAuthResult'
+import { bcs } from '@mysten/sui/bcs'
 import { DIRECT_OAUTH_PROVIDERS } from '../lib/authProviders'
 import { useActiveSigner } from '../lib/useActiveSigner'
 import type { ActiveSigner } from '../lib/useActiveSigner'
@@ -89,10 +90,10 @@ export default function AuthPage() {
   const [deckPhase, setDeckPhase] = useState<'collapsed' | 'converging' | 'expanded'>('collapsed')
   const [deckHover, setDeckHover] = useState(false)
   const [isPassLoading, setIsPassLoading] = useState(false)
-  const [verifyMethod, setVerifyMethod] = useState<'email' | 'selfReport' | 'social' | 'selfProtocol' | 'worldId'>(() => {
+  const [verifyMethod, setVerifyMethod] = useState<'email' | 'social' | 'worldId'>(() => {
     const stored = sessionStorage.getItem('surveysui:verifyMethod')
-    const valid = ['email', 'selfReport', 'social', 'selfProtocol', 'worldId']
-    return (valid.includes(stored ?? '') ? stored : 'email') as 'email' | 'selfReport' | 'social' | 'selfProtocol' | 'worldId'
+    const valid = ['email', 'social', 'worldId']
+    return (valid.includes(stored ?? '') ? stored : 'email') as 'email' | 'social' | 'worldId'
   })
   const [sponsorQuota, setSponsorQuota] = useState<{ count: number; maxLimit: number; remaining: number } | null>(null)
 
@@ -106,7 +107,7 @@ export default function AuthPage() {
     rp_context: RpContext
   } | null>(null)
 
-  const { oauthTicket, clearOAuthResult } = useOAuthResult()
+  const { oauthResult, clearOAuthResult } = useOAuthResult()
 
   const fetchPass = async () => {
     if (!activeAddress || !registryId) {
@@ -163,121 +164,167 @@ export default function AuthPage() {
     }
   }, [searchParams])
 
-  // 當 OAuth callback 帶回 ticket 時自動消費（標準 Social OAuth）
+  // 當 OAuth callback 帶回 tickets 時自動消費（標準 Social OAuth）
   useEffect(() => {
-    if (!oauthTicket || !account || !activeSigner) return
+    if (!oauthResult || !account || !activeSigner) return
     setPendingMsg(t.oauthSuccess)
-    handleMintOrUpdateWithTicket(oauthTicket, account.address, activeSigner).finally(() => {
+    handleMintOrUpdateWithTickets(oauthResult.tickets, account.address, activeSigner).finally(() => {
       setPendingMsg(null)
       clearOAuthResult()
     })
-  }, [oauthTicket, account, activeSigner])
+  }, [oauthResult, account, activeSigner])
 
   // ── 共用 mint/update handler ──────────────────────────────────────────────
 
-  async function handleMintOrUpdateWithTicket(
-    ticket: OAuthTicket | {
+  async function executeAndBroadcast(tx: Transaction, owner: string, signer: ActiveSigner) {
+    let lastBffError: any = undefined
+    const fallbackResult = await executeTxWithFallback({
+      tx,
+      senderAddress: owner,
+      client: suiClient as any,
+      signAndExecute: async (t) => signer.signAndExecute(t as Transaction),
+      onSelfPaidFallback: (estMist, bffError) =>
+        new Promise<boolean>((resolve) => {
+          lastBffError = bffError
+          const estSui = (Number(estMist) / 1_000_000_000).toFixed(4)
+          const isLimitReached = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
+          setSelfPaidConfirm({ estSui, resolve, isLimitReached })
+        }),
+    })
+
+    let digest: string
+    if (fallbackResult.mode === 'sponsored') {
+      const txBytes = fromBase64(fallbackResult.sponsoredTxBytes)
+      const userSignature = await signer.signTxBytes(txBytes)
+      const txResult = await executeSponsoredTx({
+        client: suiClient as any,
+        sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
+        userSignature,
+        sponsorSignature: fallbackResult.sponsorSignature,
+      })
+      digest = txResult.digest
+    } else {
+      digest = fallbackResult.digest
+    }
+
+    setTxDigest(digest)
+    try {
+      await suiClient.waitForTransaction({ digest, options: { showEffects: true } })
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  async function handleMintOrUpdateWithTickets(
+    tickets: Array<{
       nullifiers: string[]
       bff_sig: string
       expires_at: string
       source: number
-    },
+    }>,
     owner: string,
     signer: ActiveSigner
   ) {
+    if (tickets.length === 0) return
     setLoading(true)
     setErrorMsg(null)
     setSuccessMsg(null)
 
     try {
-      const nullifiers = ticket.nullifiers.map((hex) => hexToBytes(hex))
-      const commitment = new Uint8Array(0)
-      const bffSig = hexToBytes(ticket.bff_sig)
-
-      // activePass 可能在社群 OAuth「整頁 redirect」返回後尚未載入完成（race）：
-      // 此時 fetchPass() 仍在查鏈、activePass 還是 null，若誤判為無 Pass 而走 mint_pass，
-      // 會整個重建並取代既有 Pass、抹除其他憑證槽（例如先 Email 再 Google 會吃掉 Email）。
-      // 故 mint/update 的判斷一律以鏈上即時查詢為準，不依賴可能過時的 React 狀態。
       const resolvedPass = activePass ?? (await fetchActivePass(suiClient, owner, registryId))
 
-      let tx
       if (resolvedPass) {
-        tx = buildUpdatePassCredentialPtb({
-          packageId,
-          passId: resolvedPass.objectId,
-          registryId,
-          configId,
-          source: ticket.source,
-          nullifiers,
-          commitment,
-          expiresAt: ticket.expires_at,
-          bffSig,
-        })
+        // 如果 Pass 存在，我們在同一個交易中連續寫入所有 Tickets
+        const tx = new Transaction()
+        const passObj = tx.object(resolvedPass.objectId)
+        for (const ticket of tickets) {
+          const nullifiers = ticket.nullifiers.map((hex) => hexToBytes(hex))
+          const commitment = new Uint8Array(0)
+          const bffSig = hexToBytes(ticket.bff_sig)
+
+          tx.moveCall({
+            target: `${packageId}::survey_pass::update_pass_credential`,
+            arguments: [
+              passObj,
+              tx.object(registryId),
+              tx.object(configId),
+              tx.pure.u8(ticket.source),
+              tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(nullifiers.map((n) => Array.from(n))).toBytes()),
+              tx.pure.vector('u8', Array.from(commitment)),
+              tx.pure.u64(BigInt(ticket.expires_at).toString()),
+              tx.pure.vector('u8', Array.from(bffSig)),
+              tx.object('0x6'), // Clock
+            ],
+          })
+        }
+
+        await executeAndBroadcast(tx, owner, signer)
       } else {
-        // deposit_payer 必須對應「實際支付儲存押金者」：
-        // 代付鑄造（sponsor 可用且尚有額度）→ sponsor 位址；否則自付 → owner。
-        // 設成 sponsor 後即使意外退回自付也僅對該使用者略不公（押金歸項目方），不致被抽乾；
-        // 反之設成 owner 卻走了代付，會讓使用者可自刪盜取項目方押金，故偏保守取 sponsor。
+        // 如果 Pass 不存在，我們先用第一個 Ticket mint_pass
+        const firstTicket = tickets[0]
+        const nullifiers = firstTicket.nullifiers.map((hex) => hexToBytes(hex))
+        const commitment = new Uint8Array(0)
+        const bffSig = hexToBytes(firstTicket.bff_sig)
+
         const health = await probeGasSponsorHealth({})
         const willSelfPay =
           !health.available || !health.sponsorAddress || (sponsorQuota != null && sponsorQuota.remaining <= 0)
         const depositPayer = willSelfPay ? owner : health.sponsorAddress!
-        tx = buildMintPassPtb({
+
+        const tx = buildMintPassPtb({
           packageId,
           registryId,
           configId,
           owner,
           depositPayer,
-          source: ticket.source,
+          source: firstTicket.source,
           nullifiers,
           commitment,
-          expiresAt: ticket.expires_at,
+          expiresAt: firstTicket.expires_at,
           bffSig,
         })
+
+        await executeAndBroadcast(tx, owner, signer)
+
+        // 鑄造成功後，重新獲取 activePass，如果 tickets 還剩餘，我們將剩下的 Tickets 寫入 (透過 update)
+        if (tickets.length > 1) {
+          setPendingMsg('正在寫入關聯的 Email 驗證憑證...')
+          const nextPass = await fetchActivePass(suiClient, owner, registryId)
+          if (nextPass) {
+            const updateTx = new Transaction()
+            const passObj = updateTx.object(nextPass.objectId)
+            for (let i = 1; i < tickets.length; i++) {
+              const ticket = tickets[i]
+              const tNullifiers = ticket.nullifiers.map((hex) => hexToBytes(hex))
+              const tCommitment = new Uint8Array(0)
+              const tBffSig = hexToBytes(ticket.bff_sig)
+
+              updateTx.moveCall({
+                target: `${packageId}::survey_pass::update_pass_credential`,
+                arguments: [
+                  passObj,
+                  updateTx.object(registryId),
+                  updateTx.object(configId),
+                  updateTx.pure.u8(ticket.source),
+                  updateTx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(tNullifiers.map((n) => Array.from(n))).toBytes()),
+                  updateTx.pure.vector('u8', Array.from(tCommitment)),
+                  updateTx.pure.u64(BigInt(ticket.expires_at).toString()),
+                  updateTx.pure.vector('u8', Array.from(tBffSig)),
+                  updateTx.object('0x6'), // Clock
+                ],
+              })
+            }
+            await executeAndBroadcast(updateTx, owner, signer)
+          }
+        }
       }
 
-      let lastBffError: any = undefined
-      const fallbackResult = await executeTxWithFallback({
-        tx,
-        senderAddress: owner,
-        client: suiClient as any,
-        signAndExecute: async (t) => signer.signAndExecute(t as Transaction),
-        onSelfPaidFallback: (estMist, bffError) =>
-          new Promise<boolean>((resolve) => {
-            lastBffError = bffError
-            const estSui = (Number(estMist) / 1_000_000_000).toFixed(4)
-            const isLimitReached = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
-            setSelfPaidConfirm({ estSui, resolve, isLimitReached })
-          }),
-      })
-
-      let digest: string
-      if (fallbackResult.mode === 'sponsored') {
-        const txBytes = fromBase64(fallbackResult.sponsoredTxBytes)
-        const userSignature = await signer.signTxBytes(txBytes)
-        const txResult = await executeSponsoredTx({
-          client: suiClient as any,
-          sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
-          userSignature,
-          sponsorSignature: fallbackResult.sponsorSignature,
-        })
-        digest = txResult.digest
-      } else {
-        digest = fallbackResult.digest
-      }
-
-      setTxDigest(digest)
       setSuccessMsg(resolvedPass ? t.upgradeSuccess : t.mintSuccess)
 
-      try {
-        await suiClient.waitForTransaction({ digest, options: { showEffects: true } })
-      } catch (e) {
-        console.error(e)
-      }
       await fetchPass()
       await fetchSponsorQuota()
 
-      // 若由問卷導向而來，鑄造/升級成功後返回原問卷（鏈上已確認，作答仍暫存於 sessionStorage）
+      // 若由問卷導向而來，鑄造/升級成功後返回原問卷
       const rt = sessionStorage.getItem('surveysui:returnTo')
       if (isSafeReturnPath(rt)) {
         sessionStorage.removeItem('surveysui:returnTo')
@@ -289,6 +336,7 @@ export default function AuthPage() {
       setErrorMsg(friendly || err.message || t.authFailed)
     } finally {
       setLoading(false)
+      setPendingMsg(null)
     }
   }
 
@@ -357,7 +405,7 @@ export default function AuthPage() {
       }
 
       // data.nullifiers 是 hex 陣列
-      await handleMintOrUpdateWithTicket(data, account.address, activeSigner)
+      await handleMintOrUpdateWithTickets([data], account.address, activeSigner)
 
       setEmail('')
       setOtpCode('')
@@ -412,7 +460,7 @@ export default function AuthPage() {
     setPendingMsg(t.worldIdMinting)
     try {
       const ticket = await submitWorldIdProof(account.address, result)
-      await handleMintOrUpdateWithTicket(ticket, account.address, activeSigner)
+      await handleMintOrUpdateWithTickets([ticket], account.address, activeSigner)
     } catch (err: any) {
       if (err.message === USER_DECLINED_SELF_PAID) return
       if (err instanceof WorldIdError) {
@@ -852,8 +900,6 @@ export default function AuthPage() {
                     {([
                       { value: 'email', label: t.emailOtp, available: true },
                       { value: 'social', label: t.socialAuth, available: true },
-                      { value: 'selfReport', label: t.selfReport, available: false },
-                      { value: 'selfProtocol', label: t.selfProtocol, available: false },
                       { value: 'worldId', label: t.worldId, available: true },
                     ] as const).map((m) => (
                       <option key={m.value} value={m.value} disabled={!m.available}>
