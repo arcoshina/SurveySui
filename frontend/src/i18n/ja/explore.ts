@@ -1,0 +1,35 @@
+import type { ExploreDict } from '../zh/explore'
+
+const explore: ExploreDict = {
+  pageTitle: '新しいアンケートを探索',
+  pageDesc: '同じ言語の最新の公開アンケートを閲覧し、意見を共有しながら報酬を獲得しましょう。',
+  showAllLanguages: 'すべての言語を表示',
+  emptyState: 'この言語に一致する公開アンケートは現在ありません。',
+  emptyStateAll: '現在利用可能な公開アンケートはありません。',
+  langZh: '繁体字中国語',
+  langEn: '英語',
+  langJa: '日本語',
+  langKo: '韓国語',
+  langEs: 'スペイン語',
+  langUnknown: '不明な言語',
+  statusClaimed: '回答済み',
+  btnStartSurvey: '回答を開始',
+  remainingLabel: '残り',
+  deadlineLabel: '締切日',
+  remainingCopies: (remaining: number) => `残り ${remaining} 件`,
+  deadlineText: (dateStr: string) => `締切: ${dateStr}`,
+  loadingText: 'アンケート広場を読み込んでいます...',
+  rewardLabel: '報酬:',
+  requirementsLabel: '回答要件:',
+  passRequirement: 'SurveyPass',
+  nftRequirement: 'NFT 所有',
+  sourceEmail: 'メール',
+  sourceSocial: 'ソーシャル',
+  sourceWorldId: 'World ID',
+  sourceGoogle: 'Google',
+  sourceGithub: 'GitHub',
+  sourceSelfReport: '自己申告',
+  sourceSelfProtocol: '自己プロトコル',
+}
+
+export default explore

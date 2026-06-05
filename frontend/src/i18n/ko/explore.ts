@@ -1,0 +1,35 @@
+import type { ExploreDict } from '../zh/explore'
+
+const explore: ExploreDict = {
+  pageTitle: '새로운 설문 탐색',
+  pageDesc: '같은 언어의 최신 공개 설문조사를 둘러보고 의견을 나누며 보상을 받아보세요.',
+  showAllLanguages: '모든 언어 표시',
+  emptyState: '현재 이 언어에 해당하는 공개 설문조사가 없습니다.',
+  emptyStateAll: '현재 진행 중인 공개 설문조사가 없습니다.',
+  langZh: '중국어 번체',
+  langEn: '영어',
+  langJa: '일본어',
+  langKo: '한국어',
+  langEs: '스페인어',
+  langUnknown: '알 수 없는 언어',
+  statusClaimed: '참여 완료',
+  btnStartSurvey: '설문 시작',
+  remainingLabel: '남은 수량',
+  deadlineLabel: '마감일',
+  remainingCopies: (remaining: number) => `남은 수량: ${remaining}개`,
+  deadlineText: (dateStr: string) => `마감일: ${dateStr}`,
+  loadingText: '설문 광장을 불러오는 중...',
+  rewardLabel: '보상:',
+  requirementsLabel: '참여 자격:',
+  passRequirement: 'SurveyPass',
+  nftRequirement: 'NFT 보유',
+  sourceEmail: '이메일',
+  sourceSocial: '소셜',
+  sourceWorldId: 'World ID',
+  sourceGoogle: 'Google',
+  sourceGithub: 'GitHub',
+  sourceSelfReport: '자가 선언',
+  sourceSelfProtocol: '자가 프로토콜',
+}
+
+export default explore

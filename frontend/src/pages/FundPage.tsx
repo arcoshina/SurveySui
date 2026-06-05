@@ -23,6 +23,7 @@ import {
   bytesToBase64url,
   deriveCreatorKeyPair,
   encryptSurveyContent,
+  buildPublicContentBlob,
   type CreatorKeyPair,
 } from '../lib/crypto'
 import { translateMoveAbort } from '../lib/moveAbort'
@@ -327,10 +328,8 @@ export default function FundPage() {
         encryptedBlob = enc.encryptedBlob
         contentKey = enc.contentKey
       } else {
-        const mdBytes = new TextEncoder().encode(contentMdUpdated)
-        encryptedBlob = new Uint8Array(creatorPublicKeyBytes.length + mdBytes.length)
-        encryptedBlob.set(creatorPublicKeyBytes, 0)
-        encryptedBlob.set(mdBytes, creatorPublicKeyBytes.length)
+        // 公開問卷：使用 buildPublicContentBlob 產生首 Byte 為 0x00 的明文 Blob
+        encryptedBlob = buildPublicContentBlob(contentMdUpdated)
         contentKey = new Uint8Array(0)
       }
     } catch (err) {
@@ -892,6 +891,7 @@ export default function FundPage() {
               <span className="text-sm text-slate-400 dark:text-neutral-400 font-normal leading-normal">
                 {t.encryptSurveyDesc}
               </span>
+
             </div>
           </label>
 

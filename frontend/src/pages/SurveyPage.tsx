@@ -19,7 +19,7 @@ import {
   probeGasSponsorHealth,
   USER_DECLINED_SELF_PAID,
 } from '../lib/sponsoredTx'
-import { decryptSurveyContent, encryptAnswers, base64urlToBytes } from '../lib/crypto'
+import { decryptSurveyContent, encryptAnswers, base64urlToBytes, parseContentBlob } from '../lib/crypto'
 import { parseFullSurveyMarkdown, type QuestionType, sanitizeQuestionIds } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
@@ -484,25 +484,44 @@ export default function SurveyPage() {
         let markdown = ''
         let creatorPublicKeyBytes: Uint8Array
 
-        if (hash) {
-          // Decrypt content using hash key
+        const parsedBlob = parseContentBlob(rawContent)
+        if (parsedBlob.version === 0x00) {
+          // 公開問卷 (明文)
+          markdown = parsedBlob.markdown || ''
+          creatorPublicKeyBytes = new Uint8Array(32) // dummy key for compatibility
+        } else if (parsedBlob.version === 0x01) {
+          // 加密問卷 (新版)
+          if (!hash) {
+            throw new Error(t.errKeyRequired || '此問卷為私密問卷，需要密鑰才能讀取')
+          }
           let contentKey: Uint8Array
           try {
             contentKey = base64urlToBytes(hash)
           } catch {
             throw new Error(t.errInvalidKeyFormat)
           }
-
           const dec = await decryptSurveyContent(rawContent, contentKey)
           markdown = dec.markdown
           creatorPublicKeyBytes = dec.creatorPublicKeyBytes
         } else {
-          // Unencrypted: first 32 bytes are public key, rest is plain text
-          if (rawContent.length < 32) {
-            throw new Error(t.errCorruptContent)
+          // Legacy 格式 (無前置 tag)
+          if (hash) {
+            let contentKey: Uint8Array
+            try {
+              contentKey = base64urlToBytes(hash)
+            } catch {
+              throw new Error(t.errInvalidKeyFormat)
+            }
+            const dec = await decryptSurveyContent(rawContent, contentKey)
+            markdown = dec.markdown
+            creatorPublicKeyBytes = dec.creatorPublicKeyBytes
+          } else {
+            if (rawContent.length < 32) {
+              throw new Error(t.errCorruptContent)
+            }
+            creatorPublicKeyBytes = rawContent.slice(0, 32)
+            markdown = new TextDecoder().decode(rawContent.slice(32))
           }
-          creatorPublicKeyBytes = rawContent.slice(0, 32)
-          markdown = new TextDecoder().decode(rawContent.slice(32))
         }
 
         // Parse markdown

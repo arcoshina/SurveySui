@@ -27,6 +27,7 @@ import {
   deriveCreatorKeyPair,
   decryptSurveyContent,
   parseCreatorPubKey,
+  parseContentBlob,
 } from '../lib/crypto'
 import { parseFullSurveyMarkdown, type Question, type FullSurveyData, sanitizeQuestionIds } from '../lib/frontmatter'
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
@@ -487,19 +488,27 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
                 if (rawContent) {
                   try {
-                    const savedKey = getSavedContentKey(s.vault_id)
-                    if (savedKey) {
-                      const keyBytes = base64urlToBytes(savedKey.slice(1))
-                      const dec = await decryptSurveyContent(rawContent, keyBytes)
-                      const parsed = parseFullSurveyMarkdown(dec.markdown)
+                    const parsedBlob = parseContentBlob(rawContent)
+                    if (parsedBlob.version === 0x00) {
+                      const parsed = parseFullSurveyMarkdown(parsedBlob.markdown || '')
                       if (parsed.ok && parsed.data.title) {
                         title = parsed.data.title
                       }
-                    } else if (rawContent.length >= 32) {
-                      const md = new TextDecoder().decode(rawContent.slice(32))
-                      const parsed = parseFullSurveyMarkdown(md)
-                      if (parsed.ok && parsed.data.title) {
-                        title = parsed.data.title
+                    } else {
+                      const savedKey = getSavedContentKey(s.vault_id)
+                      if (savedKey) {
+                        const keyBytes = base64urlToBytes(savedKey.slice(1))
+                        const dec = await decryptSurveyContent(rawContent, keyBytes)
+                        const parsed = parseFullSurveyMarkdown(dec.markdown)
+                        if (parsed.ok && parsed.data.title) {
+                          title = parsed.data.title
+                        }
+                      } else if (parsedBlob.version === -1 && rawContent.length >= 32) {
+                        const md = new TextDecoder().decode(rawContent.slice(32))
+                        const parsed = parseFullSurveyMarkdown(md)
+                        if (parsed.ok && parsed.data.title) {
+                          title = parsed.data.title
+                        }
                       }
                     }
                   } catch (e) {
@@ -617,10 +626,9 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
           rawContent = encryptedContentBytes
         }
 
-        if (contentKeyB64) {
-          const keyBytes = base64urlToBytes(contentKeyB64)
-          const dec = await decryptSurveyContent(rawContent, keyBytes)
-          const parsed = parseFullSurveyMarkdown(dec.markdown)
+        const parsedBlob = parseContentBlob(rawContent)
+        if (parsedBlob.version === 0x00) {
+          const parsed = parseFullSurveyMarkdown(parsedBlob.markdown || '')
           if (parsed.ok) {
             setQuestions((prev) => {
               const sanitized = sanitizeQuestionIds(parsed.data.questions)
@@ -633,10 +641,11 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
               setDetailSurveyTitle(parsed.data.title)
             }
           }
-        } else {
-          if (rawContent.length >= 32) {
-            const md = new TextDecoder().decode(rawContent.slice(32))
-            const parsed = parseFullSurveyMarkdown(md)
+        } else if (parsedBlob.version === 0x01 || (parsedBlob.version === -1 && contentKeyB64)) {
+          if (contentKeyB64) {
+            const keyBytes = base64urlToBytes(contentKeyB64)
+            const dec = await decryptSurveyContent(rawContent, keyBytes)
+            const parsed = parseFullSurveyMarkdown(dec.markdown)
             if (parsed.ok) {
               setQuestions((prev) => {
                 const sanitized = sanitizeQuestionIds(parsed.data.questions)
@@ -648,6 +657,21 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
               if (parsed.data.title) {
                 setDetailSurveyTitle(parsed.data.title)
               }
+            }
+          }
+        } else if (parsedBlob.version === -1 && rawContent.length >= 32) {
+          const md = new TextDecoder().decode(rawContent.slice(32))
+          const parsed = parseFullSurveyMarkdown(md)
+          if (parsed.ok) {
+            setQuestions((prev) => {
+              const sanitized = sanitizeQuestionIds(parsed.data.questions)
+              return JSON.stringify(prev) === JSON.stringify(sanitized)
+                ? prev
+                : sanitized
+            })
+            applyMeta(parsed.data)
+            if (parsed.data.title) {
+              setDetailSurveyTitle(parsed.data.title)
             }
           }
         }
@@ -947,12 +971,14 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
             <p className="text-muted mt-2">{t.listPurgeReminder(PURGE_GRACE_DAYS)}</p>
           </div>
           {account && !loadingDetails && surveyDetails.length > 0 && (
-            <Link
-              to="/create"
-              className="self-start sm:self-auto whitespace-nowrap btn-primary"
-            >
-              {t.btnCreateSurvey}
-            </Link>
+            <div className="flex gap-3 self-start sm:self-auto items-center">
+              <Link
+                to="/create"
+                className="whitespace-nowrap btn-primary"
+              >
+                {t.btnCreateSurvey}
+              </Link>
+            </div>
           )}
         </div>
 
@@ -983,12 +1009,14 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
             <p className="text-muted mb-6 leading-relaxed">
               {t.noSurveysDesc}
             </p>
-            <Link
-              to="/create"
-              className="btn-primary inline-flex items-center gap-1"
-            >
-              {t.createFirstSurvey}
-            </Link>
+            <div className="flex gap-3 justify-center items-center">
+              <Link
+                to="/create"
+                className="btn-primary inline-flex items-center gap-1"
+              >
+                {t.createFirstSurvey}
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-[3px]">

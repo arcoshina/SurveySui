@@ -9,6 +9,7 @@ const survey = {
   errInvalidKeyFormat: '解密金鑰格式無效',
   errCorruptContent: '問卷內容資料損壞',
   errLoadSurveyFailed: '載入問卷失敗',
+  errKeyRequired: '此問卷為私密問卷，需要密鑰才能讀取',
   errInvalidEmail: '請輸入有效的電子郵件地址',
   errSendOtp: '發送 OTP 失敗',
   errSendRequest: '發送請求時出錯',

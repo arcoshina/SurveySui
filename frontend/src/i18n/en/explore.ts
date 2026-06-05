@@ -1,0 +1,35 @@
+import type { ExploreDict } from '../zh/explore'
+
+const explore: ExploreDict = {
+  pageTitle: 'Explore New Surveys',
+  pageDesc: 'Browse the latest public surveys in your language, share your feedback, and earn rewards.',
+  showAllLanguages: 'Show All Languages',
+  emptyState: 'There are currently no public surveys matching this language.',
+  emptyStateAll: 'There are currently no public surveys available.',
+  langZh: 'Traditional Chinese',
+  langEn: 'English',
+  langJa: 'Japanese',
+  langKo: 'Korean',
+  langEs: 'Spanish',
+  langUnknown: 'Unknown Language',
+  statusClaimed: 'Completed',
+  btnStartSurvey: 'Start Survey',
+  remainingLabel: 'Remaining',
+  deadlineLabel: 'Deadline',
+  remainingCopies: (remaining: number) => `${remaining} copies remaining`,
+  deadlineText: (dateStr: string) => `Deadline: ${dateStr}`,
+  loadingText: 'Loading survey square...',
+  rewardLabel: 'Reward:',
+  requirementsLabel: 'Requirements:',
+  passRequirement: 'SurveyPass',
+  nftRequirement: 'NFT Owned',
+  sourceEmail: 'Email',
+  sourceSocial: 'Social',
+  sourceWorldId: 'World ID',
+  sourceGoogle: 'Google',
+  sourceGithub: 'GitHub',
+  sourceSelfReport: 'Self-Report',
+  sourceSelfProtocol: 'Self-Protocol',
+}
+
+export default explore

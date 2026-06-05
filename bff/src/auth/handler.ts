@@ -19,6 +19,7 @@ import {
 
 interface OtpRequestBody {
   email: string
+  lang?: string
 }
 
 interface VerifyRequestBody {
@@ -123,7 +124,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       },
     },
     async (req: FastifyRequest<{ Body: OtpRequestBody }>, reply: FastifyReply) => {
-      const { email } = req.body
+      const { email, lang } = req.body
       if (!email || !email.includes('@')) {
         return reply.status(400).send({ error: 'Invalid email address' })
       }
@@ -131,10 +132,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       const code = Math.floor(100000 + Math.random() * 900000).toString()
       otpStore.set(email, code)
 
-      console.log(`[OTP] Email: ${email}, Code: ${code}`)
+      console.log(`[OTP] Email: ${email}, Code: ${code}, Lang: ${lang}`)
 
       if (process.env.NODE_ENV === 'production') {
-        await sendOtpEmail(email, code)
+        await sendOtpEmail(email, code, lang)
       }
 
       const responsePayload: { message: string; code?: string } = {

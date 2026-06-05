@@ -11,6 +11,7 @@ const survey: SurveyDict = {
   errInvalidKeyFormat: 'Invalid decryption key format',
   errCorruptContent: 'Survey content data corrupted',
   errLoadSurveyFailed: 'Failed to load survey',
+  errKeyRequired: 'This survey is private and requires a decryption key to read',
   errInvalidEmail: 'Please enter a valid email address',
   errSendOtp: 'Failed to send OTP',
   errSendRequest: 'Error sending request',

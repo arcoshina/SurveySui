@@ -11,6 +11,8 @@ export interface FrontmatterData {
   allowedNftType?: string
   premiumFee?: number
   allowedSources?: number[]
+  language?: string
+  isPublic?: boolean
 }
 
 export type FrontmatterResult = { ok: true; data: FrontmatterData } | { ok: false; error: string }
@@ -36,6 +38,8 @@ export function parseFrontmatter(md: string): FrontmatterResult {
   const encryptAnswersStr = getVal('encryptAnswers')
   const storageCompensationAmountStr = getVal('storageCompensationAmount')
   const allowedSourcesStr = getVal('allowedSources')
+  const languageStr = getVal('language')
+  const publicStr = getVal('public')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -109,6 +113,8 @@ export function parseFrontmatter(md: string): FrontmatterResult {
       allowedNftType,
       premiumFee,
       allowedSources,
+      language: languageStr ? languageStr.toLowerCase() : undefined,
+      isPublic: publicStr === 'true',
     },
   }
 }
@@ -142,6 +148,8 @@ export interface FullSurveyData {
   /** 問卷說明文字（純 markdown，frontmatter 與 questions 程式碼區塊之間） */
   description: string
   questions: Question[]
+  language?: string
+  isPublic?: boolean
 }
 
 export type FullSurveyResult = { ok: true; data: FullSurveyData } | { ok: false; error: string }
@@ -212,6 +220,8 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   const storageCompensationAmountStr = getVal('storageCompensationAmount')
   const allowedNftType = getVal('allowedNftType') ?? ''
   const premiumFee = getVal('premiumFee') ? Number(getVal('premiumFee')) : 0
+  const languageStr = getVal('language')
+  const publicStr = getVal('public')
 
   if (!perResponseStr) return { ok: false, error: 'frontmatter 缺少 perResponse' }
   if (!maxResponsesStr) return { ok: false, error: 'frontmatter 缺少 maxResponses' }
@@ -299,6 +309,8 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
       premiumFee,
       description,
       questions: questionsResult.questions,
+      language: languageStr ? languageStr.toLowerCase() : undefined,
+      isPublic: publicStr === 'true',
     },
   }
 }
@@ -436,9 +448,15 @@ export function serializeFullSurveyToMarkdown(
     `encryptAnswers: ${data.encryptAnswers !== false ? 'true' : 'false'}`,
     `storageCompensationAmount: ${data.storageCompensationAmount ?? 0.01}`,
     `allowedNftType: ${quoteString(data.allowedNftType ?? '')}`,
-    `draftStamp: ${quoteString(draftStamp)}`,
-    '---',
   ]
+  if (data.language) {
+    fmLines.push(`language: ${quoteString(data.language)}`)
+  }
+  if (data.isPublic !== undefined) {
+    fmLines.push(`public: ${data.isPublic ? 'true' : 'false'}`)
+  }
+  fmLines.push(`draftStamp: ${quoteString(draftStamp)}`)
+  fmLines.push('---')
 
   const questionLines: string[] = ['```yaml', 'questions:']
   for (const q of data.questions) {

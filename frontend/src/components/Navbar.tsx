@@ -12,9 +12,34 @@ export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const { toggleLang } = useLanguage()
+  const { toggleLang, nextLang } = useLanguage()
   const { isDark, toggleTheme } = useTheme()
   const t = useT('navbar')
+
+  const [showTranslationWarn, setShowTranslationWarn] = useState(false)
+
+  useEffect(() => {
+    const dismissed = localStorage.getItem('surveysui:translation-warn-dismissed')
+    if (dismissed !== 'true') {
+      setShowTranslationWarn(true)
+    }
+  }, [])
+
+  const dismissTranslationWarn = () => {
+    localStorage.setItem('surveysui:translation-warn-dismissed', 'true')
+    setShowTranslationWarn(false)
+  }
+
+  const getSwitchLangTooltip = () => {
+    switch (nextLang) {
+      case 'ZH': return t.switchLangToZh
+      case 'JA': return t.switchLangToJa
+      case 'KO': return t.switchLangToKo
+      case 'ES': return t.switchLangToEs
+      default: return t.switchLangToEn
+    }
+  }
+  const switchTooltip = getSwitchLangTooltip()
 
   // 有效身份：連接的 Sui 錢包
   const activeAddress = account?.address ?? null
@@ -94,8 +119,8 @@ export default function Navbar() {
             type="button"
             onClick={toggleLang}
             className="hidden md:flex items-center justify-center h-9 w-9 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
-            aria-label={t.switchLang}
-            title={t.switchLang}
+            aria-label={switchTooltip}
+            title={switchTooltip}
           >
             <Languages size={18} />
           </button>
@@ -139,7 +164,7 @@ export default function Navbar() {
                   className="flex items-center gap-2 w-full text-left text-sm font-normal py-2 px-3 rounded-lg text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
                 >
                   <Languages size={16} />
-                  {t.switchLang}
+                  {switchTooltip}
                 </button>
                 <button
                   type="button"
@@ -154,6 +179,22 @@ export default function Navbar() {
           </div>
         </div>
       </div>
+      {/* 翻譯警告橫列 */}
+      {showTranslationWarn && (
+        <div className="bg-blue-50 dark:bg-blue-600/10 text-blue-900 dark:text-blue-200 border-t border-blue-200 dark:border-blue-700/40 py-2 px-6 flex items-center justify-between gap-4 text-xs font-normal transition-colors">
+          <div className="flex items-center gap-2 mx-auto">
+            <Languages size={15} className="text-blue-600 dark:text-blue-400 shrink-0" />
+            <span>{t.translationWarning}</span>
+          </div>
+          <button
+            type="button"
+            onClick={dismissTranslationWarn}
+            className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline shrink-0 cursor-pointer"
+          >
+            {t.closeWarningBtn}
+          </button>
+        </div>
+      )}
       {/* 測試警告橫列 */}
       <div className="bg-amber-50 dark:bg-amber-600/10 text-amber-900 dark:text-amber-200 border-t border-amber-200 dark:border-amber-700/40 py-2 px-6 flex items-center justify-center gap-2 text-sm font-normal transition-colors">
         <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />

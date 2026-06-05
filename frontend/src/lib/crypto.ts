@@ -267,7 +267,7 @@ export function parseCreatorPubKey(bytes: Uint8Array): {
 export interface EncryptedSurveyContent {
   /**
    * Binary blob to store in survey_registry::encrypted_content.
-   * Layout: [32B creator_x25519_pubkey | 12B iv | ciphertext]
+   * Layout: [1B version 0x01 | 32B creator_x25519_pubkey | 12B iv | ciphertext]
    */
   encryptedBlob: Uint8Array
   /**
@@ -294,11 +294,12 @@ export async function encryptSurveyContent(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, new TextEncoder().encode(markdown))
   )
 
-  // blob = creatorPubKey(32) || iv(12) || ciphertext
-  const encryptedBlob = new Uint8Array(creatorPublicKeyBytes.length + iv.length + ciphertext.length)
-  encryptedBlob.set(creatorPublicKeyBytes, 0)
-  encryptedBlob.set(iv, creatorPublicKeyBytes.length)
-  encryptedBlob.set(ciphertext, creatorPublicKeyBytes.length + iv.length)
+  // blob = 0x01 (1B) || creatorPubKey(32) || iv(12) || ciphertext
+  const encryptedBlob = new Uint8Array(1 + creatorPublicKeyBytes.length + iv.length + ciphertext.length)
+  encryptedBlob[0] = 0x01
+  encryptedBlob.set(creatorPublicKeyBytes, 1)
+  encryptedBlob.set(iv, 1 + creatorPublicKeyBytes.length)
+  encryptedBlob.set(ciphertext, 1 + creatorPublicKeyBytes.length + iv.length)
 
   return { encryptedBlob, contentKey }
 }
@@ -313,9 +314,13 @@ export async function decryptSurveyContent(
   encryptedBlob: Uint8Array,
   contentKey: Uint8Array
 ): Promise<{ markdown: string; creatorPublicKeyBytes: Uint8Array }> {
-  const creatorPublicKeyBytes = encryptedBlob.slice(0, 32)
-  const iv = encryptedBlob.slice(32, 44)
-  const ciphertext = encryptedBlob.slice(44)
+  let payload = encryptedBlob
+  if (encryptedBlob[0] === 0x01) {
+    payload = encryptedBlob.slice(1)
+  }
+  const creatorPublicKeyBytes = payload.slice(0, 32)
+  const iv = payload.slice(32, 44)
+  const ciphertext = payload.slice(44)
 
   const aesKey = await crypto.subtle.importKey(
     'raw',
@@ -328,6 +333,42 @@ export async function decryptSurveyContent(
   return {
     markdown: new TextDecoder().decode(plaintext),
     creatorPublicKeyBytes,
+  }
+}
+
+/** Build unencrypted content blob format with a 0x00 version byte */
+export function buildPublicContentBlob(markdown: string): Uint8Array {
+  const mdBytes = new TextEncoder().encode(markdown)
+  const out = new Uint8Array(1 + mdBytes.length)
+  out[0] = 0x00
+  out.set(mdBytes, 1)
+  return out
+}
+
+export interface ParsedContentBlob {
+  version: number // 0x00 (public), 0x01 (private), or -1 (legacy private)
+  markdown?: string
+  encryptedPayload?: Uint8Array
+}
+
+/** Parse content blob and detect version tags */
+export function parseContentBlob(bytes: Uint8Array): ParsedContentBlob {
+  if (bytes[0] === 0x00) {
+    return {
+      version: 0x00,
+      markdown: new TextDecoder().decode(bytes.slice(1)),
+    }
+  } else if (bytes[0] === 0x01) {
+    return {
+      version: 0x01,
+      encryptedPayload: bytes.slice(1),
+    }
+  } else {
+    // Legacy without prefix is treated as legacy encrypted
+    return {
+      version: -1,
+      encryptedPayload: bytes,
+    }
   }
 }
 

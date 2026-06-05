@@ -48,7 +48,7 @@ const fund: FundDict = {
   gasFundDesc: 'Escrowed in the on-chain contract, sponsors Gas each time a respondent answers, and the remaining balance will be refunded when closed. Due to on-chain limitations, a fixed amount is used, and the difference will be used to cover failed transactions and other overhead.',
   totalSuiCostLabel: 'Estimated Total SUI to Pay:',
   encryptSurvey: 'Encrypt Survey Questions',
-  encryptSurveyDesc: 'Encrypt questions in the survey to avoid prematurely revealing business strategies.',
+  encryptSurveyDesc: 'Surveys with unencrypted questions will be publicly visible on the Explore Plaza and on-chain.',
   encryptAnswers: 'Encrypt Responses',
   encryptAnswersDesc: 'Encrypt respondent answers, only creator can decrypt. Forced to encrypt if the survey questions are encrypted.',
   btnBack: '⬅ Back: Edit Survey',
@@ -68,6 +68,7 @@ const fund: FundDict = {
   uploadingShort: 'Uploading...',
   uploadingSurvey: 'Uploading survey to decentralized storage...',
   pleaseWait: 'Please wait, this may take a few seconds.',
+
 }
 
 export default fund

@@ -46,7 +46,7 @@ const fund = {
   gasFundDesc: '託管於鏈上合約，每次受訪者填答時代付 Gas，結案時將退回餘額。因鏈上限制採固定金額，差額將用以分攤失敗交易等消耗。',
   totalSuiCostLabel: '預估支付 SUI 總計:',
   encryptSurvey: '加密題目',
-  encryptSurveyDesc: '加密問卷中的問題,避免過早揭露商業策略。',
+  encryptSurveyDesc: '未加密題目的問卷將公開在探索廣場及鏈上。',
   encryptAnswers: '加密答卷',
   encryptAnswersDesc: '加密填答者的回答。若題目已加密，則答卷強制加密。',
   btnBack: '⬅ 返回修改問卷',
@@ -66,6 +66,7 @@ const fund = {
   uploadingShort: '上傳去中心化儲存中...',
   uploadingSurvey: '正在上傳問卷內容至去中心化儲存...',
   pleaseWait: '請稍候，這可能需要幾秒鐘。',
+
 }
 
 export type FundDict = typeof fund

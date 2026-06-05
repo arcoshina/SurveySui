@@ -1,12 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
-export type Language = 'ZH' | 'EN'
+export type Language = 'ZH' | 'EN' | 'JA' | 'KO' | 'ES'
 
 const STORAGE_KEY = 'surveysui:lang'
 
 interface LanguageContextProps {
   lang: Language
+  nextLang: Language
   toggleLang: () => void
   setLang: (lang: Language) => void
 }
@@ -19,21 +20,47 @@ function normalizeLang(raw: string | null | undefined): Language | null {
   const v = raw.trim().toLowerCase()
   if (v.startsWith('zh')) return 'ZH'
   if (v.startsWith('en')) return 'EN'
+  if (v.startsWith('ja')) return 'JA'
+  if (v.startsWith('ko')) return 'KO'
+  if (v.startsWith('es')) return 'ES'
   return null
 }
 
-/** 依瀏覽器系統語言推斷：任一以 zh 開頭 → ZH，否則 EN */
-function detectSystemLang(): Language {
+/** 偵測系統語言，若支援則回傳，否則回傳 'EN' */
+function getSupportedSystemLang(): Language {
   if (typeof navigator === 'undefined') return 'ZH'
   const list = navigator.languages?.length ? navigator.languages : [navigator.language]
   for (const l of list) {
-    if (l && l.toLowerCase().startsWith('zh')) return 'ZH'
+    if (!l) continue
+    const code = l.toLowerCase()
+    if (code.startsWith('zh')) return 'ZH'
+    if (code.startsWith('ja')) return 'JA'
+    if (code.startsWith('ko')) return 'KO'
+    if (code.startsWith('es')) return 'ES'
+    if (code.startsWith('en')) return 'EN'
   }
   return 'EN'
 }
 
-const toUrlCode = (lang: Language) => (lang === 'ZH' ? 'zh' : 'en')
-const toHtmlLang = (lang: Language) => (lang === 'ZH' ? 'zh-TW' : 'en')
+const toUrlCode = (lang: Language) => {
+  switch (lang) {
+    case 'ZH': return 'zh'
+    case 'JA': return 'ja'
+    case 'KO': return 'ko'
+    case 'ES': return 'es'
+    default: return 'en'
+  }
+}
+
+const toHtmlLang = (lang: Language) => {
+  switch (lang) {
+    case 'ZH': return 'zh-TW'
+    case 'JA': return 'ja'
+    case 'KO': return 'ko'
+    case 'ES': return 'es'
+    default: return 'en'
+  }
+}
 
 /** 初始語言優先序：網址 ?lang → localStorage → 系統語言 → 後備 ZH */
 function detectInitialLang(): Language {
@@ -43,7 +70,7 @@ function detectInitialLang(): Language {
     const saved = normalizeLang(localStorage.getItem(STORAGE_KEY))
     if (saved) return saved
   }
-  return detectSystemLang()
+  return getSupportedSystemLang()
 }
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -51,6 +78,15 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const navigate = useNavigate()
   const location = useLocation()
   const [lang, setLangState] = useState<Language>(detectInitialLang)
+  
+  // 記錄偵測到的本地語言，如果偵測到是英文或不支援的語言，則為 'EN'
+  const [localLang] = useState<Language>(() => {
+    return getSupportedSystemLang()
+  })
+
+  // 計算下一個語言與目標本地語言
+  const targetLocal = localLang === 'EN' ? 'ZH' : localLang
+  const nextLang = lang === targetLocal ? 'EN' : targetLocal
 
   // 切換語言：更新 state，並把網址 ?lang 同步寫好（集中於單一函式，
   // 避免多個 effect 各自寫網址而互相打架；localStorage / html 由下方 [lang] effect 處理）。
@@ -91,12 +127,12 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  const toggleLang = () => applyLang(lang === 'ZH' ? 'EN' : 'ZH')
+  const toggleLang = () => applyLang(nextLang)
 
   const setLang = (newLang: Language) => applyLang(newLang)
 
   return (
-    <LanguageContext.Provider value={{ lang, toggleLang, setLang }}>
+    <LanguageContext.Provider value={{ lang, nextLang, toggleLang, setLang }}>
       {children}
     </LanguageContext.Provider>
   )

@@ -1,0 +1,35 @@
+import type { ExploreDict } from '../zh/explore'
+
+const explore: ExploreDict = {
+  pageTitle: 'Explorar Nuevas Encuestas',
+  pageDesc: 'Explore las últimas encuestas públicas en su idioma, comparta sus opiniones y gane recompensas.',
+  showAllLanguages: 'Mostrar Todos los Idiomas',
+  emptyState: 'Actualmente no hay encuestas públicas que coincidan con este idioma.',
+  emptyStateAll: 'Actualmente no hay encuestas públicas disponibles.',
+  langZh: 'Chino Tradicional',
+  langEn: 'Inglés',
+  langJa: 'Japonés',
+  langKo: 'Coreano',
+  langEs: 'Español',
+  langUnknown: 'Idioma Desconocido',
+  statusClaimed: 'Completado',
+  btnStartSurvey: 'Comenzar Encuesta',
+  remainingLabel: 'Restantes',
+  deadlineLabel: 'Fecha límite',
+  remainingCopies: (remaining: number) => `Quedan ${remaining} copias`,
+  deadlineText: (dateStr: string) => `Fecha límite: ${dateStr}`,
+  loadingText: 'Cargando plaza de encuestas...',
+  rewardLabel: 'Recompensa:',
+  requirementsLabel: 'Requisitos:',
+  passRequirement: 'SurveyPass',
+  nftRequirement: 'NFT Requerido',
+  sourceEmail: 'Correo electrónico',
+  sourceSocial: 'Redes Sociales',
+  sourceWorldId: 'World ID',
+  sourceGoogle: 'Google',
+  sourceGithub: 'GitHub',
+  sourceSelfReport: 'Autodeclaración',
+  sourceSelfProtocol: 'Autoprotocolo',
+}
+
+export default explore

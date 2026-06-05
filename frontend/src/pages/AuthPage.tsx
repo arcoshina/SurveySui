@@ -9,6 +9,7 @@ import { buildMintPassPtb, buildUpdatePassCredentialPtb, buildDeletePassPtb, bui
 import { fetchActivePass, fetchPassCredentials, SurveyPassData, CredentialInfo } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
+import { useLanguage } from '../context/LanguageContext'
 import { executeTxWithFallback, executeSponsoredTx, USER_DECLINED_SELF_PAID, probeGasSponsorHealth } from '../lib/sponsoredTx'
 import { ConnectButton } from '@mysten/dapp-kit'
 import { useOAuthResult, OAuthResultTicket } from '../lib/useOAuthResult'
@@ -49,6 +50,7 @@ export default function AuthPage() {
   const { mutateAsync: signPersonalMessage } = useSignPersonalMessage()
   const suiClient = useSuiClient()
   const t = useT('auth')
+  const { lang } = useLanguage()
 
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -358,7 +360,7 @@ export default function AuthPage() {
       const res = await fetch('/auth/email/otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, lang }),
       })
 
       const data = await res.json()
