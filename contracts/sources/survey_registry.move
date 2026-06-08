@@ -1,5 +1,4 @@
 module surveysui::survey_registry;
-
 use std::option::{Self, Option};
 use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
@@ -8,14 +7,8 @@ use sui::event;
 use sui::object::{Self, ID};
 use sui::sui::SUI;
 use sui::table::{Self, Table};
-
-// ── status constants ──────────────────────────────────────────────────────────
-
 const STATUS_ACTIVE: u8   = 0;
 const STATUS_ARCHIVED: u8 = 1;
-
-// ── error codes ───────────────────────────────────────────────────────────────
-
 const ENotCreator: u64 = 0;
 const EDuplicateSurvey: u64 = 1;
 const EInvalidQuestionType: u64 = 2;
@@ -27,25 +20,17 @@ const EEmptyContent: u64 = 7;
 const EAllowlistTooLarge: u64 = 8;
 const EInvalidClaimMode: u64 = 9;
 const EMissingBlobObjectId: u64 = 10;
-
 const MAX_OPTIONS_LIMIT: u64 = 50;
-/// Gas / tx-size guard for audience allowlist (see docs/V4_Eligibility.md).
 const MAX_ALLOWED_NULLIFIERS: u64 = 100;
-
 const CLAIM_MODE_PASS_AUDIENCE: u8 = 0;
 const CLAIM_MODE_ONE_TIME_TICKET: u8 = 1;
-
-// ── structs ───────────────────────────────────────────────────────────────────
-
 public struct Question has copy, drop, store {
     id: vector<u8>,
-    question_type: vector<u8>, // single_choice, multi_choice, text, scale
+    question_type: vector<u8>,
     prompt: vector<u8>,
     options: vector<vector<u8>>,
     required: bool,
 }
-
-/// On-chain survey record. Shared so anyone can read it.
 public struct Survey has key {
     id: UID,
     vault_id: ID,
@@ -53,31 +38,24 @@ public struct Survey has key {
     content_hash: vector<u8>,
     encrypted_content: Option<vector<u8>>,
     survey_blob_id: Option<vector<u8>>,
-    /// Walrus blob Sui object ID for `extend_blob`; required when `survey_blob_id` is set.
     survey_blob_object_id: Option<ID>,
     schema_hash: vector<u8>,
     creator_pub_key: vector<u8>,
     status: u8,
     registered_at_ms: u64,
     allowed_sources: vector<u8>,
-    // Eligibility (immutable after register). v1: disclosure_rule_blob / stage1_survey_id stored only.
     allowed_nullifiers: vector<vector<u8>>,
     match_threshold: u64,
     disclosure_rule_blob: Option<vector<u8>>,
     stage1_survey_id: Option<ID>,
     claim_mode: u8,
 }
-
-/// Shared registry: indexes survey IDs by creator for on-chain queries.
 public struct SurveyRegistry has key {
     id: UID,
     surveys_by_creator: Table<address, vector<ID>>,
     registered_hashes: Table<vector<u8>, address>,
     total_count: u64,
 }
-
-// ── events ────────────────────────────────────────────────────────────────────
-
 public struct SurveyRegistered has copy, drop {
     survey_id: ID,
     vault_id: ID,
@@ -88,9 +66,6 @@ public struct SurveyRegistered has copy, drop {
     registered_at_ms: u64,
     allowed_sources: vector<u8>,
 }
-
-// ── init ──────────────────────────────────────────────────────────────────────
-
 fun init(ctx: &mut TxContext) {
     transfer::share_object(SurveyRegistry {
         id: object::new(ctx),
@@ -99,9 +74,6 @@ fun init(ctx: &mut TxContext) {
         total_count: 0,
     });
 }
-
-// ── public functions ──────────────────────────────────────────────────────────
-
 public fun new_question(
     id: vector<u8>,
     question_type: vector<u8>,
@@ -117,9 +89,6 @@ public fun new_question(
         required,
     }
 }
-
-/// Register a new survey. Emits `SurveyRegistered` for frontend event subscription.
-/// The survey is shared immediately so anyone can read it.
 public fun register(
     registry: &mut SurveyRegistry,
     vault_id: ID,
@@ -139,21 +108,14 @@ public fun register(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    // 1. Duplicate check (INV-5)
     assert!(!table::contains(&registry.registered_hashes, content_hash), EDuplicateSurvey);
     table::add(&mut registry.registered_hashes, content_hash, ctx.sender());
-
-    // 2. allowed_sources validation
     assert!(!vector::is_empty(&allowed_sources), EEmptyAllowedSources);
-
-    // 2b. eligibility placeholder validation
     assert!(vector::length(&allowed_nullifiers) <= MAX_ALLOWED_NULLIFIERS, EAllowlistTooLarge);
     assert!(
         claim_mode == CLAIM_MODE_PASS_AUDIENCE || claim_mode == CLAIM_MODE_ONE_TIME_TICKET,
         EInvalidClaimMode,
     );
-
-    // 3. Option empty validation
     if (option::is_some(&encrypted_content)) {
         assert!(!vector::is_empty(option::borrow(&encrypted_content)), EEmptyContent);
     };
@@ -165,28 +127,18 @@ public fun register(
         assert!(option::is_some(&survey_blob_id), EMissingBlobObjectId);
     };
     assert!(option::is_some(&encrypted_content) || option::is_some(&survey_blob_id), EEmptyContent);
-
-    // 4. Validate questions structure
     let num_questions = vector::length(&questions);
     let mut i = 0;
     while (i < num_questions) {
         let q = &questions[i];
-        
-        // Type whitelist
         let q_type = &q.question_type;
         let is_valid_type = (q_type == b"single_choice" || 
                              q_type == b"multi_choice" || 
                              q_type == b"text" || 
                              q_type == b"scale");
         assert!(is_valid_type, EInvalidQuestionType);
-
-        // Option limit
         assert!(vector::length(&q.options) <= MAX_OPTIONS_LIMIT, EOptionLimitExceeded);
-
-        // Empty question prompt
         assert!(vector::length(&q.prompt) > 0, EEmptyQuestion);
-
-        // Duplicate ID check within the survey
         let mut j = i + 1;
         while (j < num_questions) {
             if (&questions[j].id == &q.id) {
@@ -194,13 +146,10 @@ public fun register(
             };
             j = j + 1;
         };
-
         i = i + 1;
     };
-
     let creator = ctx.sender();
     let now_ms = clock::timestamp_ms(clock);
-
     let survey = Survey {
         id: object::new(ctx),
         vault_id,
@@ -220,9 +169,7 @@ public fun register(
         stage1_survey_id,
         claim_mode,
     };
-
     let survey_id = object::id(&survey);
-
     event::emit(SurveyRegistered {
         survey_id,
         vault_id,
@@ -233,26 +180,18 @@ public fun register(
         registered_at_ms: now_ms,
         allowed_sources: survey.allowed_sources,
     });
-
     if (table::contains(&registry.surveys_by_creator, creator)) {
         table::borrow_mut(&mut registry.surveys_by_creator, creator).push_back(survey_id);
     } else {
         table::add(&mut registry.surveys_by_creator, creator, vector[survey_id]);
     };
     registry.total_count = registry.total_count + 1;
-
     transfer::share_object(survey);
 }
-
-/// Archive a survey. Only the original creator may call this.
 public fun archive(survey: &mut Survey, ctx: &TxContext) {
     assert!(ctx.sender() == survey.creator, ENotCreator);
     survey.status = STATUS_ARCHIVED;
 }
-
-/// Remove a survey from the registry index and permanently delete the object.
-/// Called by `survey_vault::purge` when a survey reaches end-of-life, so the
-/// title content (`encrypted_content` / `survey_blob_id`) is destroyed too.
 public(package) fun remove_and_destroy(registry: &mut SurveyRegistry, survey: Survey) {
     let Survey {
         id,
@@ -273,10 +212,7 @@ public(package) fun remove_and_destroy(registry: &mut SurveyRegistry, survey: Su
         stage1_survey_id: _,
         claim_mode: _,
     } = survey;
-
     let survey_id = object::uid_to_inner(&id);
-
-    // Drop this survey_id from surveys_by_creator[creator]; tidy the bucket if empty.
     if (table::contains(&registry.surveys_by_creator, creator)) {
         let ids = table::borrow_mut(&mut registry.surveys_by_creator, creator);
         let (found, idx) = vector::index_of(ids, &survey_id);
@@ -287,21 +223,14 @@ public(package) fun remove_and_destroy(registry: &mut SurveyRegistry, survey: Su
             table::remove(&mut registry.surveys_by_creator, creator);
         };
     };
-
-    // Free the duplicate-content guard so the same content_hash could be reused.
     if (table::contains(&registry.registered_hashes, content_hash)) {
         table::remove(&mut registry.registered_hashes, content_hash);
     };
-
     if (registry.total_count > 0) {
         registry.total_count = registry.total_count - 1;
     };
-
     object::delete(id);
 }
-
-// ── view functions ────────────────────────────────────────────────────────────
-
 public fun vault_id(survey: &Survey): ID            { survey.vault_id }
 public fun creator(survey: &Survey): address         { survey.creator }
 public fun content_hash(survey: &Survey): vector<u8> { survey.content_hash }
@@ -319,8 +248,6 @@ public fun disclosure_rule_blob(survey: &Survey): Option<vector<u8>> { survey.di
 public fun stage1_survey_id(survey: &Survey): Option<ID> { survey.stage1_survey_id }
 public fun claim_mode(survey: &Survey): u8 { survey.claim_mode }
 public fun total_count(registry: &SurveyRegistry): u64 { registry.total_count }
-
-/// Returns the list of survey IDs registered by `creator`, or an empty vector.
 public fun surveys_by_creator(registry: &SurveyRegistry, creator: address): vector<ID> {
     if (table::contains(&registry.surveys_by_creator, creator)) {
         *table::borrow(&registry.surveys_by_creator, creator)
@@ -328,25 +255,16 @@ public fun surveys_by_creator(registry: &SurveyRegistry, creator: address): vect
         vector[]
     }
 }
-
-// ── package internal functions ────────────────────────────────────────────────
-
-// ── event getters ─────────────────────────────────────────────────────────────
-
 public fun vault_id_from_event(event: &SurveyRegistered): ID            { event.vault_id }
 public fun content_hash_from_event(event: &SurveyRegistered): vector<u8> { event.content_hash }
 public fun schema_hash_from_event(event: &SurveyRegistered): vector<u8> { event.schema_hash }
 public fun question_count_from_event(event: &SurveyRegistered): u64   { event.question_count }
 public fun registered_at_ms_from_event(event: &SurveyRegistered): u64   { event.registered_at_ms }
 public fun allowed_sources_from_event(event: &SurveyRegistered): vector<u8> { event.allowed_sources }
-
-// ── test helpers ──────────────────────────────────────────────────────────────
-
 #[test_only]
 public fun test_init(ctx: &mut TxContext) {
     init(ctx);
 }
-
 #[test_only]
 public fun create_survey_with_eligibility_for_testing(
     vault_id: ID,
@@ -382,7 +300,6 @@ public fun create_survey_with_eligibility_for_testing(
         claim_mode,
     }
 }
-
 #[test_only]
 public fun create_survey_for_testing(
     vault_id: ID,
@@ -415,7 +332,6 @@ public fun create_survey_for_testing(
         claim_mode: CLAIM_MODE_PASS_AUDIENCE,
     }
 }
-
 #[test_only]
 public fun destroy_survey_for_testing(survey: Survey) {
     let Survey {
@@ -439,4 +355,3 @@ public fun destroy_survey_for_testing(survey: Survey) {
     } = survey;
     object::delete(id);
 }
-

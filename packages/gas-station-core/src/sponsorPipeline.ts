@@ -9,7 +9,6 @@ import type {
   SponsorPipelineMetrics,
   SponsorPipelineOutcome,
 } from './types.js'
-
 export interface RunSponsorPipelineParams {
   txBytes: string
   senderAddress: string
@@ -23,7 +22,6 @@ export interface RunSponsorPipelineParams {
   onPlatformSponsorSigned?: () => Promise<void>
   onPassSponsorSigned?: () => void
 }
-
 function emptyMetrics(partial: Partial<SponsorPipelineMetrics> = {}): SponsorPipelineMetrics {
   return {
     queueWaitMs: 0,
@@ -32,7 +30,6 @@ function emptyMetrics(partial: Partial<SponsorPipelineMetrics> = {}): SponsorPip
     ...partial,
   }
 }
-
 export async function runSponsorPipeline(
   params: RunSponsorPipelineParams
 ): Promise<SponsorPipelineOutcome> {
@@ -48,15 +45,12 @@ export async function runSponsorPipeline(
     onPlatformSponsorSigned,
     onPassSponsorSigned,
   } = params
-
   const queueStart = Date.now()
   const tx = Transaction.fromKind(Buffer.from(txBytes, 'base64'))
   tx.setSender(senderAddress)
   tx.setGasOwner(sponsorAddress)
-
   let gasBudgetMist = gasConfig.gasBudgetCapMist
   let acquiredCoin: Awaited<ReturnType<CoinLockStore['acquire']>> | undefined
-
   try {
     try {
       acquiredCoin = await coinStore.acquire(suiClient, sponsorAddress, gasBudgetMist)
@@ -75,9 +69,7 @@ export async function runSponsorPipeline(
       }
       throw err
     }
-
     const queueWaitMs = Date.now() - queueStart
-
     try {
       tx.setGasPayment([
         {
@@ -87,14 +79,11 @@ export async function runSponsorPipeline(
         },
       ])
       tx.setGasBudget(Number(gasBudgetMist))
-
       let sponsoredTxBytes = await tx.build({ client: suiClient })
-
       const dryRunStart = Date.now()
       let dryRun = await suiClient.dryRunTransactionBlock({
         transactionBlock: Buffer.from(sponsoredTxBytes).toString('base64'),
       })
-
       if (dryRun.effects.status.status === 'failure') {
         return {
           ok: false,
@@ -109,7 +98,6 @@ export async function runSponsorPipeline(
           }),
         }
       }
-
       const netGas = netGasFromEffects(dryRun.effects.gasUsed)
       const claimGasCompensationAmount = context.claimGasCompensationAmount
         ? BigInt(context.claimGasCompensationAmount)
@@ -117,7 +105,6 @@ export async function runSponsorPipeline(
       const claimStorageCompensationAmount = context.claimStorageCompensationAmount
         ? BigInt(context.claimStorageCompensationAmount)
         : null
-
       if (!context.isPassSponsor) {
         if (context.isPlatformSponsor) {
           if (netGas > gasConfig.maxPlatformClaimGasMist) {
@@ -157,13 +144,11 @@ export async function runSponsorPipeline(
           }
         }
       }
-
       const refinedBudget = resolveGasBudget(
         netGas,
         gasConfig.gasBudgetCapMist,
         gasConfig.gasBudgetBufferMist
       )
-
       if (refinedBudget < gasBudgetMist) {
         gasBudgetMist = refinedBudget
         tx.setGasBudget(Number(gasBudgetMist))
@@ -186,17 +171,14 @@ export async function runSponsorPipeline(
           }
         }
       }
-
       const signatureResult = await signer.signTransaction(sponsoredTxBytes)
       const dryRunMs = Date.now() - dryRunStart
-
       if (context.isPlatformSponsor && onPlatformSponsorSigned) {
         await onPlatformSponsorSigned()
       }
       if (context.isPassSponsor && onPassSponsorSigned) {
         onPassSponsorSigned()
       }
-
       return {
         ok: true,
         result: {
