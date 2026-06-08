@@ -53,7 +53,7 @@ ISSUER_CONFIG_ID=0x...
 1. **重啟 BFF**：`cd bff; pnpm dev`
 2. **重啟 Frontend**：`cd frontend; pnpm dev`
 3. **清瀏覽器 localStorage**：把 `survey:*`、`draft:*`、`pass:*` 等 key 全清掉，重新連錢包。
-4. （選擇性）**DB 清理**：`surveysui_dev` 內 `surveys` 表若有舊 `package_id` 紀錄，自行決定是否 `TRUNCATE`，本腳本不會動 DB。
+4. （選擇性）**DB 清理**：BFF 使用 SQLite（`bff/data/surveysui.db`）。若 devnet reset 後需清空本地狀態，停止 BFF 後刪除該檔案或清空 `revoked_*` 等表，本腳本不會動 DB。
 
 5. **執行 `npx tsx scratch/fund_issuer.ts` 補 gas**
 
@@ -67,13 +67,12 @@ ISSUER_CONFIG_ID=0x...
 
 - `SURVEY_PASS_ISSUER_PRIV`、`SURVEY_PASS_ISSUER_SALT`
 - OAuth：`GOOGLE_OAUTH_*`、`GITHUB_OAUTH_*`
-- `ZKLOGIN_SALT_SECRET`（若啟用 zkLogin；**設定後嚴禁更換**）
 
 ### 根目錄 `.env` 前端區段（Tier 1）
 
-前端合約 ID 由 `vite.config.ts` 從後端區段的 Object ID 自動映射；其餘 `VITE_*` 設於根目錄 `.env`（見 [SETUP.md](../SETUP.md)）。
+前端合約 ID 由 `vite.config.ts` 從後端區段的 Object ID 自動映射；其餘 `VITE_*` 設於根目錄 `.env`（`.env` 模板見 [安全指引.md](../安全指引.md) §11，守則見 [V4_Tasks.md](../V4_Tasks.md)）。
 
-> **注意**：`ZKLOGIN_SALT_SECRET` 決定 zkLogin 用戶的 Sui 地址推導，一旦設定後嚴禁更換，否則所有 zkLogin 用戶的地址會變更。
+> **注意**：專案已**放棄自架 zkLogin**（見 [V4_Tasks.md](../V4_Tasks.md) 踩坑）。使用者若透過 Slush 等錢包的 zkLogin 連接，salt 由錢包方處理，SurveySui 後端不需設定 `ZKLOGIN_SALT_SECRET`。
 
 ---
 
@@ -108,14 +107,14 @@ pnpm deploy:Devnet
 | `Package 0x... not found`             | `sui client active-env` 不是 devnet。重跑步驟 1。                                                                                                    |
 | `chain-id mismatch`                   | `Move.lock` 或 `Pub.devnet.toml` 還留著舊 chain-id。重跑步驟 3，或手動刪除整份 `Move.lock` 後重 build。                                              |
 | `EDuplicateSurvey`                    | **不會在 reset 場景出現**。若只是想清空 `SurveyRegistry`（不重置整個 devnet），改跑 `pnpm --filter scripts exec tsx scripts/src/reset-registry.ts`。 |
-| `SUI_ADMIN_ADDRESS not found in .env` | `.env` 缺欄位。對照 [SETUP.md](../SETUP.md) 補上。                                                                                                  |
+| `SUI_ADMIN_ADDRESS not found in .env` | `.env` 缺欄位。對照 [安全指引.md](../安全指引.md) §11 補上。                                                                                                  |
 
 ---
 
 ## 注意事項
 
 - 所有鏈上舊的 Survey / Vault / Pass / Pool 物件在 devnet reset 後**全部變孤兒**，無法回收。
-- 本腳本只更新合約 ID，**不會**動 PostgreSQL、不會清 BFF 的 issuer keypair（issuer pubkey 會用根目錄 `.env` 中既有的 `SURVEY_PASS_ISSUER_PRIV` 推導後寫上鏈）。
+- 本腳本只更新合約 ID，**不會**動 BFF SQLite（`bff/data/surveysui.db`）、不會清 BFF 的 issuer keypair（issuer pubkey 會用根目錄 `.env` 中既有的 `SURVEY_PASS_ISSUER_PRIV` 推導後寫上鏈）。
 - `pnpm deploy:Devnet` 用 `--build-env testnet` 編譯（見 [scripts/src/init.ts:50](../../scripts/src/init.ts#L50)）；對 devnet publish 沒有影響，但意味著 `Pub.devnet.toml` 平常不會被 deploy 流程寫入，第 3 步只是保險。
 
 ---
@@ -125,4 +124,4 @@ pnpm deploy:Devnet
 - 一鍵腳本：[redeploy-devnet.ps1](redeploy-devnet.ps1)
 - 部署核心：[scripts/src/init.ts](../../scripts/src/init.ts)
 - pnpm 入口：[package.json](../../package.json) 內 `deploy:Devnet`
-- 初次安裝指南：[docs/SETUP.md](../SETUP.md)
+- 初次環境設定：[安全指引.md](../安全指引.md) §11（`.env` 模板）與 [V4_Tasks.md](../V4_Tasks.md) 守則

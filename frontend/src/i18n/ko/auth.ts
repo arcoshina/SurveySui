@@ -35,7 +35,6 @@ const auth: AuthDict = {
   sendingOtp: '인증코드 전송 중...',
   btnGetOtp: '인증코드 받기 ➡',
   otpCodeLabel: '인증코드 (6자리 숫자)',
-  devTip: '개발자 팁(메일 수신 생략): {code}를 입력하세요.',
   btnBack: '수정으로 이동',
   submitting: '제출 중...',
   btnUpdatePass: '인증 갱신',

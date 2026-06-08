@@ -8,9 +8,6 @@ export const REQUIRED_VARS: string[] = [
   'SUI_NETWORK',
   'SUI_ADMIN_PRIVATE_KEY',
   'SUI_ADMIN_ADDRESS',
-  'GOOGLE_OAUTH_CLIENT_ID',
-  'GOOGLE_OAUTH_CLIENT_SECRET',
-  'ZKLOGIN_PROVER_URL',
 ]
 
 export function assertAllRequired(vars: string[] = REQUIRED_VARS): void {

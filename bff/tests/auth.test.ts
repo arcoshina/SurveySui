@@ -6,6 +6,7 @@ import { otpStore } from '../src/auth/otpStore.js'
 vi.mock('../src/email/sender.js', () => ({
   sendOtpEmail: vi.fn().mockResolvedValue(undefined),
 }))
+import { sendOtpEmail } from '../src/email/sender.js'
 import { computeNullifierHash, computeEmailSecondaryNullifier, signTicket, getPassTtlMs } from '../src/auth/ticket.js'
 import { registerAuthRoutes } from '../src/auth/handler.js'
 
@@ -88,6 +89,7 @@ describe('BFF Authentication & Ticket Tests', () => {
     let server: any
 
     beforeEach(async () => {
+      vi.clearAllMocks()
       server = Fastify()
       await server.register(cors, { origin: true })
       registerAuthRoutes(server)
@@ -97,8 +99,7 @@ describe('BFF Authentication & Ticket Tests', () => {
       await server.close()
     })
 
-    it('should generate and return OTP code in non-production mode', async () => {
-      process.env.NODE_ENV = 'development'
+    it('should send OTP email without returning code in response', async () => {
       const response = await server.inject({
         method: 'POST',
         url: '/auth/email/otp',
@@ -108,20 +109,24 @@ describe('BFF Authentication & Ticket Tests', () => {
       expect(response.statusCode).toBe(200)
       const data = JSON.parse(response.payload)
       expect(data.message).toBe('OTP sent successfully')
-      expect(data.code).toBeDefined()
-      expect(data.code.length).toBe(6)
+      expect(data.code).toBeUndefined()
+      expect(sendOtpEmail).toHaveBeenCalledTimes(1)
+      expect(sendOtpEmail).toHaveBeenCalledWith(
+        'alice@test.com',
+        expect.stringMatching(/^\d{6}$/),
+        undefined
+      )
     })
 
     it('should verify OTP and return signed ticket', async () => {
-      process.env.NODE_ENV = 'development'
-
       // Step 1: Request OTP
       const otpResponse = await server.inject({
         method: 'POST',
         url: '/auth/email/otp',
         payload: { email: 'alice@test.com' },
       })
-      const { code } = JSON.parse(otpResponse.payload)
+      expect(otpResponse.statusCode).toBe(200)
+      const code = vi.mocked(sendOtpEmail).mock.calls[0][1] as string
 
       // Step 2: Verify OTP
       const owner = '0xa11ce00000000000000000000000000000000000000000000000000000000000'

@@ -1,6 +1,6 @@
 import { Transaction } from '@mysten/sui/transactions'
 import type { SuiClient } from '@mysten/sui/client'
-import type { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import type { SponsorSigner } from '@surveysui/gas-station-core'
 import {
   applyCreatorRebateShare,
   computeRebateSurplus,
@@ -247,11 +247,11 @@ async function buildPurgeWithTransfer(
  */
 export async function buildAndDryRunPurgeWithRebateRefund(
   suiClient: SuiClient,
-  sponsorKeypair: Ed25519Keypair,
+  sponsorSigner: SponsorSigner,
   ids: PurgePtbIds,
   creatorFromVault: string | null
 ): Promise<PurgeWithRebateResult> {
-  const sponsorAddress = sponsorKeypair.getPublicKey().toSuiAddress()
+  const sponsorAddress = sponsorSigner.getSponsorAddress()
   const base: BuildPurgePtbParams = { ...ids }
 
   const cap = resolvePurgeGasBudgetCapMist()

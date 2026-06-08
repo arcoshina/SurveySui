@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import { Ed25519SignerBackend } from '@surveysui/gas-station-core'
 import { checkAndMergeCoins } from '../src/gas/coinMergeTask.js'
 
 describe('BFF Coin Merge Task Tests', () => {
   let mockSuiClient: any
-  let keypair: Ed25519Keypair
+  let sponsorSigner: Ed25519SignerBackend
 
   beforeEach(() => {
     // 32 bytes hex key
     const privHex = '0101010101010101010101010101010101010101010101010101010101010101'
-    keypair = Ed25519Keypair.fromSecretKey(new Uint8Array(Buffer.from(privHex, 'hex')))
+    const keypair = Ed25519Keypair.fromSecretKey(new Uint8Array(Buffer.from(privHex, 'hex')))
+    sponsorSigner = new Ed25519SignerBackend(keypair)
 
     mockSuiClient = {
       getCoins: vi.fn(),
@@ -48,7 +50,7 @@ describe('BFF Coin Merge Task Tests', () => {
 
     const result = await checkAndMergeCoins({
       suiClient: mockSuiClient,
-      sponsorKeypair: keypair,
+      sponsorSigner,
       thresholdMist: 100_000_000n, // 0.1 SUI
       triggerCount: 50,
     })
@@ -86,7 +88,7 @@ describe('BFF Coin Merge Task Tests', () => {
 
     const result = await checkAndMergeCoins({
       suiClient: mockSuiClient,
-      sponsorKeypair: keypair,
+      sponsorSigner,
       thresholdMist: 100_000_000n,
       triggerCount: 50,
       lockedCoinIds: locked,
@@ -129,7 +131,7 @@ describe('BFF Coin Merge Task Tests', () => {
 
     const result = await checkAndMergeCoins({
       suiClient: mockSuiClient,
-      sponsorKeypair: keypair,
+      sponsorSigner,
       thresholdMist: 100_000_000n, // 0.1 SUI
       triggerCount: 50,
     })

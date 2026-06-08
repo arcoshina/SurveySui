@@ -5,7 +5,7 @@
  - 改動前先確認最新的 commit  
  - 架構已經很複雜了，採用 "先完整計畫 -> 再依計畫實作 -> 確認改動有效且沒有破壞其他機制" 的工作模式  
  - 計畫時要先確認現有技術架構，例如語言、程式碼結構  
- - 後端使用 Cloudflare Serverless JAM stack 架構，使用 Cloudflare DB    
+ - 後端使用 Serverless 架構，必要時使用 DB 或 雲存儲 SaaS  
  - 使用 i18n 架構，文字不要硬編碼  
  - 目前尚未正式上線，不考慮舊合約相容性  
  - 所有 env 設定都集中在根目錄 /.env 中  
@@ -14,23 +14,21 @@
 
 
 ## 踩坑紀錄
- - Sui zkLogin 事實上無法協助取得 JWT ，只能協助算出地址，且不具備一般錢包的加解密功能  
+ - Sui zkLogin 事實上無法協助取得 JWT ，只能協助算出地址，且不具備一般錢包的加解密功能。  
  - 認證 Gas `0.009 SUI`，需要檢查 Gas 消耗  
  - Sui 的 Passkey 不適合做為防女巫/KYC用途  
  - Walrus 儲存的單位是 63 MB 的整數  
- - 答卷不放 Walrus  
- - 放棄自架 zkLogin，有託管資產的法律問題  
- - 不在鏈上放註銷紀錄表，註銷只註記不刪 nullifier  
+ - 放棄自架 zkLogin，有託管資產的法律問題 
 
 =====
 
 ## 待辦清單
-
-- [ ] 秘密及金鑰的輪換及管理準則  
-- [ ] 單簽的金鑰在上線前要改為多簽安全機制  
+- [x] Gas 代付 2-of-3 multisig（Phase 2-lite；見 [安全指引.md](./安全指引.md) §10、[託管架構.md](./託管架構.md)）  
+- [ ] Ticket issuer 改 threshold multisig / KMS（Phase 3+）  
+- [x] 秘密及金鑰的輪換及管理準則 → [安全指引.md](./安全指引.md)  
 
 ## 收尾檢查
-- [ ] Env 集中在一個檔案，加註解
+- [ ] Env 集中在一個檔案，加註解（模板見 [安全指引.md](./安全指引.md) §11）
 - [ ] 檢查前端說明文案：引導、防護、設計、代付及退回機制、儲存及銷毀機制
 - [ ] 檢查代幣經濟  
 - [ ] 再次確認答卷上鏈的格式問題  
@@ -38,12 +36,27 @@
 - [ ] 確認 OAuth JWT 有驗簽
 - [ ] 檢查 Gas 補助的計算邏輯
 - [ ] 檢查防女巫抽乾補助池的機制: 刪除 Pass 及問卷時的押金處理
-- [ ] **上線前重設所有 Secrets**
+- [ ] **上線前重設所有 Secrets**（清單見 [安全指引.md](./安全指引.md) §8）
 - [ ] 審計公司 CertiK 有 AI 審計服務，駭客松有免費額度
 - [ ] 確認佈署時的提示  
 - [ ] 文件完整說明運作方式，特別是安全措施及利用的 Sui 特性
-- [ ] 檢查 環境變數、管理員 API 權限
 
+
+
+一、確定不做的事
+鏈上 revoked_nullifiers、ON_CHAIN_SYNC、Merkle、刪 slot 註銷、整本 Pass 因單一來源註銷而拒填等
+自願刪除自動寫庫、Walrus 作為 Mint 查詢權威等
+二、要做的事
+主：Production 註銷庫改為 Cloudflare 託管 DB（D1／Turso 等），非本地 surveysui.db
+輔：DB 寫入成功後可選 Walrus 歸檔（失敗不阻擋主流程）
+Mint 守衛預設開啟、REVOCATION_REGISTRY_BACKEND 收斂為 bff_db 或 bff_db+walrus
+Move／BFF 測試清單（#1 刪除回歸、細粒度註銷、拒簽、頻控、CLI 整合）
+前端提示、Gas 預檢標為可並行、非阻擋上線
+三、上線前要確認的事
+環境變數、管理員 API 權限、E2E 鏈上＋BFF 行為
+Walrus 輔助時的降級策略
+測試與 V4_Tasks 勾選方式
+已知取捨（填答靠鏈上、BFF 擋 Mint 等）
 
 
 ## 進度紀錄  
@@ -58,7 +71,7 @@
 - [x] 自動銷毀時收到的押金，扣除 Gas 及 50% 手續費後轉帳給發起人_Composer  
 - [x] Walrus 儲存生命週期問題_Composer  
 - [x] Gas Station 分散式 Coin Queue（gas-station-core + Cloudflare DO）_Composer
-- [x] Dashboard 文案修改：系統自動銷毀時扣 50% 手續費。
+- [x] Dashboard 文案修改： 結束後未使用的 SSR 與 Gas 會退回您的錢包。銷毀時題目與答卷將被永久刪除，鏈上儲存押金將退回。若結束後超過 90 天仍未銷毀，系統將自動銷毀，扣除 gas 及 50% 手續費。
 
 ### 2026/6/6
 - [x] 首頁的按鈕：`說明文件`、`新手教學`、`建立問卷`_Gemini  

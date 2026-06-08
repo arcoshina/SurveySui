@@ -1,4 +1,3 @@
-import { SuiClient } from '@mysten/sui/client'
 
 export interface SurveyPassData {
   objectId: string

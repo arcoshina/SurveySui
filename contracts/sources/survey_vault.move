@@ -271,13 +271,14 @@ public(package) fun apply_nullifiers_and_payout(
         n = n + 1;
     };
 
-    process_claim_and_payout(
+    let payout = process_claim_and_payout(
         vault,
         encrypted_answers,
         answer_blob_id,
         clock,
         ctx,
     );
+    deliver_respondent_payout(payout, ctx.sender());
 }
 
 public fun claim(
@@ -294,6 +295,26 @@ public fun claim(
     apply_nullifiers_and_payout(vault, pass, encrypted_answers, answer_blob_id, clock, ctx);
 }
 
+/// Coins owed to the respondent; returned for composability instead of self-transfer inside helpers.
+public struct RespondentPayout {
+    reward: Option<Coin<STACKED_SURVEY_REWARD>>,
+    storage_compensation: Option<Coin<SUI>>,
+}
+
+fun deliver_respondent_payout(payout: RespondentPayout, recipient: address) {
+    let RespondentPayout { reward, storage_compensation } = payout;
+    if (option::is_some(&reward)) {
+        transfer::public_transfer(option::destroy_some(reward), recipient);
+    } else {
+        option::destroy_none(reward);
+    };
+    if (option::is_some(&storage_compensation)) {
+        transfer::public_transfer(option::destroy_some(storage_compensation), recipient);
+    } else {
+        option::destroy_none(storage_compensation);
+    };
+}
+
 /// 內部共用的實際填答處理與發放獎勵/補貼邏輯
 fun process_claim_and_payout(
     vault: &mut SurveyVault,
@@ -301,7 +322,7 @@ fun process_claim_and_payout(
     answer_blob_id: Option<vector<u8>>,
     clock: &Clock,
     ctx: &mut TxContext,
-) {
+): RespondentPayout {
     // Size-based storage validation. Capture (kind, payload) so the answer can be
     // stored in a deletable dynamic field below instead of in the immutable event.
     // kind: 0 = inline ciphertext, 1 = Walrus blob id.
@@ -379,16 +400,17 @@ fun process_claim_and_payout(
         claimed_at_ms: now_ms,
     });
 
-    if (reward_amount > 0) {
-        let reward = coin::from_balance(
+    let reward_coin = if (reward_amount > 0) {
+        option::some(coin::from_balance(
             balance::split(&mut vault.balance, reward_amount),
             ctx,
-        );
-        transfer::public_transfer(reward, ctx.sender());
+        ))
+    } else {
+        option::none()
     };
 
     let sponsor_opt = tx_context::sponsor(ctx);
-    if (std::option::is_some(&sponsor_opt)) {
+    let storage_compensation_coin = if (std::option::is_some(&sponsor_opt)) {
         let sponsor = std::option::destroy_some(sponsor_opt);
         if (sponsor == vault.sponsor_address) {
             let mut total_compensation = 0;
@@ -401,21 +423,29 @@ fun process_claim_and_payout(
             if (total_compensation > 0) {
                 let compensation = coin::from_balance(
                     balance::split(&mut vault.gas_balance, total_compensation),
-                    ctx
+                    ctx,
                 );
                 transfer::public_transfer(compensation, sponsor);
             };
         };
+        option::none()
+    } else if (
+        option::is_some(&answer_blob_id)
+            && balance::value(&vault.gas_balance) >= vault.storage_compensation_amount
+    ) {
+        // 自付交易模式：若使用了去中心化儲存，將儲存補貼發還給 respondent
+        option::some(coin::from_balance(
+            balance::split(&mut vault.gas_balance, vault.storage_compensation_amount),
+            ctx,
+        ))
     } else {
-        // 自付交易模式：若使用了去中心化儲存，將儲存補貼發還給 respondent (ctx.sender())
-        if (option::is_some(&answer_blob_id) && balance::value(&vault.gas_balance) >= vault.storage_compensation_amount) {
-            let compensation = coin::from_balance(
-                balance::split(&mut vault.gas_balance, vault.storage_compensation_amount),
-                ctx
-            );
-            transfer::public_transfer(compensation, ctx.sender());
-        };
+        option::none()
     };
+
+    RespondentPayout {
+        reward: reward_coin,
+        storage_compensation: storage_compensation_coin,
+    }
 }
 
 /// 強匿名填答 payload，須與 BFF 端的 BCS 序列化結構完全一致
@@ -471,13 +501,14 @@ public fun claim_with_ticket(
         transfer::public_transfer(fee_coin, vault.admin_treasury);
     };
 
-    process_claim_and_payout(
+    let payout = process_claim_and_payout(
         vault,
         encrypted_answers,
         answer_blob_id,
         clock,
-        ctx
+        ctx,
     );
+    deliver_respondent_payout(payout, ctx.sender());
 }
 
 /// 弱匿名填答接口：使用者直接傳入持有之 NFT 物件進行驗證
@@ -510,13 +541,14 @@ public fun claim_with_nft_marking<T: key>(
     assert!(!table::contains(&vault.used_nullifiers, scoped), EDuplicateNullifier);
     table::add(&mut vault.used_nullifiers, scoped, ctx.sender());
 
-    process_claim_and_payout(
+    let payout = process_claim_and_payout(
         vault,
         encrypted_answers,
         answer_blob_id,
         clock,
-        ctx
+        ctx,
     );
+    deliver_respondent_payout(payout, ctx.sender());
 }
 
 /// Creator closes vault and recovers remaining SSR.
@@ -860,7 +892,7 @@ public fun answers_count(vault: &SurveyVault): u64 { vault.answers_count }
 
 /// True iff the dynamic field for answer `index` still exists.
 public fun has_answer(vault: &SurveyVault, index: u64): bool {
-    df::exists_(&vault.id, index)
+    df::exists(&vault.id, index)
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
@@ -873,7 +905,7 @@ public fun add_answer_for_testing(vault: &mut SurveyVault, payload: vector<u8>) 
         kind: 0,
         payload,
         respondent: @0x0,
-        sub_hash: vector::empty(),
+        sub_hash: vector[],
         claimed_at_ms: 0,
     });
     vault.answers_count = idx + 1;

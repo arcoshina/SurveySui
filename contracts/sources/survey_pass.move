@@ -529,6 +529,13 @@ public fun all_nullifiers(pass: &SurveyPass): vector<vector<u8>> {
     out
 }
 
+public fun src_self_report(): u8 { SRC_SELF_REPORT }
+public fun src_email(): u8 { SRC_EMAIL }
+public fun src_social(): u8 { SRC_SOCIAL }
+public fun src_self_protocol(): u8 { SRC_SELF_PROTOCOL }
+public fun src_world_id(): u8 { SRC_WORLD_ID }
+public fun src_social_google(): u8 { SRC_SOCIAL_GOOGLE }
+public fun src_social_github(): u8 { SRC_SOCIAL_GITHUB }
 public fun src_attributes(): u8 { SRC_ATTRIBUTES }
 
 public fun owner(pass: &SurveyPass): address { pass.owner }
@@ -672,12 +679,12 @@ public fun create_for_testing(
         id: sui::object::new(ctx),
         owner,
         deposit_payer: owner,
-        credential_sources: vector[2], // SRC_EMAIL = 2
+        credential_sources: vector[SRC_EMAIL],
         created_at: 0,
         status: STATUS_ACTIVE,
         encrypted_payload: std::option::none(),
     };
-    let key = CredentialKey { source: 2 };
+    let key = CredentialKey { source: SRC_EMAIL };
     let slot = CredentialSlot {
         commitment: vector[],
         nullifiers: vector[],

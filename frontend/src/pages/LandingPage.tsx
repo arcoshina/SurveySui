@@ -39,7 +39,6 @@ function detectLang(text: string): string {
   let jaCount = 0
   let koCount = 0
   let esCount = 0
-  let enCount = 0
 
   for (let i = 0; i < text.length; i++) {
     const charCode = text.charCodeAt(i)
@@ -66,13 +65,6 @@ function detectLang(text: string): string {
     // 西班牙文特有字元 (á, é, í, ó, ú, ü, ñ, ¿, ¡)
     else if (/[áéíóúüñ¿¡ÁÉÍÓÚÜÑ]/.test(text[i])) {
       esCount++
-    }
-    // 英文字母
-    else if (
-      (charCode >= 65 && charCode <= 90) ||
-      (charCode >= 97 && charCode <= 122)
-    ) {
-      enCount++
     }
   }
 

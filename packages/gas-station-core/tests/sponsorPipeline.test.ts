@@ -36,9 +36,13 @@ describe('runSponsorPipeline', () => {
       }),
     }
 
-    const keypair = {
-      getPublicKey: () => ({ toSuiAddress: () => '0xsponsor' }),
+    const signer = {
+      getSponsorAddress: () => '0xsponsor',
       signTransaction: vi.fn(),
+      asTransactionSigner: () => ({
+        getPublicKey: () => ({ toSuiAddress: () => '0xsponsor' }),
+        signTransaction: vi.fn(),
+      }),
     }
 
     const store = new InMemoryCoinLockStore(30_000, 0)
@@ -46,7 +50,7 @@ describe('runSponsorPipeline', () => {
       txBytes: Buffer.from('dGVzdA==').toString('base64'),
       senderAddress: '0xsender',
       suiClient: mockClient as any,
-      keypair: keypair as any,
+      signer: signer as any,
       sponsorAddress: '0xsponsor',
       coinStore: store,
       gasConfig: loadGasConfig({}),

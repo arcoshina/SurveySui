@@ -1,12 +1,10 @@
 import React from 'react'
 import { useTheme } from '../context/ThemeContext'
-import { useLanguage } from '../context/LanguageContext'
 import { Info, AlertCircle, CheckCircle2, AlertTriangle, ArrowLeft, Sun, Moon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 export default function StyleGuidePage() {
   const { isDark, toggleTheme } = useTheme()
-  const { lang } = useLanguage()
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-neutral-950 text-slate-800 dark:text-neutral-100 transition-colors duration-200 pb-20">

@@ -35,7 +35,6 @@ const auth: AuthDict = {
   sendingOtp: '検証コード送信中...',
   btnGetOtp: '検証コードを取得 ➡',
   otpCodeLabel: '検証コード (6桁の数字)',
-  devTip: '開発者向けヒント（メール受信不要）：{code} を入力してください。',
   btnBack: '編集に戻る',
   submitting: '送信中...',
   btnUpdatePass: '検証を更新',

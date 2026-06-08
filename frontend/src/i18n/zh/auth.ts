@@ -33,7 +33,6 @@ const auth = {
   sendingOtp: '正在發送驗證碼...',
   btnGetOtp: '獲取驗證碼 ➡',
   otpCodeLabel: '驗證碼 (6 位數字)',
-  devTip: '開發者提示（免登收信）：輸入 {code} 即可。',
   btnBack: '返回修改',
   submitting: '提交中...',
   btnUpdatePass: '更新驗證',

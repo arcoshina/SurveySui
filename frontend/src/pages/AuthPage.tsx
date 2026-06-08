@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, useSignTransaction, useSignPersonalMessage } from '@mysten/dapp-kit'
+import { useCurrentAccount, useSignPersonalMessage, useSuiClient } from '@mysten/dapp-kit'
 import { IdCard, AlertTriangle, Check } from 'lucide-react'
 import { ProviderIcon } from '../components/ProviderIcon'
 import { Transaction } from '@mysten/sui/transactions'
@@ -17,7 +17,7 @@ import { useT } from '../i18n'
 import { useLanguage } from '../context/LanguageContext'
 import { executeTxWithFallback, executeSponsoredTx, USER_DECLINED_SELF_PAID, probeGasSponsorHealth } from '../lib/sponsoredTx'
 import { ConnectButton } from '@mysten/dapp-kit'
-import { useOAuthResult, OAuthResultTicket } from '../lib/useOAuthResult'
+import { useOAuthResult } from '../lib/useOAuthResult'
 import { bcs } from '@mysten/sui/bcs'
 import { DIRECT_OAUTH_PROVIDERS } from '../lib/authProviders'
 import { useActiveSigner } from '../lib/useActiveSigner'
@@ -50,8 +50,6 @@ function buildDeleteAuthMessage(passId: string, signedTimestamp: number): string
 
 export default function AuthPage() {
   const account = useCurrentAccount()
-  const { mutate: signAndExecute, mutateAsync: signAndExecuteAsync } = useSignAndExecuteTransaction()
-  const { mutateAsync: signTransaction } = useSignTransaction()
   const { mutateAsync: signPersonalMessage } = useSignPersonalMessage()
   const suiClient = useSuiClient()
   const t = useT('auth')
@@ -81,7 +79,6 @@ export default function AuthPage() {
   const [otpSentNotice, setOtpSentNotice] = useState<string | null>(null)
   const [canReturnToSurvey, setCanReturnToSurvey] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [debugOtp, setDebugOtp] = useState<string | null>(null)
   const [txDigest, setTxDigest] = useState<string | null>(null)
 
   const [selfPaidConfirm, setSelfPaidConfirm] = useState<{
@@ -190,7 +187,6 @@ export default function AuthPage() {
   // ── 共用 mint/update handler ──────────────────────────────────────────────
 
   async function executeAndBroadcast(tx: Transaction, owner: string, signer: ActiveSigner) {
-    let lastBffError: any = undefined
     const fallbackResult = await executeTxWithFallback({
       tx,
       senderAddress: owner,
@@ -198,7 +194,6 @@ export default function AuthPage() {
       signAndExecute: async (t) => signer.signAndExecute(t as Transaction),
       onSelfPaidFallback: (estMist, bffError) =>
         new Promise<boolean>((resolve) => {
-          lastBffError = bffError
           const estSui = (Number(estMist) / 1_000_000_000).toFixed(4)
           const isLimitReached = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
           setSelfPaidConfirm({ estSui, resolve, isLimitReached })
@@ -351,7 +346,6 @@ export default function AuthPage() {
     setSuccessMsg(null)
     setOtpSentNotice(null)
     setCanReturnToSurvey(false)
-    setDebugOtp(null)
 
     try {
       const res = await fetch('/auth/email/otp', {
@@ -367,9 +361,6 @@ export default function AuthPage() {
 
       setStep('verify')
       setOtpSentNotice(t.otpSentSuccess)
-      if (data.code) {
-        setDebugOtp(data.code)
-      }
     } catch (err: any) {
       setErrorMsg(err.message || t.otpRequestError)
     } finally {
@@ -410,7 +401,6 @@ export default function AuthPage() {
       setEmail('')
       setOtpCode('')
       setStep('input')
-      setDebugOtp(null)
     } catch (err: any) {
       if (err.message === USER_DECLINED_SELF_PAID) return
       const friendly = translateMoveAbort(err.message)
@@ -1012,16 +1002,11 @@ export default function AuthPage() {
                           className="form-input text-center font-mono font-normal tracking-widest"
                           required
                         />
-                        {debugOtp && (
-                          <p className="text-sm text-blue-700 dark:text-blue-400 mt-2 bg-blue-50/50 dark:bg-blue-900/20 p-2.5 rounded-xl border border-blue-100 dark:border-blue-900/30 font-normal leading-relaxed">
-                            {t.devTip.replace('{code}', debugOtp)}
-                          </p>
-                        )}
                       </div>
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          onClick={() => { setStep('input'); setDebugOtp(null); setOtpSentNotice(null) }}
+                          onClick={() => { setStep('input'); setOtpSentNotice(null) }}
                           className="btn-secondary flex-1"
                         >
                           {t.btnBack}

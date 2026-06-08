@@ -1,6 +1,6 @@
 import { Transaction } from '@mysten/sui/transactions'
 import type { SuiClient } from '@mysten/sui/client'
-import type { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import type { SponsorSigner } from './signerBackend.js'
 import { netGasFromEffects, resolveGasBudget } from './gasMath.js'
 import type { GasConfig } from './gasConfig.js'
 import type {
@@ -14,7 +14,7 @@ export interface RunSponsorPipelineParams {
   txBytes: string
   senderAddress: string
   suiClient: SuiClient
-  keypair: Ed25519Keypair
+  signer: SponsorSigner
   sponsorAddress: string
   coinStore: CoinLockStore
   gasConfig: GasConfig
@@ -40,7 +40,7 @@ export async function runSponsorPipeline(
     txBytes,
     senderAddress,
     suiClient,
-    keypair,
+    signer,
     sponsorAddress,
     coinStore,
     gasConfig,
@@ -187,7 +187,7 @@ export async function runSponsorPipeline(
         }
       }
 
-      const signatureResult = await keypair.signTransaction(sponsoredTxBytes)
+      const signatureResult = await signer.signTransaction(sponsoredTxBytes)
       const dryRunMs = Date.now() - dryRunStart
 
       if (context.isPlatformSponsor && onPlatformSponsorSigned) {

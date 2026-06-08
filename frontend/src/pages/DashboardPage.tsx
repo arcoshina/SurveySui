@@ -21,7 +21,7 @@ import {
 } from '../lib/dashboardDecrypt'
 import { buildClosePtb, buildPurgePtb, PURGE_GRACE_MS } from '../lib/ptb'
 import { buildExtendWalrusBlobTx } from '../lib/walrusExtend'
-import { formatSsr, formatSui, formatFullPrecision, formatCompactInt, formatCompactCoin } from '../lib/format'
+import { formatSui, formatFullPrecision, formatCompactInt, formatCompactCoin } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
   base64urlToBytes,
@@ -34,7 +34,6 @@ import { parseFullSurveyMarkdown, type Question, type FullSurveyData, sanitizeQu
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
 import QRCode from 'qrcode'
 import { useT } from '../i18n'
-import { Globe, Zap } from 'lucide-react'
 import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 const SURVEY_KEY_PREFIX = 'surveysui:survey:'

@@ -59,45 +59,6 @@ const getMaxInlineAnswerBytes = (): number => {
 
 export const MAX_INLINE_ANSWER_BYTES = getMaxInlineAnswerBytes()
 
-// ── estimate fund cost ────────────────────────────────────────────────────────
-
-export interface EstimateFundCostParams {
-  /** SSR per response, integer in human units. */
-  perResponse: bigint
-  /** Max responses (quota). */
-  maxResponses: number
-  /** Current `Pool.total_sui_invested` in MIST. */
-  totalSuiInvested: bigint
-}
-
-export interface EstimateFundCostResult {
-  /** Total SSR (base units) the vault must hold to satisfy quota. */
-  netSsrBase: bigint
-  /** Gross SSR (base units) to mint via invest_and_mint (before vault fee). */
-  grossSsrBase: bigint
-  /** Vault fee deducted on `survey_vault::create` (base units). */
-  vaultFeeBase: bigint
-  /** SUI (MIST) to invest into the pool to receive `grossSsrBase` SSR. */
-  suiToInvest: bigint
-}
-
-/**
- * @deprecated Use `estimateFundCostV2`. Legacy V1 estimator (no repeat rewards).
- */
-export function estimateFundCost(p: EstimateFundCostParams): EstimateFundCostResult {
-  const netSsrBase = p.perResponse * BigInt(p.maxResponses) * SSR_BASE_PER_UNIT
-
-  const vaultFeeBase = (netSsrBase * VAULT_FEE_BPS) / 10_000n
-  const grossSsrBase = netSsrBase + vaultFeeBase
-
-  // suiToInvest = ceil(gross * (DECAY + total) / (DECAY * INITIAL_SSR_PER_SUI))
-  const denom = BONDING_DECAY * INITIAL_SSR_PER_SUI
-  const numer = grossSsrBase * (BONDING_DECAY + p.totalSuiInvested)
-  const suiToInvest = (numer + denom - 1n) / denom
-
-  return { netSsrBase, grossSsrBase, vaultFeeBase, suiToInvest }
-}
-
 // ── estimate fund cost V2 ─────────────────────────────────────────────────────
 
 export interface EstimateFundCostV2Params {

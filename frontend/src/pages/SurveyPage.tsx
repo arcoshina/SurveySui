@@ -1,11 +1,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { AlertTriangle, Check, Globe, Zap, Info } from 'lucide-react'
+import { AlertTriangle, Check, Globe, Info } from 'lucide-react'
 import {
   ConnectButton,
   useCurrentWallet,
   useSuiClient,
-  useSignPersonalMessage,
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import { fromBase64 } from '@mysten/sui/utils'
@@ -126,7 +125,6 @@ export default function SurveyPage() {
   const isWalletConnecting = connectionStatus === 'connecting'
   const suiClient = useSuiClient()
   const activeSigner = useActiveSigner()
-  const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
   const [selfPaidMode, setSelfPaidMode] = useState(false)
   const [isUploadingAnswer, setIsUploadingAnswer] = useState(false)
   const [gasMode, setGasMode] = useState<'unknown' | 'sponsored' | 'self_paid_warning' | 'limit_reached_warning'>('unknown')
@@ -139,7 +137,6 @@ export default function SurveyPage() {
   // SurveyPass SBT & Verification States
   const registryId =
     import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
-  const configId = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
 
   const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
   const [passCredentials, setPassCredentials] = useState<any[]>([])
@@ -482,13 +479,11 @@ export default function SurveyPage() {
         }
 
         let markdown = ''
-        let creatorPublicKeyBytes: Uint8Array
 
         const parsedBlob = parseContentBlob(rawContent)
         if (parsedBlob.version === 0x00) {
           // 公開問卷 (明文)
           markdown = parsedBlob.markdown || ''
-          creatorPublicKeyBytes = new Uint8Array(32) // dummy key for compatibility
         } else if (parsedBlob.version === 0x01) {
           // 加密問卷 (新版)
           if (!hash) {
@@ -502,7 +497,6 @@ export default function SurveyPage() {
           }
           const dec = await decryptSurveyContent(rawContent, contentKey)
           markdown = dec.markdown
-          creatorPublicKeyBytes = dec.creatorPublicKeyBytes
         } else {
           // Legacy 格式 (無前置 tag)
           if (hash) {
@@ -514,12 +508,10 @@ export default function SurveyPage() {
             }
             const dec = await decryptSurveyContent(rawContent, contentKey)
             markdown = dec.markdown
-            creatorPublicKeyBytes = dec.creatorPublicKeyBytes
           } else {
             if (rawContent.length < 32) {
               throw new Error(t.errCorruptContent)
             }
-            creatorPublicKeyBytes = rawContent.slice(0, 32)
             markdown = new TextDecoder().decode(rawContent.slice(32))
           }
         }

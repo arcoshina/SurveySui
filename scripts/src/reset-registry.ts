@@ -18,37 +18,12 @@
  *   4. 把新 ID 寫進根目錄 `.env`
  *   4. 印出下一步（重啟 BFF / 重啟 vite dev server）
  */
-import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
 import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { requireEnv } from './env.js'
 import { deployPackage, initAmmPool, mergeRootEnv } from './init.js'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-
-function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
-  const existing: Record<string, string> = {}
-  if (existsSync(filePath)) {
-    for (const line of readFileSync(filePath, 'utf8').split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-      const idx = trimmed.indexOf('=')
-      if (idx === -1) continue
-      existing[trimmed.slice(0, idx)] = trimmed.slice(idx + 1)
-    }
-  }
-  const merged = { ...existing, ...updates }
-  writeFileSync(
-    filePath,
-    Object.entries(merged)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n') + '\n',
-    'utf8'
-  )
-}
 
 async function main() {
   console.log('⚠️  reset-registry：將重發整個 Move package、清除 on-chain SurveyRegistry。')

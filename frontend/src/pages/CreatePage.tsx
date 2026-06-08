@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Trash2, AlertTriangle, Plus, Info } from 'lucide-react'
 import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit'
-import { renderMarkdown } from '../lib/markdown'
 import {
   type FullSurveyData,
   type Question,
@@ -321,6 +320,7 @@ export default function CreatePage() {
       questions: prev.questions.map((q, i) => {
         if (i !== index) return q
         const { maxLen, ...rest } = q
+        void maxLen
         return {
           ...rest,
           type: newType,
@@ -669,6 +669,7 @@ export default function CreatePage() {
                                   questions: prev.questions.map((item, i) => {
                                     if (i !== idx) return item
                                     const { maxLen, ...rest } = item
+                                    void maxLen
                                     return rest
                                   }),
                                 }))

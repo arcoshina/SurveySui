@@ -43,3 +43,14 @@ scratch/
 
 # BFF runtime data (auto-generated ledger)
 bff/data/
+
+# Cloudflare Wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# TypeScript incremental
+*.tsbuildinfo
+
+# Local agent settings
+.claude/settings.local.json

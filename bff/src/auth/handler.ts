@@ -133,20 +133,9 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       const code = Math.floor(100000 + Math.random() * 900000).toString()
       otpStore.set(email, code)
 
-      console.log(`[OTP] Email: ${email}, Code: ${code}, Lang: ${lang}`)
+      await sendOtpEmail(email, code, lang)
 
-      if (process.env.NODE_ENV === 'production') {
-        await sendOtpEmail(email, code, lang)
-      }
-
-      const responsePayload: { message: string; code?: string } = {
-        message: 'OTP sent successfully',
-      }
-      if (process.env.NODE_ENV !== 'production') {
-        responsePayload.code = code
-      }
-
-      return responsePayload
+      return { message: 'OTP sent successfully' }
     }
   )
 
@@ -250,7 +239,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     }
   )
 
-  // GET /auth/:provider/callback (Apple uses POST form_post, but we handle GET too)
+  // GET /auth/:provider/callback
   const callbackHandler = async (
     req: FastifyRequest<{
       Params: { provider: string }

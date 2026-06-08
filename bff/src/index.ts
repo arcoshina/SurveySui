@@ -1,6 +1,6 @@
 import { SuiClient } from '@mysten/sui/client'
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { buildApp } from './app.js'
+import { loadSponsorSigner } from './gas/sponsorSigner.js'
 import { createStatsCache } from './stats/cache.js'
 import { assertSecureEnv } from './security.js'
 import { assertGasConfig } from './gas/gasConfig.js'
@@ -33,17 +33,13 @@ const app = await buildApp({
   sponsorCoinQueue,
 })
 
-const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
-if (privKeyHex) {
-  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-  const keypair = Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
-  
-  startCoinMergeTask(suiClient, keypair, sponsorCoinQueue)
+const sponsorSigner = loadSponsorSigner()
+if (sponsorSigner) {
+  startCoinMergeTask(suiClient, sponsorSigner, sponsorCoinQueue)
   console.log('[BFF] SUI Coin merge background task started.')
 
   // Auto-destroy lifecycle: periodically purge surveys past their grace window.
-  startPurgeTask(suiClient, keypair, packageId)
+  startPurgeTask(suiClient, sponsorSigner, packageId)
 }
 
 await app.listen({ port, host: '0.0.0.0' })

@@ -35,7 +35,6 @@ const auth: AuthDict = {
   sendingOtp: 'Enviando código de verificación...',
   btnGetOtp: 'Obtener código de verificación ➡',
   otpCodeLabel: 'Código de verificación (6 dígitos)',
-  devTip: 'Consejo de desarrollador (sin recibir correo): Ingresa {code}.',
   btnBack: 'Volver a modificar',
   submitting: 'Enviando...',
   btnUpdatePass: 'Actualizar verificación',

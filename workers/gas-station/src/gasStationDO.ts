@@ -1,12 +1,13 @@
 import { SuiClient } from '@mysten/sui/client'
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import {
   checkAndMergeCoins,
+  createSponsorSignerFromEnv,
   loadGasConfig,
   runSponsorPipeline,
   type SponsorPipelineContext,
+  type SponsorSigner,
 } from '@surveysui/gas-station-core'
-import type { GasStationEnv } from './env.js'
+import { toGasConfigEnv, toSponsorSignerEnv, type GasStationEnv } from './env.js'
 import { DurableObjectCoinLockStore } from './durableObjectCoinLockStore.js'
 import { ensureD1Schema } from './d1Stores.js'
 
@@ -37,7 +38,7 @@ export class GasStationDO implements DurableObject {
     private readonly state: DurableObjectState,
     private readonly env: GasStationEnv
   ) {
-    const gasConfig = loadGasConfig(this.env as Record<string, string | undefined>)
+    const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
     this.coinStore = new DurableObjectCoinLockStore(
       this.state.storage,
       gasConfig.coinQueueLockTtlMs,
@@ -47,7 +48,7 @@ export class GasStationDO implements DurableObject {
     void this.state.blockConcurrencyWhile(async () => {
       await this.coinStore.load()
       if (this.env.DB) await ensureD1Schema(this.env.DB)
-      const gasConfig = loadGasConfig(this.env as Record<string, string | undefined>)
+      const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
       const intervalMs = gasConfig.coinMergeIntervalMs
       const existing = await this.state.storage.get<number>('nextMergeAlarm')
       if (!existing) {
@@ -75,22 +76,25 @@ export class GasStationDO implements DurableObject {
   }
 
   async alarm(): Promise<void> {
-    const privKeyHex = this.env.SURVEY_PASS_ISSUER_PRIV
-    if (!privKeyHex) return
+    const signer = this.loadSponsorSigner()
+    if (!signer) return
 
-    const gasConfig = loadGasConfig(this.env as Record<string, string | undefined>)
-    const keypair = keypairFromHex(privKeyHex)
+    const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
     const suiClient = new SuiClient({ url: this.env.SUI_RPC_URL })
 
     await checkAndMergeCoins({
       suiClient,
-      sponsorKeypair: keypair,
+      sponsorSigner: signer,
       thresholdMist: gasConfig.coinMergeThresholdMist,
       triggerCount: gasConfig.coinMergeTriggerCount,
       lockedCoinIds: this.coinStore.getLockedCoinIds(),
     })
 
     await this.state.storage.setAlarm(Date.now() + gasConfig.coinMergeIntervalMs)
+  }
+
+  private loadSponsorSigner(): SponsorSigner | null {
+    return createSponsorSignerFromEnv(toSponsorSignerEnv(this.env))
   }
 
   private async drainQueue(): Promise<void> {
@@ -115,21 +119,20 @@ export class GasStationDO implements DurableObject {
   }
 
   private async handleSponsor(body: SponsorRequestBody): Promise<Response> {
-    const privKeyHex = this.env.SURVEY_PASS_ISSUER_PRIV
-    if (!privKeyHex) {
+    const signer = this.loadSponsorSigner()
+    if (!signer) {
       return Response.json({ error: 'no_key', message: 'Sponsor key not configured' }, { status: 503 })
     }
 
-    const gasConfig = loadGasConfig(this.env as Record<string, string | undefined>)
-    const keypair = keypairFromHex(privKeyHex)
-    const sponsorAddress = keypair.getPublicKey().toSuiAddress()
+    const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
+    const sponsorAddress = signer.getSponsorAddress()
     const suiClient = new SuiClient({ url: this.env.SUI_RPC_URL })
 
     const outcome = await runSponsorPipeline({
       txBytes: body.txBytes,
       senderAddress: body.senderAddress,
       suiClient,
-      keypair,
+      signer,
       sponsorAddress,
       coinStore: this.coinStore,
       gasConfig,
@@ -174,15 +177,14 @@ export class GasStationDO implements DurableObject {
   }
 
   private async health() {
-    const privKeyHex = this.env.SURVEY_PASS_ISSUER_PRIV
-    if (!privKeyHex) {
+    const signer = this.loadSponsorSigner()
+    if (!signer) {
       return { available: false, reason: 'no_key', queueDepth: this.metrics.queueDepth }
     }
 
-    const keypair = keypairFromHex(privKeyHex)
-    const sponsorAddress = keypair.getPublicKey().toSuiAddress()
+    const sponsorAddress = signer.getSponsorAddress()
     const suiClient = new SuiClient({ url: this.env.SUI_RPC_URL })
-    const gasConfig = loadGasConfig(this.env as Record<string, string | undefined>)
+    const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
 
     try {
       const coins = await suiClient.getCoins({
@@ -211,10 +213,4 @@ export class GasStationDO implements DurableObject {
       return { available: false, reason: message, queueDepth: this.metrics.queueDepth }
     }
   }
-}
-
-function keypairFromHex(privKeyHex: string): Ed25519Keypair {
-  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-  return Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
 }

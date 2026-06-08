@@ -1,10 +1,11 @@
 import { Transaction } from '@mysten/sui/transactions'
 import type { SuiClient } from '@mysten/sui/client'
-import type { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import type { SponsorSigner } from './signerBackend.js'
+import { signAndExecuteWithSponsor } from './signerBackend.js'
 
 export interface CoinMergeConfig {
   suiClient: SuiClient
-  sponsorKeypair: Ed25519Keypair
+  sponsorSigner: SponsorSigner
   thresholdMist?: bigint
   triggerCount?: number
   lockedCoinIds?: Set<string>
@@ -13,13 +14,13 @@ export interface CoinMergeConfig {
 export async function checkAndMergeCoins(config: CoinMergeConfig): Promise<boolean> {
   const {
     suiClient,
-    sponsorKeypair,
+    sponsorSigner,
     thresholdMist = 100_000_000n,
     triggerCount = 50,
     lockedCoinIds = new Set<string>(),
   } = config
 
-  const sponsorAddress = sponsorKeypair.getPublicKey().toSuiAddress()
+  const sponsorAddress = sponsorSigner.getSponsorAddress()
   const allCoins: Awaited<ReturnType<SuiClient['getCoins']>>['data'] = []
   let cursor: string | null | undefined = undefined
 
@@ -76,10 +77,7 @@ export async function checkAndMergeCoins(config: CoinMergeConfig): Promise<boole
       mergeTargets.map((id) => tx.object(id))
     )
 
-    await suiClient.signAndExecuteTransaction({
-      transaction: tx,
-      signer: sponsorKeypair,
-    })
+    await signAndExecuteWithSponsor(suiClient, sponsorSigner, tx)
 
     console.log(
       `[CoinMerge] Merged ${mergeTargets.length + 1} SUI coins into ${primaryCoinId}`

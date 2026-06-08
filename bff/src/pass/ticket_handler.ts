@@ -62,7 +62,7 @@ export function registerTicketRoutes(app: FastifyInstance, deps: { suiClient: Su
         const messageBytes = new TextEncoder().encode(message)
         try {
           await verifyPersonalMessageSignature(messageBytes, signature, { address: walletA })
-        } catch (err) {
+        } catch {
           return reply.status(401).send({
             error: 'invalid_signature',
             message: 'Authorization signature is invalid or not signed by walletA',

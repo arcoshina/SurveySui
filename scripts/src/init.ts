@@ -34,6 +34,13 @@ try {
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
+/** Fully-resolved object reference for `tx.receivingRef`. */
+export interface ObjectRef {
+  objectId: string
+  version: string
+  digest: string
+}
+
 export interface DeployResult {
   packageId: string
   srTreasuryId: string
@@ -41,7 +48,13 @@ export interface DeployResult {
   surveyRegistryId: string
   nullifierRegistryId: string
   issuerConfigId: string
+  srCurrency: ObjectRef
+  ssrCurrency: ObjectRef
 }
+
+/** Sui system CoinRegistry shared object (address 0xc). */
+const COIN_REGISTRY_ID =
+  '0x000000000000000000000000000000000000000000000000000000000000000c'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,6 +73,75 @@ function buildPackage(): { modules: string[]; dependencies: string[] } {
     throw new Error(`Unexpected build output format: ${match[0]}`)
   }
   return { modules: parsed.modules, dependencies: parsed.dependencies }
+}
+
+type ObjectChange = NonNullable<
+  Awaited<ReturnType<SuiClient['signAndExecuteTransaction']>>['objectChanges']
+>[number]
+
+function findCurrencyRef(
+  objectChanges: ObjectChange[] | null | undefined,
+  packageId: string,
+  coinTypeSuffix: 'survey_reward::SURVEY_REWARD' | 'stacked_survey_reward::STACKED_SURVEY_REWARD'
+): ObjectRef | null {
+  const needle = `${packageId}::${coinTypeSuffix}`
+  for (const change of objectChanges ?? []) {
+    if (change.type !== 'created') continue
+    if (!change.objectType.includes('coin_registry::Currency')) continue
+    if (!change.objectType.includes(needle)) continue
+    if (!('digest' in change) || !('version' in change)) continue
+    return {
+      objectId: change.objectId,
+      version: String(change.version),
+      digest: change.digest,
+    }
+  }
+  return null
+}
+
+async function resolveObjectRef(
+  client: SuiClient,
+  objectId: string,
+  partial?: ObjectRef | null
+): Promise<ObjectRef> {
+  if (partial?.digest && partial?.version) return partial
+  const obj = await client.getObject({ id: objectId, options: { showContent: false } })
+  if (!obj.data?.digest || !obj.data?.version) {
+    throw new Error(`Cannot resolve object ref for ${objectId}`)
+  }
+  return { objectId, digest: obj.data.digest, version: obj.data.version }
+}
+
+/**
+ * OTW coin_registry step 2: promote Currency objects sent to 0xc during publish init.
+ */
+export async function finalizeCurrencyRegistration(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  packageId: string,
+  srCurrency: ObjectRef,
+  ssrCurrency: ObjectRef
+): Promise<void> {
+  console.log('Finalizing SR/SSR currency registration in CoinRegistry…')
+  const tx = new Transaction()
+  tx.moveCall({
+    target: '0x2::coin_registry::finalize_registration',
+    typeArguments: [`${packageId}::survey_reward::SURVEY_REWARD`],
+    arguments: [tx.object(COIN_REGISTRY_ID), tx.receivingRef(srCurrency)],
+  })
+  tx.moveCall({
+    target: '0x2::coin_registry::finalize_registration',
+    typeArguments: [`${packageId}::stacked_survey_reward::STACKED_SURVEY_REWARD`],
+    arguments: [tx.object(COIN_REGISTRY_ID), tx.receivingRef(ssrCurrency)],
+  })
+
+  const result = await client.signAndExecuteTransaction({
+    transaction: tx,
+    signer: keypair,
+    options: { showEffects: true },
+  })
+  await client.waitForTransaction({ digest: result.digest, timeout: 120_000 })
+  console.log('  Currency registration finalized for SR and SSR')
 }
 
 /**
@@ -148,20 +230,33 @@ export async function deployPackage(
     }
   }
 
+  let srCurrency = findCurrencyRef(result.objectChanges, packageId, 'survey_reward::SURVEY_REWARD')
+  let ssrCurrency = findCurrencyRef(
+    result.objectChanges,
+    packageId,
+    'stacked_survey_reward::STACKED_SURVEY_REWARD'
+  )
+
   if (
     !packageId ||
     !srTreasuryId ||
     !ssrTreasuryId ||
     !surveyRegistryId ||
     !nullifierRegistryId ||
-    !issuerConfigId
+    !issuerConfigId ||
+    !srCurrency ||
+    !ssrCurrency
   ) {
     throw new Error(
       `Deploy incomplete. packageId="${packageId}" srTreasuryId="${srTreasuryId}" ` +
         `ssrTreasuryId="${ssrTreasuryId}" surveyRegistryId="${surveyRegistryId}" ` +
-        `nullifierRegistryId="${nullifierRegistryId}" issuerConfigId="${issuerConfigId}"`
+        `nullifierRegistryId="${nullifierRegistryId}" issuerConfigId="${issuerConfigId}" ` +
+        `srCurrency=${srCurrency?.objectId ?? 'missing'} ssrCurrency=${ssrCurrency?.objectId ?? 'missing'}`
     )
   }
+
+  srCurrency = await resolveObjectRef(client, srCurrency.objectId, srCurrency)
+  ssrCurrency = await resolveObjectRef(client, ssrCurrency.objectId, ssrCurrency)
 
   console.log(`  packageId:            ${packageId}`)
   console.log(`  srTreasuryId:         ${srTreasuryId}`)
@@ -169,6 +264,8 @@ export async function deployPackage(
   console.log(`  surveyRegistryId:     ${surveyRegistryId}`)
   console.log(`  nullifierRegistryId:  ${nullifierRegistryId}`)
   console.log(`  issuerConfigId:       ${issuerConfigId}`)
+  console.log(`  srCurrencyId:         ${srCurrency.objectId}`)
+  console.log(`  ssrCurrencyId:        ${ssrCurrency.objectId}`)
   return {
     packageId,
     srTreasuryId,
@@ -176,6 +273,8 @@ export async function deployPackage(
     surveyRegistryId,
     nullifierRegistryId,
     issuerConfigId,
+    srCurrency,
+    ssrCurrency,
   }
 }
 
@@ -263,12 +362,17 @@ async function main() {
     surveyRegistryId,
     nullifierRegistryId,
     issuerConfigId,
+    srCurrency,
+    ssrCurrency,
   } = await deployPackage(client, keypair, adminAddress)
 
-  // 2. Init AMM pool (empty bonding-curve pool; no initial liquidity required)
+  // 2. Promote OTW Currency objects into CoinRegistry (wallet metadata discoverability)
+  await finalizeCurrencyRegistration(client, keypair, packageId, srCurrency, ssrCurrency)
+
+  // 3. Init AMM pool (empty bonding-curve pool; no initial liquidity required)
   const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
 
-  // 3. Set Issuer Pubkey in IssuerConfig
+  // 4. Set Issuer Pubkey in IssuerConfig
   let issuerPrivHex = process.env.SURVEY_PASS_ISSUER_PRIV
   if (!issuerPrivHex) {
     issuerPrivHex = '0101010101010101010101010101010101010101010101010101010101010101'
@@ -294,7 +398,7 @@ async function main() {
   await client.waitForTransaction({ digest: setPubkeyResult.digest })
   console.log('  Issuer public key set successfully!')
 
-  // 4. Persist IDs into root .env
+  // 5. Persist IDs into root .env
   mergeRootEnv({
     SUI_PACKAGE_ID: packageId,
     SR_TREASURY_ID: srTreasuryId,
@@ -307,7 +411,7 @@ async function main() {
 
 
 
-  // 5. Verify pool is live
+  // 6. Verify pool is live
   const state = await queryPoolState(client, poolId)
   console.log(`\nPool verified (empty at start):`)
   console.log(`  sui_reserve:        ${state.suiReserve}`)

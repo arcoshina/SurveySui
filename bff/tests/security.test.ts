@@ -1,4 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../src/email/sender.js', () => ({
+  sendOtpEmail: vi.fn().mockResolvedValue(undefined),
+}))
 import type { SuiClient } from '@mysten/sui/client'
 import { buildApp } from '../src/app.js'
 import { createStatsCache } from '../src/stats/cache.js'

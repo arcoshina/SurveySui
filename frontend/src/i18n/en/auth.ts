@@ -35,7 +35,6 @@ const auth: AuthDict = {
   sendingOtp: 'Sending code...',
   btnGetOtp: 'Get Code ➡',
   otpCodeLabel: 'OTP Code (6 digits)',
-  devTip: 'Dev Tip: Enter {code} to verify.',
   btnBack: 'Go Back',
   submitting: 'Submitting...',
   btnUpdatePass: 'Update SurveyPass',

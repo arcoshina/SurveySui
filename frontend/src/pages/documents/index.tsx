@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, BookOpen, FileText } from 'lucide-react'
+import { ArrowLeft, BookOpen } from 'lucide-react'
 import { renderMarkdown } from '../../lib/markdown'
 
 const demoDocMarkdown = `

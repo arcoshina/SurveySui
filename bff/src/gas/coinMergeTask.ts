@@ -1,5 +1,5 @@
 import type { SuiClient } from '@mysten/sui/client'
-import type { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import type { SponsorSigner } from '@surveysui/gas-station-core'
 import { checkAndMergeCoins } from '@surveysui/gas-station-core'
 import { getGasConfig } from './gasConfig.js'
 import type { SponsorCoinQueue } from './sponsorCoinQueue.js'
@@ -10,7 +10,7 @@ let coinMergeInterval: NodeJS.Timeout | null = null
 
 export function startCoinMergeTask(
   suiClient: SuiClient,
-  keypair: Ed25519Keypair,
+  sponsorSigner: SponsorSigner,
   coinQueue?: SponsorCoinQueue,
   checkIntervalMs?: number
 ) {
@@ -26,7 +26,7 @@ export function startCoinMergeTask(
   const run = () => {
     checkAndMergeCoins({
       suiClient,
-      sponsorKeypair: keypair,
+      sponsorSigner,
       thresholdMist,
       triggerCount,
       lockedCoinIds: coinQueue?.getLockedCoinIds() ?? new Set(),

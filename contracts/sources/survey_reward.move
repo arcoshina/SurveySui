@@ -1,6 +1,8 @@
 module surveysui::survey_reward;
 
+use std::string;
 use sui::coin::{Self, Coin, TreasuryCap};
+use sui::coin_registry;
 
 const DECIMALS: u8 = 9;
 const TOTAL_SUPPLY_CAP: u64 = 1_000_000_000 * 1_000_000_000;
@@ -17,16 +19,16 @@ public struct SrTreasury has key {
 }
 
 fun init(witness: SURVEY_REWARD, ctx: &mut TxContext) {
-    let (cap, metadata) = coin::create_currency(
+    let (initializer, cap) = coin_registry::new_currency_with_otw(
         witness,
         DECIMALS,
-        b"SR",
-        b"Surveysui Reward",
-        b"Survey participation reward token",
-        option::none(),
+        string::utf8(b"SR"),
+        string::utf8(b"Surveysui Reward"),
+        string::utf8(b"Survey participation reward token"),
+        string::utf8(b""),
         ctx,
     );
-    transfer::public_freeze_object(metadata);
+    coin_registry::finalize_and_delete_metadata_cap(initializer, ctx);
     transfer::share_object(SrTreasury { id: object::new(ctx), cap });
 }
 

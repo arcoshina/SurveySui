@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { Transaction } from '@mysten/sui/transactions'
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify'
 import type { SuiClient } from '@mysten/sui/client'
+import { signAndExecuteWithSponsor } from '@surveysui/gas-station-core'
+import { loadSponsorSigner } from '../gas/sponsorSigner.js'
 
 interface PassDeleteRequestBody {
   passId: string
@@ -18,15 +19,6 @@ function normalizeAddress(addr: string): string {
   let clean = addr.toLowerCase()
   if (clean.startsWith('0x')) clean = clean.slice(2)
   return '0x' + clean.padStart(64, '0')
-}
-
-function loadSponsorKeypair(): { keypair: Ed25519Keypair; sponsorAddress: string } | null {
-  const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
-  if (!privKeyHex) return null
-  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-  const keypair = Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
-  return { keypair, sponsorAddress: keypair.getPublicKey().toSuiAddress() }
 }
 
 // 與前端一致的授權訊息格式（綁定 passId + 時間戳，防止跨 Pass / 過期重放）。
@@ -53,11 +45,11 @@ export function registerPassRoutes(app: FastifyInstance, deps: { suiClient: SuiC
         return reply.status(500).send({ error: 'server_misconfigured', message: 'Missing package/registry/config IDs' })
       }
 
-      const sponsor = loadSponsorKeypair()
-      if (!sponsor) {
+      const sponsorSigner = loadSponsorSigner()
+      if (!sponsorSigner) {
         return reply.status(503).send({ error: 'sponsor_unavailable', message: 'Sponsor key not configured' })
       }
-      const { keypair, sponsorAddress } = sponsor
+      const sponsorAddress = sponsorSigner.getSponsorAddress()
 
       try {
         // 1. 時間戳新鮮度（限制重放窗口）
@@ -104,10 +96,8 @@ export function registerPassRoutes(app: FastifyInstance, deps: { suiClient: SuiC
         })
         tx.setSender(sponsorAddress)
 
-        const result = await deps.suiClient.signAndExecuteTransaction({
-          signer: keypair,
-          transaction: tx,
-          options: { showEffects: true },
+        const result = await signAndExecuteWithSponsor(deps.suiClient, sponsorSigner, tx, {
+          showEffects: true,
         })
 
         if (result.effects?.status.status === 'failure') {

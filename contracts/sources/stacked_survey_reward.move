@@ -1,6 +1,8 @@
 module surveysui::stacked_survey_reward;
 
+use std::string;
 use sui::coin::{Self, Coin, TreasuryCap};
+use sui::coin_registry;
 
 const DECIMALS: u8 = 9;
 const TOTAL_SUPPLY_CAP: u64 = 1_000_000_000 * 1_000_000_000;
@@ -17,16 +19,16 @@ public struct SsrTreasury has key {
 }
 
 fun init(witness: STACKED_SURVEY_REWARD, ctx: &mut TxContext) {
-    let (cap, metadata) = coin::create_currency(
+    let (initializer, cap) = coin_registry::new_currency_with_otw(
         witness,
         DECIMALS,
-        b"SSR",
-        b"Stacked Surveysui Reward",
-        b"Stacked survey reward — circulating reward token",
-        option::none(),
+        string::utf8(b"SSR"),
+        string::utf8(b"Stacked Surveysui Reward"),
+        string::utf8(b"Stacked survey reward — circulating reward token"),
+        string::utf8(b""),
         ctx,
     );
-    transfer::public_freeze_object(metadata);
+    coin_registry::finalize_and_delete_metadata_cap(initializer, ctx);
     transfer::share_object(SsrTreasury { id: object::new(ctx), cap });
 }
 

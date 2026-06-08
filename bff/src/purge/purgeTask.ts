@@ -1,5 +1,6 @@
 import type { SuiClient } from '@mysten/sui/client'
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import type { SponsorSigner } from '@surveysui/gas-station-core'
+import { signAndExecuteWithSponsor } from '@surveysui/gas-station-core'
 import {
   buildAndDryRunPurgeWithRebateRefund,
   readVaultCreator,
@@ -20,7 +21,7 @@ const STATUS_CLOSED = 1
 
 export interface PurgeTaskConfig {
   suiClient: SuiClient
-  sponsorKeypair: Ed25519Keypair
+  sponsorSigner: SponsorSigner
   packageId: string
   registryId: string
   /** Max surveys to purge per cycle (bounds run time / gas). */
@@ -69,7 +70,7 @@ function isPurgeable(v: VaultState, nowMs: bigint): boolean {
 
 /** One scan: find purge-eligible surveys and destroy them. Returns the count purged. */
 export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
-  const { suiClient, sponsorKeypair, packageId, registryId, maxPerCycle = 10 } = config
+  const { suiClient, sponsorSigner, packageId, registryId, maxPerCycle = 10 } = config
 
   const nowMs = BigInt(Date.now())
 
@@ -111,13 +112,13 @@ export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
       const { tx, gasBudget, transferAmount, platformFee, creator: refundCreator } =
         await buildAndDryRunPurgeWithRebateRefund(
           suiClient,
-          sponsorKeypair,
+          sponsorSigner,
           { packageId, registryId, surveyId, vaultId },
           creator
         )
 
       tx.setGasBudget(Number(gasBudget))
-      await suiClient.signAndExecuteTransaction({ transaction: tx, signer: sponsorKeypair })
+      await signAndExecuteWithSponsor(suiClient, sponsorSigner, tx)
 
       purged++
       if (transferAmount > 0n) {
@@ -144,7 +145,7 @@ let purgeInterval: NodeJS.Timeout | null = null
  */
 export function startPurgeTask(
   suiClient: SuiClient,
-  keypair: Ed25519Keypair,
+  sponsorSigner: SponsorSigner,
   packageId: string
 ): () => void {
   if (process.env.PURGE_TASK_ENABLED !== 'true') {
@@ -167,7 +168,7 @@ export function startPurgeTask(
   if (purgeInterval) clearInterval(purgeInterval)
 
   const run = () => {
-    checkAndPurge({ suiClient, sponsorKeypair: keypair, packageId, registryId, maxPerCycle }).catch(
+    checkAndPurge({ suiClient, sponsorSigner, packageId, registryId, maxPerCycle }).catch(
       (err) => console.error('[PurgeTask] Error in background task:', err)
     )
   }

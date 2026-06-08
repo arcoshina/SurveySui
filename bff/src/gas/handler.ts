@@ -14,6 +14,7 @@ import {
   todayUtcDate,
 } from './platformSponsorLedger.js'
 import { InMemoryCoinLockStore, runSponsorPipeline } from '@surveysui/gas-station-core'
+import { loadSponsorSigner, requireSponsorSigner } from './sponsorSigner.js'
 import { getGasConfig, healthMinBalanceMist } from './gasConfig.js'
 import { assertPlatformSponsorTierEligible } from './platformSponsorEligibility.js'
 import { SponsorCoinQueue } from './sponsorCoinQueue.js'
@@ -156,6 +157,16 @@ function extractPassTicketsFromMoveCall(
   return null
 }
 
+function loadTicketIssuerKeypair(): Ed25519Keypair {
+  const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
+  if (!privKeyHex) {
+    throw new Error('SURVEY_PASS_ISSUER_PRIV is not set')
+  }
+  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
+  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
+  return Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
+}
+
 async function verifyPassTicketSignature(
   keypair: Ed25519Keypair,
   senderAddress: string,
@@ -270,14 +281,11 @@ export function registerGasRoutes(
   app.get('/api/gas/health', async (_req, reply): Promise<GasHealthResponse> => {
     try {
       const gasConfig = getGasConfig()
-      const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
-      if (!privKeyHex) {
+      const sponsorSigner = loadSponsorSigner()
+      if (!sponsorSigner) {
         return { available: false, reason: 'no_key' }
       }
-      const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-      const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-      const keypair = Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
-      const sponsorAddress = keypair.getPublicKey().toSuiAddress()
+      const sponsorAddress = sponsorSigner.getSponsorAddress()
 
       const balance = await deps.suiClient.getBalance({
         owner: sponsorAddress,
@@ -340,16 +348,8 @@ export function registerGasRoutes(
       }
 
       try {
-        const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
-        if (!privKeyHex) {
-          throw new Error('SURVEY_PASS_ISSUER_PRIV is not set')
-        }
-
-        const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-        const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-        const keypairBytes = privateKeyBytes.slice(0, 32)
-        const keypair = Ed25519Keypair.fromSecretKey(keypairBytes)
-        const sponsorAddress = keypair.getPublicKey().toSuiAddress()
+        const sponsorSigner = requireSponsorSigner()
+        const sponsorAddress = sponsorSigner.getSponsorAddress()
 
         const scope = resolveCountScope()
         const count = await getSponsorCount({
@@ -404,16 +404,9 @@ export function registerGasRoutes(
       }
 
       try {
-        const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
-        if (!privKeyHex) {
-          throw new Error('SURVEY_PASS_ISSUER_PRIV is not set')
-        }
-
-        const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-        const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-        const keypairBytes = privateKeyBytes.slice(0, 32)
-        const keypair = Ed25519Keypair.fromSecretKey(keypairBytes)
-        const sponsorAddress = keypair.getPublicKey().toSuiAddress()
+        const sponsorSigner = requireSponsorSigner()
+        const sponsorAddress = sponsorSigner.getSponsorAddress()
+        const ticketIssuerKeypair = loadTicketIssuerKeypair()
 
         // 1. Reconstruct transaction from transaction kind
         const tx = Transaction.fromKind(Buffer.from(txBytes, 'base64'))
@@ -539,7 +532,7 @@ export function registerGasRoutes(
             }
 
             for (const ticket of tickets) {
-              const verifyRes = await verifyPassTicketSignature(keypair, senderAddress, ticket)
+              const verifyRes = await verifyPassTicketSignature(ticketIssuerKeypair, senderAddress, ticket)
               if (!verifyRes.ok) {
                 return reply.status(verifyRes.status).send({
                   error: verifyRes.error,
@@ -738,7 +731,7 @@ export function registerGasRoutes(
           txBytes,
           senderAddress,
           suiClient: deps.suiClient,
-          keypair,
+          signer: sponsorSigner,
           sponsorAddress,
           coinStore: coinQueue,
           gasConfig,
