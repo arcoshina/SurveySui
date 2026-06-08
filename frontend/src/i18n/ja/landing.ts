@@ -5,6 +5,7 @@ const landing: LandingDict = {
   heroDesc: '回答無料、報酬の自動配布、改ざん不可能なデータ。SurveySuiはパブリックブロックチェーン上に構築されたアンケートプラットフォームです。',
   btnCreate: 'アンケートを作成',
   btnGuide: '初心者ガイド',
+  btnDocs: 'ドキュメント',
   btnExplore: '広場を探索',
   stepsTitle: '3ステップでアンケート完了',
   stepLabel: 'ステップ',

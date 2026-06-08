@@ -24,8 +24,16 @@ const EEmptyQuestion: u64 = 4;
 const EDuplicateQuestionId: u64 = 5;
 const EEmptyAllowedSources: u64 = 6;
 const EEmptyContent: u64 = 7;
+const EAllowlistTooLarge: u64 = 8;
+const EInvalidClaimMode: u64 = 9;
+const EMissingBlobObjectId: u64 = 10;
 
 const MAX_OPTIONS_LIMIT: u64 = 50;
+/// Gas / tx-size guard for audience allowlist (see docs/V4_Eligibility.md).
+const MAX_ALLOWED_NULLIFIERS: u64 = 100;
+
+const CLAIM_MODE_PASS_AUDIENCE: u8 = 0;
+const CLAIM_MODE_ONE_TIME_TICKET: u8 = 1;
 
 // ── structs ───────────────────────────────────────────────────────────────────
 
@@ -45,11 +53,19 @@ public struct Survey has key {
     content_hash: vector<u8>,
     encrypted_content: Option<vector<u8>>,
     survey_blob_id: Option<vector<u8>>,
+    /// Walrus blob Sui object ID for `extend_blob`; required when `survey_blob_id` is set.
+    survey_blob_object_id: Option<ID>,
     schema_hash: vector<u8>,
     creator_pub_key: vector<u8>,
     status: u8,
     registered_at_ms: u64,
     allowed_sources: vector<u8>,
+    // Eligibility (immutable after register). v1: disclosure_rule_blob / stage1_survey_id stored only.
+    allowed_nullifiers: vector<vector<u8>>,
+    match_threshold: u64,
+    disclosure_rule_blob: Option<vector<u8>>,
+    stage1_survey_id: Option<ID>,
+    claim_mode: u8,
 }
 
 /// Shared registry: indexes survey IDs by creator for on-chain queries.
@@ -110,10 +126,16 @@ public fun register(
     content_hash: vector<u8>,
     encrypted_content: Option<vector<u8>>,
     survey_blob_id: Option<vector<u8>>,
+    survey_blob_object_id: Option<ID>,
     schema_hash: vector<u8>,
     pub_key: vector<u8>,
     questions: vector<Question>,
     allowed_sources: vector<u8>,
+    allowed_nullifiers: vector<vector<u8>>,
+    match_threshold: u64,
+    disclosure_rule_blob: Option<vector<u8>>,
+    stage1_survey_id: Option<ID>,
+    claim_mode: u8,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -124,12 +146,23 @@ public fun register(
     // 2. allowed_sources validation
     assert!(!vector::is_empty(&allowed_sources), EEmptyAllowedSources);
 
+    // 2b. eligibility placeholder validation
+    assert!(vector::length(&allowed_nullifiers) <= MAX_ALLOWED_NULLIFIERS, EAllowlistTooLarge);
+    assert!(
+        claim_mode == CLAIM_MODE_PASS_AUDIENCE || claim_mode == CLAIM_MODE_ONE_TIME_TICKET,
+        EInvalidClaimMode,
+    );
+
     // 3. Option empty validation
     if (option::is_some(&encrypted_content)) {
         assert!(!vector::is_empty(option::borrow(&encrypted_content)), EEmptyContent);
     };
     if (option::is_some(&survey_blob_id)) {
         assert!(!vector::is_empty(option::borrow(&survey_blob_id)), EEmptyContent);
+        assert!(option::is_some(&survey_blob_object_id), EMissingBlobObjectId);
+    };
+    if (option::is_some(&survey_blob_object_id)) {
+        assert!(option::is_some(&survey_blob_id), EMissingBlobObjectId);
     };
     assert!(option::is_some(&encrypted_content) || option::is_some(&survey_blob_id), EEmptyContent);
 
@@ -175,11 +208,17 @@ public fun register(
         content_hash,
         encrypted_content,
         survey_blob_id,
+        survey_blob_object_id,
         schema_hash,
         creator_pub_key: pub_key,
         status: STATUS_ACTIVE,
         registered_at_ms: now_ms,
         allowed_sources,
+        allowed_nullifiers,
+        match_threshold,
+        disclosure_rule_blob,
+        stage1_survey_id,
+        claim_mode,
     };
 
     let survey_id = object::id(&survey);
@@ -222,11 +261,17 @@ public(package) fun remove_and_destroy(registry: &mut SurveyRegistry, survey: Su
         content_hash,
         encrypted_content: _,
         survey_blob_id: _,
+        survey_blob_object_id: _,
         schema_hash: _,
         creator_pub_key: _,
         status: _,
         registered_at_ms: _,
         allowed_sources: _,
+        allowed_nullifiers: _,
+        match_threshold: _,
+        disclosure_rule_blob: _,
+        stage1_survey_id: _,
+        claim_mode: _,
     } = survey;
 
     let survey_id = object::uid_to_inner(&id);
@@ -262,11 +307,17 @@ public fun creator(survey: &Survey): address         { survey.creator }
 public fun content_hash(survey: &Survey): vector<u8> { survey.content_hash }
 public fun encrypted_content(survey: &Survey): Option<vector<u8>> { survey.encrypted_content }
 public fun survey_blob_id(survey: &Survey): Option<vector<u8>> { survey.survey_blob_id }
+public fun survey_blob_object_id(survey: &Survey): Option<ID> { survey.survey_blob_object_id }
 public fun schema_hash(survey: &Survey): vector<u8> { survey.schema_hash }
 public fun creator_pub_key(survey: &Survey): vector<u8> { survey.creator_pub_key }
 public fun status(survey: &Survey): u8              { survey.status }
 public fun registered_at_ms(survey: &Survey): u64   { survey.registered_at_ms }
 public fun allowed_sources(survey: &Survey): vector<u8> { survey.allowed_sources }
+public fun allowed_nullifiers(survey: &Survey): vector<vector<u8>> { survey.allowed_nullifiers }
+public fun match_threshold(survey: &Survey): u64 { survey.match_threshold }
+public fun disclosure_rule_blob(survey: &Survey): Option<vector<u8>> { survey.disclosure_rule_blob }
+public fun stage1_survey_id(survey: &Survey): Option<ID> { survey.stage1_survey_id }
+public fun claim_mode(survey: &Survey): u8 { survey.claim_mode }
 public fun total_count(registry: &SurveyRegistry): u64 { registry.total_count }
 
 /// Returns the list of survey IDs registered by `creator`, or an empty vector.
@@ -297,6 +348,42 @@ public fun test_init(ctx: &mut TxContext) {
 }
 
 #[test_only]
+public fun create_survey_with_eligibility_for_testing(
+    vault_id: ID,
+    creator: address,
+    content_hash: vector<u8>,
+    encrypted_content: Option<vector<u8>>,
+    survey_blob_id: Option<vector<u8>>,
+    schema_hash: vector<u8>,
+    creator_pub_key: vector<u8>,
+    allowed_sources: vector<u8>,
+    allowed_nullifiers: vector<vector<u8>>,
+    match_threshold: u64,
+    claim_mode: u8,
+    ctx: &mut TxContext,
+): Survey {
+    Survey {
+        id: object::new(ctx),
+        vault_id,
+        creator,
+        content_hash,
+        encrypted_content,
+        survey_blob_id,
+        survey_blob_object_id: option::none(),
+        schema_hash,
+        creator_pub_key,
+        status: 0,
+        registered_at_ms: 0,
+        allowed_sources,
+        allowed_nullifiers,
+        match_threshold,
+        disclosure_rule_blob: option::none(),
+        stage1_survey_id: option::none(),
+        claim_mode,
+    }
+}
+
+#[test_only]
 public fun create_survey_for_testing(
     vault_id: ID,
     creator: address,
@@ -315,11 +402,17 @@ public fun create_survey_for_testing(
         content_hash,
         encrypted_content,
         survey_blob_id,
+        survey_blob_object_id: option::none(),
         schema_hash,
         creator_pub_key,
         status: 0,
         registered_at_ms: 0,
         allowed_sources,
+        allowed_nullifiers: vector[],
+        match_threshold: 0,
+        disclosure_rule_blob: option::none(),
+        stage1_survey_id: option::none(),
+        claim_mode: CLAIM_MODE_PASS_AUDIENCE,
     }
 }
 
@@ -332,11 +425,17 @@ public fun destroy_survey_for_testing(survey: Survey) {
         content_hash: _,
         encrypted_content: _,
         survey_blob_id: _,
+        survey_blob_object_id: _,
         schema_hash: _,
         creator_pub_key: _,
         status: _,
         registered_at_ms: _,
         allowed_sources: _,
+        allowed_nullifiers: _,
+        match_threshold: _,
+        disclosure_rule_blob: _,
+        stage1_survey_id: _,
+        claim_mode: _,
     } = survey;
     object::delete(id);
 }

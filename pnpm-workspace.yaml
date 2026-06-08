@@ -2,3 +2,5 @@ packages:
   - frontend
   - scripts
   - bff
+  - packages/*
+  - workers/*

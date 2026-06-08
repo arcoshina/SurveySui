@@ -5,6 +5,7 @@ const landing: LandingDict = {
   heroDesc: 'Respuestas gratuitas, distribución automática de recompensas y datos inmutables. SurveySui es una plataforma de encuestas creada en la blockchain pública.',
   btnCreate: 'Crear encuesta',
   btnGuide: 'Guía para principiantes',
+  btnDocs: 'Documentación',
   btnExplore: 'Explorar Plaza',
   stepsTitle: '3 pasos para completar una encuesta',
   stepLabel: 'Paso',

@@ -117,6 +117,10 @@ const survey: SurveyDict = {
   storageDecentralized: 'Almacenamiento en Walrus',
   locale: 'es',
   errEncryptSubmitFailed: 'Fallo al cifrar y enviar las respuestas',
+  errInlineAnswerTooLarge:
+    'La respuesta es demasiado grande para almacenamiento en cadena. Acorte el contenido o reintente (las respuestas grandes deben ir a Walrus).',
+  errGasExceedsCompensation:
+    'El gas estimado supera la compensación del cuestionario; se denegó el patrocinio. Pague el gas usted mismo o contacte al creador.',
   encryptingSubmit: 'Cifrando y enviando respuestas...',
   pleaseWait: 'Espera, esto puede tomar unos segundos.',
   charLimit: (n: number) => `Límite de ${n} caracteres`,

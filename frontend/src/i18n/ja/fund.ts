@@ -34,7 +34,7 @@ const fund: FundDict = {
   timesPerPerson: '回/人',
   totalRewardLabel: '総報酬:',
   exchangeRateLabel: '参考為替レート:',
-  platformFeeLabel: 'プラットフォーム手数料:',
+  platformFeeLabel: 'ロイヤリティ:',
   calculating: '計算中...',
   estimatedTotal: '推定合計額',
   withSlippage: '1%スリッページを含む',

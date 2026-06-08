@@ -115,6 +115,8 @@ const survey = {
   storageDecentralized: '儲存於Walrus',
   locale: 'zh-TW',
   errEncryptSubmitFailed: '加密並提交答卷失敗',
+  errInlineAnswerTooLarge: '答卷過大，無法直傳鏈上。請縮短內容或稍後重試（系統應自動改用 Walrus 儲存）。',
+  errGasExceedsCompensation: '此筆填答的鏈上成本超過問卷預留的 Gas 補償，代付已拒絕。請改為自付 Gas 或聯絡發起者。',
   encryptingSubmit: '正在加密並提交答卷...',
   pleaseWait: '請稍候，這可能需要幾秒鐘。',
   charLimit: (n: number) => `限制在 ${n} 字元以內`,

@@ -6,23 +6,39 @@ import { bcs } from '@mysten/sui/bcs'
 import { TicketPayload } from '../auth/ticket.js'
 import { checkSponsorLimit, reserveSponsor, getSponsorCount } from './sponsorLedger.js'
 import { resolveCountScope } from './sponsorPolicy.js'
+import { effectiveInlineLimit } from './inlineLimit.js'
+import {
+  getPlatformSponsorCount,
+  incrementPlatformSponsorCount,
+  platformSponsorDailyLimit,
+  todayUtcDate,
+} from './platformSponsorLedger.js'
+import { InMemoryCoinLockStore, runSponsorPipeline } from '@surveysui/gas-station-core'
+import { getGasConfig, healthMinBalanceMist } from './gasConfig.js'
+import { assertPlatformSponsorTierEligible } from './platformSponsorEligibility.js'
+import { SponsorCoinQueue } from './sponsorCoinQueue.js'
+import {
+  fetchGasStationHealth,
+  forwardSponsorToGasStation,
+  getGasStationMode,
+} from './gasStationClient.js'
+import { getWalletSponsorRateLimitStore } from './stores/sqliteWalletRateLimitStore.js'
 
 interface GasSponsorRequestBody {
   txBytes: string // base64 encoded transaction kind
   senderAddress: string
 }
 
-const GAS_BUDGET_MIST = 50_000_000n
-const HEALTH_MIN_BALANCE_MIST = GAS_BUDGET_MIST * 5n
-
 export interface GasHealthResponse {
   available: boolean
   reason?: 'no_key' | 'low_balance' | 'unknown'
   sponsorAddress?: string
   gasCompensationAmount?: string
+  gasStationMode?: 'local' | 'do'
+  unlockedCoinCount?: number
+  lockedCoinCount?: number
+  queueDepth?: number
 }
-
-const platformSponsorLimitCache = new Map<string, { count: number; date: string }>()
 
 function getObjectIdFromInput(input: any): string | null {
   if (!input) return null
@@ -43,6 +59,150 @@ function normalizeAddress(addr: string): string {
   let clean = addr.toLowerCase()
   if (clean.startsWith('0x')) clean = clean.slice(2)
   return '0x' + clean.padStart(64, '0')
+}
+
+const PASS_MINT_FNS = new Set(['mint_pass', 'mint_pass_with_extra_credentials'])
+
+type PassTicketFields = {
+  source: number
+  nullifiers: number[][]
+  commitment: number[]
+  expiresAt: bigint
+  bffSig: number[]
+}
+
+function parsePassTicketFromArgs(
+  getPureBytes: (arg: any) => Uint8Array | null,
+  args: any[],
+  ticketBase: number
+): PassTicketFields | null {
+  const sourceBytes = getPureBytes(args[ticketBase])
+  const nullifierBytes = getPureBytes(args[ticketBase + 1])
+  const commitmentBytes = getPureBytes(args[ticketBase + 2])
+  const expiresAtBytes = getPureBytes(args[ticketBase + 3])
+  const bffSigBytes = getPureBytes(args[ticketBase + 4])
+  if (!sourceBytes || !nullifierBytes || !commitmentBytes || !expiresAtBytes || !bffSigBytes) {
+    return null
+  }
+  return {
+    source: bcs.u8().parse(sourceBytes),
+    nullifiers: bcs.vector(bcs.vector(bcs.u8())).parse(nullifierBytes).map((n: number[]) => Array.from(n)),
+    commitment: Array.from(bcs.vector(bcs.u8()).parse(commitmentBytes)),
+    expiresAt: BigInt(bcs.u64().parse(expiresAtBytes)),
+    bffSig: Array.from(bcs.vector(bcs.u8()).parse(bffSigBytes)),
+  }
+}
+
+function extractPassTicketsFromMoveCall(
+  getPureBytes: (arg: any) => Uint8Array | null,
+  fn: string,
+  args: any[]
+): PassTicketFields[] | null {
+  if (fn === 'update_pass_credential') {
+    const ticket = parsePassTicketFromArgs(getPureBytes, args, 3)
+    return ticket ? [ticket] : null
+  }
+  if (fn === 'mint_pass') {
+    const ticket = parsePassTicketFromArgs(getPureBytes, args, 4)
+    return ticket ? [ticket] : null
+  }
+  if (fn === 'mint_pass_with_extra_credentials') {
+    const primary = parsePassTicketFromArgs(getPureBytes, args, 4)
+    if (!primary) return null
+
+    const extraSourcesBytes = getPureBytes(args[9])
+    const extraNullifiersBytes = getPureBytes(args[10])
+    const extraCommitmentsBytes = getPureBytes(args[11])
+    const extraExpiresAtBytes = getPureBytes(args[12])
+    const extraBffSigsBytes = getPureBytes(args[13])
+    if (
+      !extraSourcesBytes ||
+      !extraNullifiersBytes ||
+      !extraCommitmentsBytes ||
+      !extraExpiresAtBytes ||
+      !extraBffSigsBytes
+    ) {
+      return null
+    }
+
+    const extraSources = bcs.vector(bcs.u8()).parse(extraSourcesBytes)
+    const extraNullifiers = bcs.vector(bcs.vector(bcs.vector(bcs.u8()))).parse(extraNullifiersBytes)
+    const extraCommitments = bcs.vector(bcs.vector(bcs.u8())).parse(extraCommitmentsBytes)
+    const extraExpiresAt = bcs.vector(bcs.u64()).parse(extraExpiresAtBytes)
+    const extraBffSigs = bcs.vector(bcs.vector(bcs.u8())).parse(extraBffSigsBytes)
+
+    const len = extraSources.length
+    if (
+      len !== extraNullifiers.length ||
+      len !== extraCommitments.length ||
+      len !== extraExpiresAt.length ||
+      len !== extraBffSigs.length
+    ) {
+      return null
+    }
+
+    const tickets: PassTicketFields[] = [primary]
+    for (let i = 0; i < len; i++) {
+      tickets.push({
+        source: extraSources[i],
+        nullifiers: extraNullifiers[i].map((n: number[]) => Array.from(n)),
+        commitment: Array.from(extraCommitments[i]),
+        expiresAt: BigInt(extraExpiresAt[i]),
+        bffSig: Array.from(extraBffSigs[i]),
+      })
+    }
+    return tickets
+  }
+  return null
+}
+
+async function verifyPassTicketSignature(
+  keypair: Ed25519Keypair,
+  senderAddress: string,
+  ticket: PassTicketFields
+): Promise<{ ok: true } | { ok: false; status: number; error: string; message: string }> {
+  const payloadBytes = TicketPayload.serialize({
+    owner: senderAddress,
+    source: ticket.source,
+    nullifiers: ticket.nullifiers,
+    commitment: ticket.commitment,
+    expires_at: ticket.expiresAt,
+  }).toBytes()
+
+  const isValid = await keypair.getPublicKey().verify(payloadBytes, new Uint8Array(ticket.bffSig))
+  if (!isValid) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'invalid_ticket_signature',
+      message: 'The ticket signature in the transaction is invalid or tampered',
+    }
+  }
+
+  if (Date.now() > Number(ticket.expiresAt)) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'ticket_expired',
+      message: 'The ticket has expired',
+    }
+  }
+
+  return { ok: true }
+}
+
+function parseOptionVectorU8(bytes: Uint8Array | null): { isSome: boolean; payload: Uint8Array | null } {
+  if (!bytes || bytes.length === 0) return { isSome: false, payload: null }
+  if (bytes[0] === 0) return { isSome: false, payload: null }
+  if (bytes[0] === 1) {
+    try {
+      const parsed = bcs.vector(bcs.u8()).parse(bytes.subarray(1))
+      return { isSome: true, payload: new Uint8Array(parsed) }
+    } catch {
+      return { isSome: true, payload: null }
+    }
+  }
+  return { isSome: false, payload: null }
 }
 
 let cachedDynamicGas: bigint | null = null
@@ -104,10 +264,12 @@ export async function calculateDynamicGasCompensation(
 
 export function registerGasRoutes(
   app: FastifyInstance,
-  deps: { suiClient: SuiClient; packageId: string }
+  deps: { suiClient: SuiClient; packageId: string; coinQueue?: SponsorCoinQueue }
 ): void {
+  const coinQueue = deps.coinQueue ?? InMemoryCoinLockStore.fromGasConfig(getGasConfig())
   app.get('/api/gas/health', async (_req, reply): Promise<GasHealthResponse> => {
     try {
+      const gasConfig = getGasConfig()
       const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
       if (!privKeyHex) {
         return { available: false, reason: 'no_key' }
@@ -122,30 +284,46 @@ export function registerGasRoutes(
         coinType: '0x2::sui::SUI',
       })
 
-      const minAmountStr = (
-        process.env.MIN_GAS_COMPENSATION_AMOUNT ||
-          process.env.GAS_COMPENSATION_AMOUNT ||
-          '5000000'
-      ).replace(/_/g, '').replace(/,/g, '')
-      const minAmount = BigInt(minAmountStr)
+      const minAmount = gasConfig.minGasCompensationAmount
       const dynamicAmount = await calculateDynamicGasCompensation(
         deps.suiClient,
         deps.packageId,
         minAmount
       )
 
-      if (BigInt(balance.totalBalance) < HEALTH_MIN_BALANCE_MIST) {
+      const gasStationMode = getGasStationMode()
+      const doHealth =
+        gasStationMode === 'do' ? await fetchGasStationHealth() : null
+      const unlockedCoinCount =
+        typeof doHealth?.unlockedCoinCount === 'number'
+          ? doHealth.unlockedCoinCount
+          : undefined
+      const lockedCoinCount =
+        typeof doHealth?.lockedCoinCount === 'number' ? doHealth.lockedCoinCount : undefined
+      const queueDepth =
+        typeof doHealth?.queueDepth === 'number' ? doHealth.queueDepth : undefined
+
+      if (BigInt(balance.totalBalance) < healthMinBalanceMist(gasConfig)) {
         return {
           available: false,
           reason: 'low_balance',
           sponsorAddress,
           gasCompensationAmount: dynamicAmount.toString(),
+          gasStationMode,
+          unlockedCoinCount,
+          lockedCoinCount,
+          queueDepth,
         }
       }
       return {
-        available: true,
+        available: doHealth?.available === false ? false : true,
         sponsorAddress,
         gasCompensationAmount: dynamicAmount.toString(),
+        gasStationMode,
+        unlockedCoinCount,
+        lockedCoinCount,
+        queueDepth,
+        reason: doHealth?.available === false ? 'unknown' : undefined,
       }
     } catch (err: any) {
       reply.log.warn({ err: err?.message }, '[GasStation] health probe failed')
@@ -195,20 +373,34 @@ export function registerGasRoutes(
     }
   )
 
+  const sponsorRateLimit = getGasConfig()
   app.post(
     '/api/gas/sponsor',
     {
       config: {
         rateLimit: {
-          max: 2,
-          timeWindow: '1 minute',
+          max: sponsorRateLimit.gasSponsorRateLimitMax,
+          timeWindow: sponsorRateLimit.gasSponsorRateLimitWindowMs,
         },
       },
     },
     async (req: FastifyRequest<{ Body: GasSponsorRequestBody }>, reply: FastifyReply) => {
+      const gasConfig = getGasConfig()
       const { txBytes, senderAddress } = req.body
       if (!txBytes || !senderAddress) {
         return reply.status(400).send({ error: 'Missing txBytes or senderAddress' })
+      }
+
+      const walletLimit = await getWalletSponsorRateLimitStore().checkAndIncrement(
+        senderAddress,
+        gasConfig.gasSponsorRateLimitMaxPerWallet,
+        gasConfig.gasSponsorRateLimitWalletWindowMs
+      )
+      if (!walletLimit.allowed) {
+        return reply.status(429).send({
+          error: 'wallet_rate_limit_exceeded',
+          message: `Wallet sponsor rate limit exceeded; retry in ${Math.ceil((walletLimit.retryAfterMs ?? 0) / 1000)} seconds`,
+        })
       }
 
       try {
@@ -255,6 +447,9 @@ export function registerGasRoutes(
         let isPlatformSponsor = false
         let vaultId: string | null = null
         let passId: string | null = null
+        let claimGasCompensationAmount: bigint | null = null
+        let claimStorageCompensationAmount: bigint | null = null
+        let claimHasBlob = false
 
         for (const command of commands) {
           if (command.$kind !== 'MoveCall') {
@@ -282,10 +477,15 @@ export function registerGasRoutes(
           }
 
           if (call.module === 'survey_pass') {
-            if (call.function !== 'mint_pass' && call.function !== 'update_pass_credential') {
+            if (
+              call.function !== 'mint_pass' &&
+              call.function !== 'mint_pass_with_extra_credentials' &&
+              call.function !== 'update_pass_credential'
+            ) {
               return reply.status(400).send({
                 error: 'invalid_transaction_commands',
-                message: 'Only mint_pass or update_pass_credential allowed in survey_pass module',
+                message:
+                  'Only mint_pass, mint_pass_with_extra_credentials, or update_pass_credential allowed in survey_pass module',
               })
             }
             isPassSponsor = true
@@ -309,86 +509,46 @@ export function registerGasRoutes(
         }
 
         if (isPassSponsor) {
-          const call = commands[0].MoveCall!
+          for (const command of commands) {
+            const call = command.MoveCall!
+            if (call.module !== 'survey_pass') continue
 
-          // mint_pass args: [registry, config, owner, deposit_payer, source, nullifiers,
-          //                  commitment, expires_at, bff_sig, clock]
-          // update_pass_credential args: [pass, registry, config, source, nullifiers,
-          //                  commitment, expires_at, bff_sig, clock]
-          // 只有 mint_pass 帶 deposit_payer（位置 3）；以函式名區分索引。
-          const isMint = call.function === 'mint_pass'
-          const ticketBase = isMint ? 4 : 3
+            if (PASS_MINT_FNS.has(call.function)) {
+              const depositPayerBytes = getPureBytes(call.arguments[3])
+              if (!depositPayerBytes) {
+                return reply.status(400).send({
+                  error: 'invalid_transaction_arguments',
+                  message: 'Failed to extract deposit_payer from mint call',
+                })
+              }
+              const depositPayer = normalizeAddress('0x' + Buffer.from(depositPayerBytes).toString('hex'))
+              if (depositPayer !== normalizeAddress(sponsorAddress)) {
+                return reply.status(400).send({
+                  error: 'invalid_deposit_payer',
+                  message: 'Sponsored mint must set deposit_payer to the sponsor address',
+                })
+              }
+            }
 
-          // mint_pass 必須宣告 deposit_payer == sponsorAddress：防止使用者在「代付鑄造」時
-          // 把 deposit_payer 設成自己，事後自刪盜取由項目方支付的儲存返還。
-          if (isMint) {
-            const depositPayerBytes = getPureBytes(call.arguments[3])
-            if (!depositPayerBytes) {
+            const tickets = extractPassTicketsFromMoveCall(getPureBytes, call.function, call.arguments)
+            if (!tickets || tickets.length === 0) {
               return reply.status(400).send({
                 error: 'invalid_transaction_arguments',
-                message: 'Failed to extract deposit_payer from mint_pass',
+                message: 'Failed to extract ticket parameters from transaction inputs',
               })
             }
-            const depositPayer = normalizeAddress('0x' + Buffer.from(depositPayerBytes).toString('hex'))
-            if (depositPayer !== normalizeAddress(sponsorAddress)) {
-              return reply.status(400).send({
-                error: 'invalid_deposit_payer',
-                message: 'Sponsored mint must set deposit_payer to the sponsor address',
-              })
+
+            for (const ticket of tickets) {
+              const verifyRes = await verifyPassTicketSignature(keypair, senderAddress, ticket)
+              if (!verifyRes.ok) {
+                return reply.status(verifyRes.status).send({
+                  error: verifyRes.error,
+                  message: verifyRes.message,
+                })
+              }
             }
           }
 
-          const sourceBytes = getPureBytes(call.arguments[ticketBase])
-          const nullifierBytes = getPureBytes(call.arguments[ticketBase + 1])
-          const commitmentBytes = getPureBytes(call.arguments[ticketBase + 2])
-          const expiresAtBytes = getPureBytes(call.arguments[ticketBase + 3])
-          const bffSigBytes = getPureBytes(call.arguments[ticketBase + 4])
-
-          if (!sourceBytes || !nullifierBytes || !commitmentBytes || !expiresAtBytes || !bffSigBytes) {
-            return reply.status(400).send({
-              error: 'invalid_transaction_arguments',
-              message: 'Failed to extract ticket parameters from transaction inputs',
-            })
-          }
-
-          const source = bcs.u8().parse(sourceBytes)
-          const nullifiersList = bcs.vector(bcs.vector(bcs.u8())).parse(nullifierBytes)
-          const commitment = bcs.vector(bcs.u8()).parse(commitmentBytes)
-          const expiresAt = bcs.u64().parse(expiresAtBytes)
-          const bffSig = bcs.vector(bcs.u8()).parse(bffSigBytes)
-
-          const commitmentArr = new Uint8Array(commitment)
-          const bffSigArr = new Uint8Array(bffSig)
-
-          // Re-serialize and verify Ticket Signature
-          const payloadBytes = TicketPayload.serialize({
-            owner: senderAddress,
-            source,
-            nullifiers: nullifiersList.map((n: number[]) => Array.from(n)),
-            commitment: Array.from(commitmentArr),
-            expires_at: expiresAt,
-          }).toBytes()
-
-          const isValid = await keypair.getPublicKey().verify(payloadBytes, bffSigArr)
-          if (!isValid) {
-            return reply.status(400).send({
-              error: 'invalid_ticket_signature',
-              message: 'The ticket signature in the transaction is invalid or tampered',
-            })
-          }
-
-          // Check if ticket expired
-          if (Date.now() > Number(expiresAt)) {
-            return reply.status(400).send({
-              error: 'ticket_expired',
-              message: 'The ticket has expired',
-            })
-          }
-
-          // Read-only quota check (on-chain truth + in-flight reservations).
-          // We do NOT consume quota here — that happens via reserveSponsor() only
-          // after the sponsor signature is produced, so a pre-flight dry-run
-          // rejection or abandoned request never burns a count.
           const scope = resolveCountScope()
           const checkRes = await checkSponsorLimit({
             suiClient: deps.suiClient,
@@ -443,26 +603,16 @@ export function registerGasRoutes(
             }
           }
 
-          // 限制 answers 大小以防範 DoS 攻擊
-          if (answersArg) {
-            const answersBytes = getPureBytes(answersArg)
-            if (answersBytes && answersBytes.length > 150_000) {
-              return reply.status(400).send({
-                error: 'answers_too_large',
-                message: 'Encrypted answers payload size exceeds 150KB limit; please use Walrus decentralized storage path',
-              })
-            }
-          }
+          const answersParsed = parseOptionVectorU8(
+            answersArg ? getPureBytes(answersArg) : null
+          )
+          const blobParsed = parseOptionVectorU8(blobIdArg ? getPureBytes(blobIdArg) : null)
 
-          // 限制 answer_blob_id 大小以防範 DoS 攻擊
-          if (blobIdArg) {
-            const blobIdBytes = getPureBytes(blobIdArg)
-            if (blobIdBytes && blobIdBytes.length > 1000) {
-              return reply.status(400).send({
-                error: 'blob_id_too_large',
-                message: 'Answer blob_id size exceeds limit',
-              })
-            }
+          if (answersParsed.isSome && blobParsed.isSome) {
+            return reply.status(400).send({
+              error: 'ambiguous_answer_payload',
+              message: 'Cannot set both inline encrypted_answers and answer_blob_id',
+            })
           }
 
           if (!vaultId) {
@@ -493,146 +643,138 @@ export function registerGasRoutes(
             })
           }
 
+          const vaultMaxInline = BigInt(fields.max_inline_answer_bytes ?? '6144')
+          const inlineLimit = effectiveInlineLimit(vaultMaxInline)
+
+          if (answersParsed.isSome && answersParsed.payload) {
+            if (answersParsed.payload.length > inlineLimit) {
+              return reply.status(400).send({
+                error: 'inline_answer_too_large',
+                message: `Encrypted answers payload exceeds inline limit (${inlineLimit} bytes); use Walrus storage`,
+              })
+            }
+          }
+
+          if (blobParsed.isSome && blobParsed.payload && blobParsed.payload.length > 1000) {
+            return reply.status(400).send({
+              error: 'blob_id_too_large',
+              message: 'Answer blob_id size exceeds limit',
+            })
+          }
+
+          claimHasBlob = blobParsed.isSome
+          claimGasCompensationAmount = BigInt(fields.gas_compensation_amount || '0')
+          claimStorageCompensationAmount = BigInt(fields.storage_compensation_amount || '0')
+
           const gasBalance = BigInt(fields.gas_balance || '0')
-          const gasCompensationAmount = BigInt(fields.gas_compensation_amount || '0')
-          
+          const gasCompensationAmount = claimGasCompensationAmount
+
           if (gasBalance < gasCompensationAmount) {
             isPlatformSponsor = true
           }
 
           if (isPlatformSponsor) {
-            // Check platform sponsorship limits: max 3 per wallet per day
-            const todayStr = new Date().toISOString().split('T')[0]
-            let limitRecord = platformSponsorLimitCache.get(senderAddress)
-            if (!limitRecord || limitRecord.date !== todayStr) {
-              limitRecord = { count: 0, date: todayStr }
-            }
+            const todayStr = todayUtcDate()
+            const dailyCount = await getPlatformSponsorCount(senderAddress, todayStr)
+            const dailyLimit = platformSponsorDailyLimit()
 
-            if (limitRecord.count >= 3) {
+            if (dailyCount >= dailyLimit) {
               return reply.status(403).send({
                 error: 'PLATFORM_SPONSOR_LIMIT_REACHED',
                 message: 'Daily platform sponsorship limit reached for this wallet address',
               })
             }
 
-            // Check defense threshold min platform sponsor tier
-            if (passId) {
-              const passObj = await deps.suiClient.getObject({
-                id: passId,
-                options: { showContent: true },
+            const tierCheck = await assertPlatformSponsorTierEligible(
+              deps.suiClient,
+              deps.packageId,
+              senderAddress,
+              gasConfig.minPlatformSponsorTier,
+              passId
+            )
+            if (!tierCheck.ok) {
+              return reply.status(403).send({
+                error: tierCheck.error,
+                message: tierCheck.message,
               })
-              if (!passObj.data || !passObj.data.content) {
-                return reply.status(404).send({
-                  error: 'pass_not_found',
-                  message: `SurveyPass ${passId} not found`,
-                })
-              }
-              const passFields = (passObj.data.content as any).fields
-              if (!passFields) {
-                return reply.status(500).send({
-                  error: 'invalid_pass_object',
-                  message: 'Failed to read pass fields',
-                })
-              }
-              const sources: number[] = passFields.credential_sources || []
-              const minPlatformSponsorTier = Number(process.env.MIN_PLATFORM_SPONSOR_TIER ?? '0')
-              let isEligibleForSponsor = false
-              
-              if (minPlatformSponsorTier === 0) {
-                isEligibleForSponsor = sources.length > 0
-              } else if (minPlatformSponsorTier === 1) {
-                isEligibleForSponsor = sources.some((s: number) => [3, 5, 6, 7].includes(s))
-              } else if (minPlatformSponsorTier === 2) {
-                isEligibleForSponsor = sources.includes(5) // World ID
-              } else {
-                isEligibleForSponsor = sources.length > 0
-              }
-
-              if (!isEligibleForSponsor) {
-                return reply.status(403).send({
-                  error: 'PLATFORM_SPONSOR_TIER_INSUFFICIENT',
-                  message: 'SurveyPass credentials are insufficient for platform sponsorship',
-                })
-              }
             }
           }
         }
 
-        tx.setSender(senderAddress)
-        tx.setGasOwner(sponsorAddress)
+        const pipelineContext = {
+          isPassSponsor,
+          isPlatformSponsor,
+          claimGasCompensationAmount: claimGasCompensationAmount?.toString() ?? null,
+          claimStorageCompensationAmount: claimStorageCompensationAmount?.toString() ?? null,
+          claimHasBlob,
+        }
+        const requestId =
+          typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'] : undefined
 
-        // 2. Query available SUI gas coins owned by sponsor (fetch more to find a suitable one)
-        const coinsRes = await deps.suiClient.getCoins({
-          owner: sponsorAddress,
-          coinType: '0x2::sui::SUI',
-          limit: 50,
+        if (getGasStationMode() === 'do') {
+          const forwarded = await forwardSponsorToGasStation({
+            txBytes,
+            senderAddress,
+            sponsorAddress,
+            requestId,
+            pipelineContext,
+          })
+          if (!forwarded.ok) {
+            return reply.status(forwarded.status).send({
+              error: forwarded.error,
+              message: forwarded.message,
+            })
+          }
+          if (isPlatformSponsor) {
+            await incrementPlatformSponsorCount(senderAddress, todayUtcDate())
+          }
+          if (isPassSponsor) {
+            reserveSponsor(senderAddress)
+          }
+          return forwarded.data
+        }
+
+        const outcome = await runSponsorPipeline({
+          txBytes,
+          senderAddress,
+          suiClient: deps.suiClient,
+          keypair,
+          sponsorAddress,
+          coinStore: coinQueue,
+          gasConfig,
+          context: pipelineContext,
+          requestId,
+          onPlatformSponsorSigned: isPlatformSponsor
+            ? async () => {
+                await incrementPlatformSponsorCount(senderAddress, todayUtcDate())
+              }
+            : undefined,
+          onPassSponsorSigned: isPassSponsor ? () => reserveSponsor(senderAddress) : undefined,
         })
 
-        if (coinsRes.data.length === 0) {
-          throw new Error(`Sponsor (${sponsorAddress}) has no SUI coins to pay for gas`)
-        }
-
-        // Find a coin with enough balance to cover the gas budget
-        const gasCoin = coinsRes.data.find((c) => BigInt(c.balance) >= GAS_BUDGET_MIST)
-        if (!gasCoin) {
-          throw new Error(`Sponsor (${sponsorAddress}) has no SUI coin with balance >= ${GAS_BUDGET_MIST} MIST`)
-        }
-        tx.setGasPayment([
+        req.log.info(
           {
-            objectId: gasCoin.coinObjectId,
-            version: gasCoin.version,
-            digest: gasCoin.digest,
+            requestId,
+            sender: senderAddress,
+            outcome: outcome.metrics.outcome,
+            queueWaitMs: outcome.metrics.queueWaitMs,
+            dryRunMs: outcome.metrics.dryRunMs,
+            coinObjectId: outcome.metrics.coinObjectId,
           },
-        ])
+          '[GasStation] sponsor pipeline'
+        )
 
-        // 3. Set a gas budget (50M MIST to cover multiple nullifiers and storage deposits)
-        tx.setGasBudget(Number(GAS_BUDGET_MIST))
-
-        // 4. Build the full transaction block bytes
-        const sponsoredTxBytes = await tx.build({ client: deps.suiClient })
-
-        // 5. Dry run pre-flight check to prevent spamming
-        const dryRun = await deps.suiClient.dryRunTransactionBlock({
-          transactionBlock: Buffer.from(sponsoredTxBytes).toString('base64'),
-        })
-
-        if (dryRun.effects.status.status === 'failure') {
-          req.log.warn(
-            `[GasStation] Dry run simulation rejected transaction: ${dryRun.effects.status.error}`
-          )
-          return reply.status(422).send({
-            error: 'dry_run_failed',
-            message: dryRun.effects.status.error,
+        if (!outcome.ok) {
+          if (outcome.error === 'dry_run_failed') {
+            req.log.warn(`[GasStation] Dry run rejected: ${outcome.message}`)
+          }
+          return reply.status(outcome.status).send({
+            error: outcome.error,
+            message: outcome.message,
           })
         }
 
-        // 6. Sign as sponsor
-        const signatureResult = await keypair.signTransaction(sponsoredTxBytes)
-
-        // Record the platform sponsorship count after successful signing
-        if (isPlatformSponsor) {
-          const todayStr = new Date().toISOString().split('T')[0]
-          let limitRecord = platformSponsorLimitCache.get(senderAddress)
-          if (!limitRecord || limitRecord.date !== todayStr) {
-            limitRecord = { count: 0, date: todayStr }
-          }
-          limitRecord.count += 1
-          platformSponsorLimitCache.set(senderAddress, limitRecord)
-        }
-
-        // Reserve the SurveyPass lifetime sponsorship after successful signing.
-        // This is an optimistic, short-lived in-flight hold that prevents rapid
-        // double-spend before the broadcast tx is indexed; it auto-expires, so an
-        // abandoned (never-broadcast) request leaves no permanent count. Once the
-        // tx actually lands on chain, countOnChainSponsoredTx takes over.
-        if (isPassSponsor) {
-          reserveSponsor(senderAddress)
-        }
-
-        return {
-          sponsoredTxBytes: Buffer.from(sponsoredTxBytes).toString('base64'),
-          sponsorSignature: signatureResult.signature,
-        }
+        return outcome.result
       } catch (err: any) {
         req.log.error(err)
         return reply.status(500).send({ error: 'sponsor_failed', message: err.message })

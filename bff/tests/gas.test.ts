@@ -3,6 +3,9 @@ import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { Transaction } from '@mysten/sui/transactions'
 import { registerGasRoutes, __resetDynamicGasCache } from '../src/gas/handler.js'
+import { __resetGasConfigCache } from '../src/gas/gasConfig.js'
+import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
+import { initializeDb } from '../src/security/db.js'
 
 describe('BFF Gas Sponsor Endpoint Tests', () => {
   let server: any
@@ -12,29 +15,52 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     process.env.SURVEY_PASS_ISSUER_PRIV =
       '0101010101010101010101010101010101010101010101010101010101010101' // 32 bytes hex
     process.env.SUI_PACKAGE_ID = '0x0000000000000000000000000000000000000000000000000000000000000007'
-    
+    delete process.env.GAS_STATION_MODE
+    delete process.env.GAS_STATION_URL
+    __resetGasConfigCache()
+
+    initializeDb()
+    await __resetPlatformSponsorLedger()
+
     server = Fastify()
     await server.register(cors, { origin: true })
 
     // Mock SuiClient
     mockSuiClient = {
-      getBalance: vi.fn().mockResolvedValue({ totalBalance: '100000000' }),
+      getBalance: vi.fn().mockResolvedValue({ totalBalance: '500000000' }),
       getReferenceGasPrice: vi.fn().mockResolvedValue('1000'),
       getCoins: vi.fn().mockResolvedValue({
+        data: [1, 2, 3, 4, 5].map((i) => ({
+          coinObjectId: `0x${i.toString(16).padStart(64, '0')}`,
+          version: '1',
+          digest: '11111111111111111111111111111111',
+          balance: '500000000',
+        })),
+        hasNextPage: false,
+      }),
+      getOwnedObjects: vi.fn().mockResolvedValue({
         data: [
           {
-            coinObjectId: '0x0000000000000000000000000000000000000000000000000000000000000001',
-            version: '1',
-            digest: '11111111111111111111111111111111',
-            balance: '50000000',
+            data: {
+              content: {
+                dataType: 'moveObject',
+                fields: { credential_sources: [6] },
+              },
+            },
           },
         ],
       }),
       dryRunTransactionBlock: vi.fn().mockResolvedValue({
         effects: {
           status: { status: 'success' },
+          gasUsed: {
+            computationCost: '1000000',
+            storageCost: '500000',
+            storageRebate: '100000',
+          },
         },
       }),
+      queryTransactionBlocks: vi.fn().mockResolvedValue({ data: [] }),
       // 預設模擬物件詳情
       getObject: vi.fn().mockImplementation(async ({ id }: { id: string }) => {
         if (id === '0x0000000000000000000000000000000000000000000000000000000000000009') {
@@ -58,6 +84,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
               fields: {
                 gas_balance: '100000000', // 100M MIST (0.1 SUI)
                 gas_compensation_amount: '5000000', // 5M MIST
+                max_inline_answer_bytes: '6144',
               },
             },
           },
@@ -119,6 +146,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
 
   afterEach(async () => {
     await server.close()
+    __resetGasConfigCache()
     delete process.env.SURVEY_PASS_ISSUER_PRIV
     delete process.env.MIN_PLATFORM_SPONSOR_TIER
     delete process.env.SUI_PACKAGE_ID
@@ -179,6 +207,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
             fields: {
               gas_balance: '0',
               gas_compensation_amount: '5000000',
+              max_inline_answer_bytes: '6144',
             },
           },
         },
@@ -229,24 +258,28 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
   describe('Dynamic Gas Compensation Calculation', () => {
     beforeEach(() => {
       __resetDynamicGasCache()
+      __resetGasConfigCache()
       delete process.env.MIN_GAS_COMPENSATION_AMOUNT
       delete process.env.GAS_COMPENSATION_AMOUNT
+      delete process.env.GAS_BUDGET_CAP_MIST
     })
 
-    it('should fallback to default minimum of 0.005 SUI (5000000 MIST) when no on-chain txs found', async () => {
+    it('should fallback to default minimum of 0.1 SUI (100000000 MIST) when no on-chain txs found', async () => {
       mockSuiClient.queryTransactionBlocks = vi.fn().mockResolvedValue({ data: [] })
-      
+
       const response = await server.inject({
         method: 'GET',
         url: '/api/gas/health',
       })
       expect(response.statusCode).toBe(200)
       const resData = JSON.parse(response.payload)
-      expect(resData.gasCompensationAmount).toBe('5000000')
+      expect(resData.gasCompensationAmount).toBe('100000000')
     })
 
     it('should use MIN_GAS_COMPENSATION_AMOUNT from env if set and on-chain txs are missing or have low gas', async () => {
       process.env.MIN_GAS_COMPENSATION_AMOUNT = '8000000'
+      process.env.GAS_BUDGET_CAP_MIST = '8000000'
+      __resetGasConfigCache()
       mockSuiClient.queryTransactionBlocks = vi.fn().mockResolvedValue({ data: [] })
       
       const response = await server.inject({
@@ -260,6 +293,8 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
 
     it('should support underscores and commas in env values', async () => {
       process.env.MIN_GAS_COMPENSATION_AMOUNT = '8_500_000'
+      process.env.GAS_BUDGET_CAP_MIST = '8_500_000'
+      __resetGasConfigCache()
       mockSuiClient.queryTransactionBlocks = vi.fn().mockResolvedValue({ data: [] })
       
       const response = await server.inject({
@@ -273,6 +308,8 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
 
     it('should calculate dynamic compensation based on successful recent transactions', async () => {
       process.env.MIN_GAS_COMPENSATION_AMOUNT = '3000000'
+      process.env.GAS_BUDGET_CAP_MIST = '3000000'
+      __resetGasConfigCache()
       // Mock successful claim transactions with varying gas costs
       // Transaction 1: net gas = 4000000 + 1000000 - 500000 = 4500000 MIST
       // Transaction 2: net gas = 5000000 + 2000000 - 1000000 = 6000000 MIST (max)
@@ -322,6 +359,9 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     })
 
     it('should cache calculated dynamic gas and not call RPC repeatedly within cache window', async () => {
+      process.env.MIN_GAS_COMPENSATION_AMOUNT = '3000000'
+      process.env.GAS_BUDGET_CAP_MIST = '3000000'
+      __resetGasConfigCache()
       mockSuiClient.queryTransactionBlocks = vi.fn().mockResolvedValue({
         data: [
           {

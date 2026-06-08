@@ -34,7 +34,7 @@ const fund: FundDict = {
   timesPerPerson: 'times/person',
   totalRewardLabel: 'Total Reward:',
   exchangeRateLabel: 'Exchange Rate:',
-  platformFeeLabel: 'Platform Fee:',
+  platformFeeLabel: 'Royalty:',
   calculating: 'Calculating...',
   estimatedTotal: 'Estimated Total',
   withSlippage: 'Includes 1% Slippage',

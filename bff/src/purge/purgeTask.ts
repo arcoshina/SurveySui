@@ -1,6 +1,9 @@
-import { Transaction } from '@mysten/sui/transactions'
 import type { SuiClient } from '@mysten/sui/client'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import {
+  buildAndDryRunPurgeWithRebateRefund,
+  readVaultCreator,
+} from './rebateRefund.js'
 
 /**
  * Background task that permanently destroys surveys whose grace period has
@@ -9,8 +12,8 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
  * once the gate opens. The on-chain function re-checks the gate, so a premature
  * call simply aborts — this scan is only an optimisation to avoid doomed txs.
  *
- * The per-vault grace window is read from the vault itself (`purge_grace_ms`),
- * keeping a single source of truth with the contract.
+ * Storage rebate from deleted objects is forwarded to vault.creator in the same
+ * PTB (after dry-run gas estimation) when PURGE_REBATE_REFUND_ENABLED is true.
  */
 
 const STATUS_CLOSED = 1
@@ -22,7 +25,6 @@ export interface PurgeTaskConfig {
   registryId: string
   /** Max surveys to purge per cycle (bounds run time / gas). */
   maxPerCycle?: number
-  gasBudget?: bigint
 }
 
 interface VaultState {
@@ -30,6 +32,7 @@ interface VaultState {
   closedAtMs: bigint
   deadlineMs: bigint
   purgeGraceMs: bigint
+  creator: string | null
 }
 
 /** Read the lifecycle fields of a vault, or null if it no longer exists. */
@@ -44,9 +47,9 @@ async function readVaultState(suiClient: SuiClient, vaultId: string): Promise<Va
       closedAtMs: BigInt(f.closed_at_ms ?? 0),
       deadlineMs: BigInt(f.deadline_ms ?? 0),
       purgeGraceMs: BigInt(f.purge_grace_ms ?? 0),
+      creator: f.creator ? String(f.creator) : null,
     }
   } catch {
-    // Not found (already purged) or transient error — treat as not purgeable now.
     return null
   }
 }
@@ -66,19 +69,10 @@ function isPurgeable(v: VaultState, nowMs: bigint): boolean {
 
 /** One scan: find purge-eligible surveys and destroy them. Returns the count purged. */
 export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
-  const {
-    suiClient,
-    sponsorKeypair,
-    packageId,
-    registryId,
-    maxPerCycle = 10,
-    gasBudget = 300_000_000n,
-  } = config
+  const { suiClient, sponsorKeypair, packageId, registryId, maxPerCycle = 10 } = config
 
-  const sponsorAddress = sponsorKeypair.getPublicKey().toSuiAddress()
   const nowMs = BigInt(Date.now())
 
-  // 1. Enumerate all registered surveys via the SurveyRegistered event.
   const surveys: Array<{ surveyId: string; vaultId: string }> = []
   let cursor: any = null
   let pageCount = 0
@@ -104,7 +98,6 @@ export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
     return 0
   }
 
-  // 2. Check each, purge the eligible ones (bounded per cycle).
   let purged = 0
   for (const { surveyId, vaultId } of surveys) {
     if (purged >= maxPerCycle) break
@@ -112,24 +105,29 @@ export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
     if (!state || !isPurgeable(state, nowMs)) continue
 
     try {
-      const tx = new Transaction()
-      tx.setSender(sponsorAddress)
+      const creator =
+        state.creator ?? (await readVaultCreator(suiClient, vaultId))
+
+      const { tx, gasBudget, transferAmount, platformFee, creator: refundCreator } =
+        await buildAndDryRunPurgeWithRebateRefund(
+          suiClient,
+          sponsorKeypair,
+          { packageId, registryId, surveyId, vaultId },
+          creator
+        )
+
       tx.setGasBudget(Number(gasBudget))
-      tx.moveCall({
-        target: `${packageId}::survey_vault::purge`,
-        arguments: [
-          tx.object(registryId),
-          tx.object(surveyId),
-          tx.object(vaultId),
-          tx.object('0x6'), // Clock
-        ],
-      })
       await suiClient.signAndExecuteTransaction({ transaction: tx, signer: sponsorKeypair })
+
       purged++
-      console.log(`[PurgeTask] Purged survey ${surveyId} (vault ${vaultId})`)
+      if (transferAmount > 0n) {
+        console.log(
+          `[PurgeTask] Purged vault ${vaultId}, rebate ${transferAmount} MIST → creator ${refundCreator} (platform fee ${platformFee} MIST)`
+        )
+      } else {
+        console.log(`[PurgeTask] Purged survey ${surveyId} (vault ${vaultId})`)
+      }
     } catch (err) {
-      // Most likely the on-chain gate rejected (clock skew) or it was purged by a
-      // racing caller. Skip and retry next cycle.
       console.warn(`[PurgeTask] purge failed for ${vaultId}:`, err)
     }
   }
@@ -147,7 +145,7 @@ let purgeInterval: NodeJS.Timeout | null = null
 export function startPurgeTask(
   suiClient: SuiClient,
   keypair: Ed25519Keypair,
-  packageId: string,
+  packageId: string
 ): () => void {
   if (process.env.PURGE_TASK_ENABLED !== 'true') {
     console.log('[PurgeTask] Disabled (set PURGE_TASK_ENABLED=true to enable).')
@@ -161,7 +159,7 @@ export function startPurgeTask(
 
   const intervalMs = process.env.PURGE_SCAN_INTERVAL_MS
     ? parseInt(process.env.PURGE_SCAN_INTERVAL_MS, 10)
-    : 3600_000 // 1 hour
+    : 43200000
   const maxPerCycle = process.env.PURGE_MAX_PER_CYCLE
     ? parseInt(process.env.PURGE_MAX_PER_CYCLE, 10)
     : 10

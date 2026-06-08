@@ -232,14 +232,12 @@ export async function queryPoolState(
 }
 
 /**
- * Persist deployed object IDs into `.env.shared` (merges with existing values).
+ * Persist deployed object IDs into root `.env` (merges with existing values).
  */
-export function writeEnvShared(updates: Record<string, string>): void {
-  const envPath = resolve(__dirname, '../../.env.shared')
-  mergeEnvFile(envPath, updates)
+export function mergeRootEnv(updates: Record<string, string>): void {
   const rootEnvPath = resolve(__dirname, '../../.env')
   mergeEnvFile(rootEnvPath, updates)
-  console.log(`\nWritten to .env.shared and .env:`)
+  console.log(`\nWritten to .env:`)
   for (const [k, v] of Object.entries(updates)) {
     console.log(`  ${k}=${v}`)
   }
@@ -273,16 +271,6 @@ async function main() {
   // 3. Set Issuer Pubkey in IssuerConfig
   let issuerPrivHex = process.env.SURVEY_PASS_ISSUER_PRIV
   if (!issuerPrivHex) {
-    const bffEnvPath = resolve(__dirname, '../../bff/.env')
-    if (existsSync(bffEnvPath)) {
-      const bffEnv = readFileSync(bffEnvPath, 'utf8')
-      const match = bffEnv.match(/SURVEY_PASS_ISSUER_PRIV\s*=\s*([a-fA-F0-9xX]+)/)
-      if (match) {
-        issuerPrivHex = match[1]
-      }
-    }
-  }
-  if (!issuerPrivHex) {
     issuerPrivHex = '0101010101010101010101010101010101010101010101010101010101010101'
   }
   const issuerPrivClean = issuerPrivHex.startsWith('0x') ? issuerPrivHex.slice(2) : issuerPrivHex
@@ -306,8 +294,8 @@ async function main() {
   await client.waitForTransaction({ digest: setPubkeyResult.digest })
   console.log('  Issuer public key set successfully!')
 
-  // 4. Persist IDs into root .env and .env.shared
-  writeEnvShared({
+  // 4. Persist IDs into root .env
+  mergeRootEnv({
     SUI_PACKAGE_ID: packageId,
     SR_TREASURY_ID: srTreasuryId,
     SSR_TREASURY_ID: ssrTreasuryId,

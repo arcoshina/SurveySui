@@ -9,7 +9,7 @@ import {
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import { fromBase64 } from '@mysten/sui/utils'
-import { PURGE_GRACE_MS } from '../lib/ptb'
+import { MAX_INLINE_ANSWER_BYTES, PURGE_GRACE_MS } from '../lib/ptb'
 import { useActiveSigner } from '../lib/useActiveSigner'
 import {
   buildClaimPtb,
@@ -834,14 +834,10 @@ export default function SurveyPage() {
           .join('')
       }
 
-      // Route small answers on-chain (deletable dynamic field, fully purgeable and
-      // cheap), only large ones to Walrus. Walrus bills a ~63 MiB encoded floor for
-      // any blob, so on-chain is far cheaper until answers get large — hence the
-      // generous default. Env-tunable via VITE_ANSWER_SIZE_THRESHOLD_KB.
-      const ANSWER_SIZE_THRESHOLD_KB = Number(import.meta.env.VITE_ANSWER_SIZE_THRESHOLD_KB || '100')
+      // Route small answers on-chain; larger payloads go to Walrus (matches on-chain max_inline_answer_bytes).
       let answerBlobId: string | undefined = undefined
 
-      if (encryptedAnswersBytes.length > ANSWER_SIZE_THRESHOLD_KB * 1024) {
+      if (encryptedAnswersBytes.length > MAX_INLINE_ANSWER_BYTES) {
         setIsUploadingAnswer(true)
         try {
           const uploadRes = await uploadToDecentralizedStorage(encryptedAnswersBytes)
@@ -948,8 +944,16 @@ export default function SurveyPage() {
         setPhase('review')
         return
       }
-      const friendly = translateMoveAbort(err.message)
-      setSubmitError(friendly || err.message || t.errSubmitFailed)
+      const rawMsg = err?.message ?? ''
+      let friendly: string | null = null
+      if (rawMsg.includes('inline_answer_too_large')) {
+        friendly = t.errInlineAnswerTooLarge
+      } else if (rawMsg.includes('gas_exceeds_compensation')) {
+        friendly = t.errGasExceedsCompensation
+      } else {
+        friendly = translateMoveAbort(rawMsg)
+      }
+      setSubmitError(friendly || rawMsg || t.errSubmitFailed)
       setPhase('review')
     }
   }

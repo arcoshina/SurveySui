@@ -1,6 +1,6 @@
 import { Resend } from 'resend'
 
-const FROM = process.env.EMAIL_FROM ?? 'noreply@example.com'
+const FROM = process.env.EMAIL_FROM ?? 'noreply@surveysui.com'
 
 export async function sendOtpEmail(to: string, code: string, lang?: string): Promise<void> {
   const resend = new Resend(process.env.RESEND_API_KEY)

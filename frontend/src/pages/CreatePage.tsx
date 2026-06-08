@@ -12,6 +12,7 @@ import {
   serializeFullSurveyToMarkdown,
 } from '../lib/frontmatter'
 import { estimateFundCostV2, PURGE_GRACE_MS } from '../lib/ptb'
+import { getTicketFeeMist } from '../lib/ticketFee'
 import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
 import { useT } from '../i18n'
 import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
@@ -176,17 +177,18 @@ export default function CreatePage() {
     return BigInt(gasHealth.gasCompensationAmount ?? '0')
   }, [gasHealth])
 
+  const ticketFeeMist = useMemo(() => getTicketFeeMist(), [])
+
   const requiredGas = useMemo(() => {
     if (data.perResponse <= 0 || data.maxResponses <= 0 || !gasCompensationAmount) return 0n
     const repeatMaxTimes = BigInt(data.repeatMaxTimes ?? 1)
-    const premiumFee = BigInt(data.premiumFee ?? 0)
-    const perResponseGasAndFee = gasCompensationAmount + premiumFee
+    const perResponseGasAndFee = gasCompensationAmount + ticketFeeMist
     if (data.repeatReward > 0) {
       return BigInt(data.maxResponses) * (1n + repeatMaxTimes) * perResponseGasAndFee
     } else {
       return BigInt(data.maxResponses) * perResponseGasAndFee
     }
-  }, [data.perResponse, data.maxResponses, data.repeatReward, data.repeatMaxTimes, data.premiumFee, gasCompensationAmount])
+  }, [data.perResponse, data.maxResponses, data.repeatReward, data.repeatMaxTimes, ticketFeeMist, gasCompensationAmount])
 
   const currentRate = useMemo(() => {
     const decay = 1_000_000_000_000n
@@ -225,6 +227,7 @@ export default function CreatePage() {
   const [costBreakdown, setCostBreakdown] = useState<{
     netSsrBase: bigint
     effectiveFeeBps: bigint
+    feeBase: bigint
     grossSsrBase: bigint
     offsetIn: bigint
     minted: bigint
@@ -1039,8 +1042,8 @@ export default function CreatePage() {
                       </div>
                       <div className="flex justify-between items-center gap-x-2 text-slate-600 dark:text-neutral-400">
                         <span className="min-w-0 break-words">{t.platformFeeLabel}</span>
-                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR`}>
-                          {formatSsr((costBreakdown.grossSsrBase * costBreakdown.effectiveFeeBps) / 10000n)} SSR
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision(costBreakdown.feeBase)} SSR`}>
+                          {formatSsr(costBreakdown.feeBase)} SSR
                         </span>
                       </div>
                       <div className="flex justify-between items-center gap-x-2 border-t border-slate-100 dark:border-neutral-800/50 pt-1.5 font-medium text-slate-700 dark:text-neutral-200">

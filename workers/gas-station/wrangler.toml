@@ -1,0 +1,21 @@
+name = "surveysui-gas-station"
+main = "src/index.ts"
+compatibility_date = "2025-06-07"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "GAS_STATION"
+class_name = "GasStationDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GasStationDO"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "surveysui-gas"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[vars]
+SUI_RPC_URL = "https://fullnode.devnet.sui.io:443"
+COIN_MERGE_TRIGGER_COUNT = "20"

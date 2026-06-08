@@ -1,20 +1,8 @@
-const getEnvVar = (key: string, fallback: string): string => {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      return import.meta.env[key] || fallback
-    }
-  } catch {}
-  try {
-    if (typeof process !== 'undefined' && process.env) {
-      return process.env[key] || fallback
-    }
-  } catch {}
-  return fallback
-}
-
-const WALRUS_PUBLISHER = getEnvVar('VITE_WALRUS_PUBLISHER_URL', 'https://publisher.walrus-testnet.walrus.space');
-const WALRUS_AGGREGATOR = getEnvVar('VITE_WALRUS_AGGREGATOR_URL', 'https://aggregator.walrus-testnet.walrus.space');
-const BFF_URL = getEnvVar('VITE_BFF_URL', 'http://localhost:3100');
+const WALRUS_PUBLISHER =
+  import.meta.env.VITE_WALRUS_PUBLISHER_URL ?? 'https://publisher.walrus-testnet.walrus.space'
+const WALRUS_AGGREGATOR =
+  import.meta.env.VITE_WALRUS_AGGREGATOR_URL ?? 'https://aggregator.walrus-testnet.walrus.space'
+const BFF_URL = import.meta.env.VITE_BFF_URL ?? 'http://localhost:3100'
 
 /**
  * How many epochs to store a Walrus blob for. Should cover the survey's active
@@ -22,11 +10,21 @@ const BFF_URL = getEnvVar('VITE_BFF_URL', 'http://localhost:3100');
  * Env-tunable per deployment (mainnet epoch = 14 days, testnet = 1 day; note
  * Walrus caps storage at `max_epochs_ahead`, currently 53).
  */
-const WALRUS_STORAGE_EPOCHS = Number(getEnvVar('VITE_WALRUS_STORAGE_EPOCHS', '5')) || 5;
+const WALRUS_STORAGE_EPOCHS = Number(import.meta.env.VITE_WALRUS_STORAGE_EPOCHS ?? '5') || 5
 
 export interface UploadResult {
-  blobId: string;
-  provider: 'walrus' | 'ipfs';
+  blobId: string
+  /** Sui object ID of the Walrus blob; required for on-chain extend. */
+  blobObjectId?: string
+  provider: 'walrus' | 'ipfs'
+}
+
+function parseWalrusBlobObjectId(json: Record<string, unknown>): string | undefined {
+  const newlyCreated = json.newlyCreated as Record<string, unknown> | undefined
+  const blobObject = newlyCreated?.blobObject as Record<string, unknown> | undefined
+  if (!blobObject) return undefined
+  const id = blobObject.id ?? blobObject.objectId
+  return typeof id === 'string' ? id : undefined
 }
 
 /**
@@ -46,9 +44,12 @@ export async function uploadToDecentralizedStorage(
     });
     if (res.ok) {
       const json = await res.json();
-      const blobId = json.newlyCreated?.blobObject?.blobId || json.alreadyCertified?.blobId;
+      const blobId =
+        (json.newlyCreated as { blobObject?: { blobId?: string } } | undefined)?.blobObject
+          ?.blobId || (json.alreadyCertified as { blobId?: string } | undefined)?.blobId
+      const blobObjectId = parseWalrusBlobObjectId(json as Record<string, unknown>)
       if (blobId) {
-        return { blobId, provider: 'walrus' };
+        return { blobId, blobObjectId, provider: 'walrus' }
       }
     }
   } catch (e) {

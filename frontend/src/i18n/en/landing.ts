@@ -5,6 +5,7 @@ const landing: LandingDict = {
   heroDesc: 'Free to fill, automatic rewards, tamper-proof data — SurveySui is a survey platform built on the public blockchain.',
   btnCreate: 'Create Survey',
   btnGuide: 'Get Started Guide',
+  btnDocs: 'Documentation',
   btnExplore: 'Explore Square',
   stepsTitle: 'Three Steps to Complete a Survey',
   stepLabel: 'Step',

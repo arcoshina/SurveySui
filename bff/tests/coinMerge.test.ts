@@ -57,6 +57,49 @@ describe('BFF Coin Merge Task Tests', () => {
     expect(mockSuiClient.signAndExecuteTransaction).toHaveBeenCalled()
   })
 
+  it('should not merge locked gas coins', async () => {
+    const mockCoins = [
+      {
+        coinObjectId: '0x0000000000000000000000000000000000000000000000000000000000000001',
+        version: '1',
+        digest: '11111111111111111111111111111111',
+        balance: '1000000000',
+      },
+    ]
+
+    for (let i = 0; i < 60; i++) {
+      const hexId = (i + 2).toString(16).padStart(64, '0')
+      mockCoins.push({
+        coinObjectId: `0x${hexId}`,
+        version: '1',
+        digest: '11111111111111111111111111111111',
+        balance: '50000000',
+      })
+    }
+
+    mockSuiClient.getCoins.mockResolvedValue({
+      data: mockCoins,
+      hasNextPage: false,
+    })
+
+    const locked = new Set(['0x0000000000000000000000000000000000000000000000000000000000000001'])
+
+    const result = await checkAndMergeCoins({
+      suiClient: mockSuiClient,
+      sponsorKeypair: keypair,
+      thresholdMist: 100_000_000n,
+      triggerCount: 50,
+      lockedCoinIds: locked,
+    })
+
+    expect(result).toBe(true)
+    const txArg = mockSuiClient.signAndExecuteTransaction.mock.calls[0][0].transaction
+    const gasPayment = txArg.blockData.gasConfig.payment
+    expect(gasPayment[0].objectId).not.toBe(
+      '0x0000000000000000000000000000000000000000000000000000000000000001'
+    )
+  })
+
   // 2. 當小額 Coin 數量不足時，不應觸發合併
   it('should not trigger coin merging when small coin count is less than triggerCount', async () => {
     // 模擬 10 個小額 Coin 加上 1 個 Gas Coin

@@ -15,7 +15,7 @@
  *   1. 重新 publish package
  *   2. 重新 init_pool
  *   3. set_issuer_pubkey（否則鏈上驗 ticket 簽章 abort 1）
- *   4. 把新 ID 寫進 root `.env`、`.env.shared`、`frontend/.env`、`bff/.env`
+ *   4. 把新 ID 寫進根目錄 `.env`
  *   4. 印出下一步（重啟 BFF / 重啟 vite dev server）
  */
 import { resolve, dirname } from 'node:path'
@@ -25,7 +25,7 @@ import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
 import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { requireEnv } from './env.js'
-import { deployPackage, initAmmPool, writeEnvShared } from './init.js'
+import { deployPackage, initAmmPool, mergeRootEnv } from './init.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -74,8 +74,7 @@ async function main() {
 
   const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
 
-  // Set Issuer Pubkey in the fresh IssuerConfig（否則鏈上驗 BFF ticket 簽章必失敗 = abort 1）。
-  // 私鑰優先讀 bff/.env（init.ts 只 dotenv 載 root .env，故這裡須顯式撈 bff/.env），最後 fallback dev key。
+  // Set Issuer Pubkey（私鑰來自根目錄 .env 的 SURVEY_PASS_ISSUER_PRIV，缺值則用 dev key）
   let issuerPrivHex = process.env.SURVEY_PASS_ISSUER_PRIV
   if (!issuerPrivHex) {
     issuerPrivHex = '0101010101010101010101010101010101010101010101010101010101010101'
@@ -102,7 +101,7 @@ async function main() {
   await client.waitForTransaction({ digest: setPubkeyResult.digest })
   console.log(`  Issuer public key set: ${Buffer.from(issuerPubkeyBytes).toString('hex')}`)
 
-  writeEnvShared({
+  mergeRootEnv({
     SUI_PACKAGE_ID: packageId,
     SR_TREASURY_ID: srTreasuryId,
     SSR_TREASURY_ID: ssrTreasuryId,

@@ -20,6 +20,7 @@ import {
   type DecryptedResponse,
 } from '../lib/dashboardDecrypt'
 import { buildClosePtb, buildPurgePtb, PURGE_GRACE_MS } from '../lib/ptb'
+import { buildExtendWalrusBlobTx } from '../lib/walrusExtend'
 import { formatSsr, formatSui, formatFullPrecision, formatCompactInt, formatCompactCoin } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
@@ -37,6 +38,16 @@ import { Globe, Zap } from 'lucide-react'
 import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 const SURVEY_KEY_PREFIX = 'surveysui:survey:'
+
+function getOptionId(opt: unknown): string | null {
+  if (!opt) return null
+  if (typeof opt === 'string') return opt
+  const rec = opt as { fields?: { vec?: unknown }; vec?: unknown }
+  const vec = rec.fields?.vec ?? rec.vec
+  if (typeof vec === 'string') return vec
+  if (Array.isArray(vec) && vec.length > 0) return String(vec[0])
+  return null
+}
 
 function getOptionVec(opt: any): Uint8Array | null {
   if (!opt) return null
@@ -847,6 +858,30 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
   const [closeError, setCloseError] = useState<string | null>(null)
   const [purgeStatus, setPurgeStatus] = useState<'idle' | 'confirm' | 'signing' | 'success' | 'error'>('idle')
   const [purgeError, setPurgeError] = useState<string | null>(null)
+  const [extendStatus, setExtendStatus] = useState<'idle' | 'signing' | 'success' | 'error'>('idle')
+  const [extendError, setExtendError] = useState<string | null>(null)
+
+  const walrusBlobObjectId = useMemo(() => {
+    const fields = surveyData?.content?.fields as Record<string, unknown> | undefined
+    if (!fields) return null
+    return getOptionId(fields.survey_blob_object_id)
+  }, [surveyData])
+
+  const isWalrusSurvey = useMemo(() => {
+    const fields = surveyData?.content?.fields as Record<string, unknown> | undefined
+    if (!fields) return false
+    return !!getOptionVec(fields.survey_blob_id)
+  }, [surveyData])
+
+  const walrusCoverageTargetMs = useMemo(() => {
+    if (!surveyMeta) return 0
+    const closedAt = vault?.closed_at_ms ? Number(vault.closed_at_ms) : 0
+    if (closedAt > 0) {
+      const grace = vault?.purge_grace_ms ? Number(vault.purge_grace_ms) : Number(PURGE_GRACE_MS)
+      return closedAt + grace
+    }
+    return surveyMeta.deadlineMs + Number(PURGE_GRACE_MS)
+  }, [surveyMeta, vault])
 
   const canClose = isActive && closeStatus !== 'signing' && closeStatus !== 'success'
 
@@ -880,6 +915,44 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
   // Creator-initiated immediate purge of a closed survey (bypasses the grace
   // window — the contract permits this only for the creator on a closed vault).
+  async function handleExtendWalrus() {
+    if (!walrusBlobObjectId || !account?.address || extendStatus === 'signing') return
+    setExtendError(null)
+    setExtendStatus('signing')
+    try {
+      const tx = await buildExtendWalrusBlobTx(suiClient as unknown as SuiClient, {
+        blobObjectId: walrusBlobObjectId,
+        coverageTargetMs: walrusCoverageTargetMs,
+        sender: account.address,
+      })
+      signAndExecute(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { transaction: tx as any },
+        {
+          onSuccess: () => {
+            setExtendStatus('success')
+          },
+          onError: (err) => {
+            setExtendError(err.message)
+            setExtendStatus('error')
+          },
+        }
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t.errPtbBuildFailed
+      if (msg === 'walrus_extend_no_wal') {
+        setExtendError(t.walrusExtendNoWal)
+      } else if (msg === 'walrus_extend_insufficient_wal') {
+        setExtendError(t.walrusExtendInsufficientWal)
+      } else if (msg === 'walrus_extend_not_needed') {
+        setExtendError(t.walrusExtendNotNeeded)
+      } else {
+        setExtendError(msg)
+      }
+      setExtendStatus('error')
+    }
+  }
+
   function handlePurge() {
     if (!vaultId || !surveyId || isActive) return
     const registryId = import.meta.env.VITE_SURVEY_REGISTRY_ID as string | undefined
@@ -1360,6 +1433,27 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
         {!surveyMeta && (
           <p className="text-muted mt-3">{t.metaUnavailable}</p>
         )}
+
+        {isWalrusSurvey && walrusBlobObjectId && vault?.status !== 2 && (
+          <div className="alert-info mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm font-normal">{t.walrusExtendHint}</p>
+            <button
+              type="button"
+              className="btn-outline shrink-0 disabled:opacity-50"
+              disabled={extendStatus === 'signing' || extendStatus === 'success'}
+              onClick={() => void handleExtendWalrus()}
+            >
+              {extendStatus === 'signing'
+                ? t.walrusExtending
+                : extendStatus === 'success'
+                  ? t.walrusExtendSuccess
+                  : t.walrusExtendBtn}
+            </button>
+          </div>
+        )}
+        {extendError && (
+          <p className="text-sm font-normal text-rose-700 dark:text-rose-400 mt-2">{extendError}</p>
+        )}
       </section>
 
       {/* ── 解密 + 統計圖表 ──────────────────────────────────────────────── */}
@@ -1709,10 +1803,6 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
             </div>
           )}
 
-          {isCreator && isActive && (
-            <p className="text-muted mb-2">{t.closeWarning(PURGE_GRACE_DAYS)}</p>
-          )}
-
           {isCreator && (
             <div className="flex flex-wrap items-center gap-3">
               <button
@@ -1767,6 +1857,10 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
                 </>
               )}
             </div>
+          )}
+
+          {isCreator && (
+            <p className="text-muted mt-2">{t.closeAndPurgeNotice(PURGE_GRACE_DAYS)}</p>
           )}
 
           {isCreator && !isActive && purgeStatus === 'error' && purgeError && (

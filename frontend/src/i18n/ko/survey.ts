@@ -117,6 +117,10 @@ const survey: SurveyDict = {
   storageDecentralized: 'Walrus에 저장',
   locale: 'ko',
   errEncryptSubmitFailed: '답변 암호화 및 제출 실패',
+  errInlineAnswerTooLarge:
+    '답변이 너무 커서 온체인 직접 저장이 불가합니다. 내용을 줄이거나 다시 시도하세요(큰 데이터는 Walrus로 저장됩니다).',
+  errGasExceedsCompensation:
+    '예상 가스비가 설문 보상 한도를 초과하여 스폰서 대납이 거부되었습니다. 직접 가스를 지불하거나 생성자에게 문의하세요.',
   encryptingSubmit: '답변을 암호화하여 전송하는 중...',
   pleaseWait: '잠시만 기다려 주세요. 몇 초 정도 소요될 수 있습니다.',
   charLimit: (n: number) => `${n}자 이내`,

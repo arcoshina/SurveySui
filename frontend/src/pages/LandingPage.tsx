@@ -392,10 +392,10 @@ export default function LandingPage() {
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
           <Link
-            to="/create"
-            className="btn-primary"
+            to="/docs"
+            className="btn-secondary"
           >
-            {t.btnCreate}
+            {t.btnDocs}
           </Link>
           <a
             href="/guide"
@@ -405,6 +405,12 @@ export default function LandingPage() {
           >
             {t.btnGuide}
           </a>
+          <Link
+            to="/create"
+            className="btn-primary"
+          >
+            {t.btnCreate}
+          </Link>
         </div>
       </section>
 
@@ -417,7 +423,7 @@ export default function LandingPage() {
               const Icon = stepsIcons[index]
               return (
                 <div key={index} className="text-center flex flex-col items-center">
-                  <div className="text-blue-700 dark:text-blue-400 mb-3 flex items-center justify-center h-12 w-12 bg-blue-50 dark:bg-blue-900/30 border border-blue-100 dark:border-blue-900/30 rounded-full">
+                  <div className="text-blue-700 dark:text-blue-400 mb-3 flex items-center justify-center h-12 w-12 bg-white dark:bg-blue-900/30 border border-slate-200 dark:border-blue-900/30 rounded-full">
                     <Icon size={24} />
                   </div>
                   <div className="inline-block bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/20 text-blue-700 dark:text-blue-400 text-xs font-normal rounded-full px-3 py-1 mb-3">
@@ -516,7 +522,7 @@ export default function LandingPage() {
                             <Link
                               key={item.vaultId}
                               to={`/s/${item.surveyId}`}
-                              className="bg-slate-100 dark:bg-neutral-950 border border-slate-300 dark:border-neutral-800 rounded-2xl p-5 flex flex-col justify-between transition-colors hover:bg-slate-200/60 dark:hover:bg-neutral-900/60 hover:border-slate-400 dark:hover:border-neutral-700 cursor-pointer no-underline block text-inherit"
+                              className="bg-slate-100 dark:bg-neutral-700 border border-slate-300 dark:border-neutral-600 rounded-2xl p-5 flex flex-col justify-between transition-colors hover:bg-slate-200 dark:hover:bg-neutral-600 hover:border-slate-400 dark:hover:border-neutral-500 cursor-pointer no-underline block text-inherit"
                             >
                               {/* 標題與說明 */}
                               <div className="mb-3">

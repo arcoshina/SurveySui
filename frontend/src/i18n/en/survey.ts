@@ -117,6 +117,10 @@ const survey: SurveyDict = {
   storageDecentralized: 'Walrus Mode',
   locale: 'en-US',
   errEncryptSubmitFailed: 'Failed to encrypt and submit response',
+  errInlineAnswerTooLarge:
+    'Response is too large for on-chain inline storage. Shorten your answers or retry (the app should route large payloads to Walrus).',
+  errGasExceedsCompensation:
+    'Estimated gas exceeds this survey vault compensation; sponsorship was denied. Pay gas yourself or contact the creator.',
   encryptingSubmit: 'Encrypting and submitting response...',
   pleaseWait: 'Please wait, this may take a few seconds.',
   charLimit: (n: number) => `Limit to ${n} chars`,

@@ -117,6 +117,10 @@ const survey: SurveyDict = {
   storageDecentralized: 'Walrusに保存',
   locale: 'ja',
   errEncryptSubmitFailed: '回答の暗号化および送信に失敗しました',
+  errInlineAnswerTooLarge:
+    '回答が大きすぎてオンチェーンに直接保存できません。内容を短くするか、再試行してください（大きいデータは Walrus に保存されます）。',
+  errGasExceedsCompensation:
+    '推定ガスがアンケートの補償上限を超えたため、スポンサー代行を拒否しました。自己負担するか、作成者にご連絡ください。',
   encryptingSubmit: '回答を暗号化して送信しています...',
   pleaseWait: 'お待ちください。これには数秒かかる場合があります。',
   charLimit: (n: number) => `${n} 文字以内`,

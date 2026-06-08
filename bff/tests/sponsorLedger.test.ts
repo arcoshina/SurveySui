@@ -20,7 +20,7 @@ describe('SponsorLedger Unit Tests', () => {
   const passTxPage = (
     count: number,
     status: 'success' | 'failure' = 'success',
-    opts: { pkg?: string; timestampMs?: string } = {}
+    opts: { pkg?: string; timestampMs?: string; fn?: string } = {}
   ) => ({
     data: Array.from({ length: count }, () => ({
       timestampMs: opts.timestampMs,
@@ -33,7 +33,7 @@ describe('SponsorLedger Unit Tests', () => {
               {
                 MoveCall: {
                   module: 'survey_pass',
-                  function: 'mint_pass',
+                  function: opts.fn ?? 'mint_pass',
                   ...(opts.pkg ? { package: opts.pkg } : {}),
                 },
               },
@@ -135,6 +135,19 @@ describe('SponsorLedger Unit Tests', () => {
     })
     expect(blockRes.allowed).toBe(false)
     expect(blockRes.count).toBe(2)
+  })
+
+  it('should count mint_pass_with_extra_credentials toward sponsor limit', async () => {
+    mockSuiClient.queryTransactionBlocks.mockResolvedValue(
+      passTxPage(1, 'success', { fn: 'mint_pass_with_extra_credentials' })
+    )
+
+    const onChainCount = await countOnChainSponsoredTx({
+      suiClient: mockSuiClient as any,
+      senderAddress: '0x123',
+      sponsorAddress: '0xabc',
+    })
+    expect(onChainCount).toBe(1)
   })
 
   it('packageId filter: only counts txs into the matching package', async () => {

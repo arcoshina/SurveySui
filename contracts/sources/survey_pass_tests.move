@@ -349,14 +349,14 @@ fun test_self_delete_sponsored_with_fee_ok() {
         clock::destroy_for_testing(clock);
         test_scenario::return_shared(registry);
     };
-    // OWNER 自付逃生門：附 >= REBATE_FEE_FLOOR 的費用
+    // OWNER 自付逃生門：附 >= REBATE_FEE_FLOOR * 2 的費用
     test_scenario::next_tx(&mut scenario, OWNER);
     {
         let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
         let pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
 
-        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR, ctx);
+        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR * 2, ctx);
         survey_pass::self_delete_sponsored_pass(&mut registry, pass, fee, ctx);
 
         test_scenario::return_shared(registry);
@@ -365,7 +365,7 @@ fun test_self_delete_sponsored_with_fee_ok() {
     test_scenario::next_tx(&mut scenario, SPONSOR);
     {
         let received = test_scenario::take_from_address<coin::Coin<SUI>>(&scenario, SPONSOR);
-        assert!(coin::value(&received) == REBATE_FEE_FLOOR, 0);
+        assert!(coin::value(&received) == REBATE_FEE_FLOOR * 2, 0);
         test_scenario::return_to_address(SPONSOR, received);
     };
     test_scenario::end(scenario);
@@ -400,7 +400,7 @@ fun test_self_delete_fee_too_low() {
         let pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
 
-        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR - 1, ctx);
+        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR * 2 - 1, ctx);
         survey_pass::self_delete_sponsored_pass(&mut registry, pass, fee, ctx);
 
         test_scenario::return_shared(registry);
@@ -437,7 +437,7 @@ fun test_self_delete_non_owner() {
         let pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
 
-        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR, ctx);
+        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR * 2, ctx);
         survey_pass::self_delete_sponsored_pass(&mut registry, pass, fee, ctx);
 
         test_scenario::return_shared(registry);
@@ -474,7 +474,7 @@ fun test_self_delete_on_self_funded_aborts() {
         let pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
 
-        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR, ctx);
+        let fee = coin::mint_for_testing<SUI>(REBATE_FEE_FLOOR * 2, ctx);
         survey_pass::self_delete_sponsored_pass(&mut registry, pass, fee, ctx);
 
         test_scenario::return_shared(registry);
@@ -571,6 +571,266 @@ fun test_same_owner_same_nullifier_allowed() {
 
         clock::destroy_for_testing(clock);
         test_scenario::return_shared(registry);
+    };
+    test_scenario::end(scenario);
+}
+
+#[test]
+fun test_admin_rescue_revoke_success() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+
+    // 1. OWNER 鑄造 Pass 綁定 Google (6)
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        // Google 憑證 (source = 6)
+        let google_nullifier = make_nullifier(6);
+        survey_pass::mint_pass_for_testing(
+            &mut registry,
+            OWNER,
+            6,
+            vector[google_nullifier],
+            vector[],
+            9_999_999_999_999u64,
+            &clock,
+            ctx,
+        );
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+
+    // 2. 管理員註銷 Google (6) 憑證
+    test_scenario::next_tx(&mut scenario, ADMIN);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        survey_pass::admin_rescue_revoke(
+            &mut registry,
+            &mut pass,
+            &config,
+            6, // 註銷 Google
+            ctx,
+        );
+
+        test_scenario::return_shared(registry);
+        test_scenario::return_shared(config);
+        test_scenario::return_shared(pass);
+    };
+
+    // 3. 驗證該憑證是否失效
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+
+        // Google 應該無效了
+        assert!(!survey_pass::is_source_valid(&pass, 6, &clock), 0);
+        // 整體 Pass 也無效了（因為唯一的憑證被註銷了）
+        assert!(!survey_pass::is_valid(&pass, &clock), 0);
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+
+    // 4. 驗證 nullifier 已從 registry.used 釋放，新錢包 (OTHER) 可重綁 Google
+    test_scenario::next_tx(&mut scenario, OTHER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        let google_nullifier = make_nullifier(6);
+        // 重綁應成功
+        survey_pass::mint_pass_for_testing(
+            &mut registry,
+            OTHER,
+            6,
+            vector[google_nullifier],
+            vector[],
+            9_999_999_999_999u64,
+            &clock,
+            ctx,
+        );
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+
+    test_scenario::end(scenario);
+}
+
+// OAuth 雙憑證：單筆 mint 寫入 Google(6) + Email(2) 兩個 credential source
+#[test]
+fun test_mint_with_extra_credentials_dual_source() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        let google_nullifier = make_nullifier(6);
+        let email_nullifier = make_nullifier(2);
+
+        survey_pass::mint_pass_with_extra_for_testing(
+            &mut registry,
+            OWNER,
+            OWNER,
+            6, // SRC_SOCIAL_GOOGLE
+            vector[google_nullifier],
+            vector<u8>[],
+            9_999_999_999_999u64,
+            vector[2], // SRC_EMAIL
+            vector[vector[email_nullifier]],
+            vector[vector<u8>[]],
+            vector[9_999_999_999_999u64],
+            &clock,
+            ctx,
+        );
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+
+        assert!(survey_pass::is_source_valid(&pass, 6, &clock), 0);
+        assert!(survey_pass::is_source_valid(&pass, 2, &clock), 0);
+
+        let sources = survey_pass::credential_sources(&pass);
+        assert!(vector::length(&sources) == 2, 0);
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// extra 與 primary 同 source 時刷新效期（apply_credential_slot 覆寫路徑）
+#[test]
+fun test_mint_with_extra_same_source_refreshes_expiry() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        let n1 = make_nullifier(80);
+        let n2 = make_nullifier(81);
+
+        survey_pass::mint_pass_with_extra_for_testing(
+            &mut registry,
+            OWNER,
+            OWNER,
+            2,
+            vector[n1],
+            vector<u8>[],
+            1_000u64,
+            vector[2],
+            vector[vector[n2]],
+            vector[vector<u8>[]],
+            vector[9_999_999_999_999u64],
+            &clock,
+            ctx,
+        );
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+
+        // 同 source 只應有一槽，且以較晚的 expires_at 為準
+        assert!(survey_pass::is_source_valid(&pass, 2, &clock), 0);
+        assert!(vector::length(&survey_pass::credential_sources(&pass)) == 1, 0);
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = surveysui::survey_pass::EPassAlreadyExists)]
+fun test_mint_pass_duplicate_pass_aborts() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+
+    // 1. OWNER 成功鑄造 Pass
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        survey_pass::mint_pass_for_testing(
+            &mut registry,
+            OWNER,
+            2,
+            vector[make_nullifier(1)],
+            vector[],
+            9_999_999_999_999u64,
+            &clock,
+            ctx,
+        );
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+
+    // 2. OWNER 嘗試用 mint_pass 生產路徑重複鑄造，應 abort EPassAlreadyExists
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        // 呼叫 mint_pass 會 abort EPassAlreadyExists
+        survey_pass::mint_pass(
+            &mut registry,
+            &config,
+            OWNER,
+            OWNER,
+            2,
+            vector[make_nullifier(2)],
+            vector[],
+            9_999_999_999_999u64,
+            vector[],
+            &clock,
+            ctx,
+        );
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+        test_scenario::return_shared(config);
     };
     test_scenario::end(scenario);
 }

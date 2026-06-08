@@ -155,7 +155,10 @@ export async function countOnChainSponsoredTx(params: {
             if (cmd.MoveCall) {
               const call = cmd.MoveCall
               const isPassMod = call.module === 'survey_pass'
-              const isTargetFn = call.function === 'mint_pass' || call.function === 'update_pass_credential'
+              const isTargetFn =
+                call.function === 'mint_pass' ||
+                call.function === 'mint_pass_with_extra_credentials' ||
+                call.function === 'update_pass_credential'
               // Package filter: when scoped to a specific package, only count
               // calls into that package so a redeploy (reset-registry) starts the
               // lifetime quota fresh. null = count across all packages (legacy).

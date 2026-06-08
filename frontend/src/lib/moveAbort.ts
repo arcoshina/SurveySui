@@ -14,6 +14,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       3: '單題選項數量超過 50',
       4: '題目敘述不可為空',
       5: '問卷內出現重複的題目 ID',
+      10: 'Walrus 模式缺少 blob 物件 ID（survey_blob_object_id）',
     },
     survey_vault: {
       0: '只有發起者能執行此操作',
@@ -25,6 +26,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       6: '答案內容為空',
       7: 'Vault 餘額不足（AMM 滑點過大，請稍候重試）',
       12: '您已填答過本問卷。',
+      21: '答卷超過此問卷的鏈上直傳大小上限，請縮短內容或改用 Walrus 儲存路徑。',
     },
     amm_pool: {
       1: 'SUI 注資金額為 0',
@@ -47,6 +49,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       3: 'Number of options per question exceeds 50.',
       4: 'Question description cannot be empty.',
       5: 'Duplicate question IDs found within the survey.',
+      10: 'Walrus mode requires survey_blob_object_id when survey_blob_id is set.',
     },
     survey_vault: {
       0: 'Only the creator can perform this operation.',
@@ -58,6 +61,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       6: 'Answer content cannot be empty.',
       7: 'Insufficient Vault balance (large AMM slippage, please try again later).',
       12: 'You have already responded to this survey.',
+      21: 'Response exceeds this survey on-chain inline size limit; shorten answers or use Walrus storage.',
     },
     amm_pool: {
       1: 'SUI injection amount is 0.',
@@ -129,6 +133,7 @@ export function translateMoveAbort(
       else if (fnName === 'invest_and_mint' || fnName === 'admin_burn_pair') moduleName = 'amm_pool'
       else if (
         fnName === 'mint_pass' ||
+        fnName === 'mint_pass_with_extra_credentials' ||
         fnName === 'update_pass_credential' ||
         fnName === 'delete_pass' ||
         fnName === 'register_nullifier'

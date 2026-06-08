@@ -30,7 +30,7 @@ fun setup(sc: &mut ts::Scenario, clk: &clock::Clock): ID {
         @0x0,       // sponsor_address
         0,          // gas_compensation_amount
         0,          // storage_compensation_amount
-        0,          // premium_fee
+        0,          // ticket_fee
         option::none(),
         ts::ctx(sc),
     );
@@ -48,10 +48,16 @@ fun setup(sc: &mut ts::Scenario, clk: &clock::Clock): ID {
         b"content-hash",
         option::some(b"encrypted-content"),
         option::none(),
+        option::none(),
         b"schema-hash",
         b"creator-pub-key",
         vector<Question>[],
         vector[2],
+        vector[],           // allowed_nullifiers
+        0,                  // match_threshold
+        option::none(),     // disclosure_rule_blob
+        option::none(),     // stage1_survey_id
+        0,                  // claim_mode
         clk,
         ts::ctx(sc),
     );

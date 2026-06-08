@@ -33,6 +33,30 @@ export default defineConfig({
     ),
     'import.meta.env.VITE_ISSUER_CONFIG_ID': JSON.stringify(env.ISSUER_CONFIG_ID || ''),
     'import.meta.env.VITE_ADMIN_ADDRESS': JSON.stringify(env.SUI_ADMIN_ADDRESS || ''),
+    'import.meta.env.VITE_TICKET_FEE_MIST': JSON.stringify(env.TICKET_FEE_MIST || '0'),
+    'import.meta.env.VITE_WALRUS_PUBLISHER_URL': JSON.stringify(
+      env.VITE_WALRUS_PUBLISHER_URL || ''
+    ),
+    'import.meta.env.VITE_WALRUS_AGGREGATOR_URL': JSON.stringify(
+      env.VITE_WALRUS_AGGREGATOR_URL || ''
+    ),
+    'import.meta.env.VITE_WALRUS_STORAGE_EPOCHS': JSON.stringify(
+      env.VITE_WALRUS_STORAGE_EPOCHS || '5'
+    ),
+    'import.meta.env.VITE_SURVEY_SIZE_THRESHOLD_KB': JSON.stringify(
+      env.VITE_SURVEY_SIZE_THRESHOLD_KB || '10'
+    ),
+    'import.meta.env.VITE_MAX_INLINE_ANSWER_BYTES': JSON.stringify(
+      env.MAX_INLINE_ANSWER_BYTES ||
+        String(
+          Math.floor(
+            Number(env.MAX_INLINE_ANSWER_KB || env.VITE_ANSWER_SIZE_THRESHOLD_KB || '6') * 1024
+          )
+        )
+    ),
+    'import.meta.env.VITE_ANSWER_SIZE_THRESHOLD_KB': JSON.stringify(
+      env.VITE_ANSWER_SIZE_THRESHOLD_KB || env.MAX_INLINE_ANSWER_KB || '6'
+    ),
   },
   resolve: {
     alias: {

@@ -88,6 +88,12 @@ jobs:
       - name: Test scripts
         run: pnpm --filter @surveysui/scripts test
 
+      - name: Typecheck gas-station-core
+        run: pnpm --filter @surveysui/gas-station-core typecheck
+
+      - name: Test gas-station-core
+        run: pnpm --filter @surveysui/gas-station-core test
+
       - name: Typecheck BFF
         run: pnpm --filter @surveysui/bff typecheck
 

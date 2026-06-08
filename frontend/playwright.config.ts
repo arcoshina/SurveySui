@@ -30,7 +30,6 @@ export default defineConfig({
       timeout: 60_000,
       env: {
         PORT: '3100',
-        DATABASE_URL: '',
         ADMIN_PRIVATE_KEY: '',
         SUI_ADMIN_PRIVATE_KEY: '',
         SESSION_SECRET: '',
@@ -40,7 +39,7 @@ export default defineConfig({
           process.env.SURVEY_PASS_ISSUER_PRIV ||
           '0101010101010101010101010101010101010101010101010101010101010101',
         SURVEY_PASS_ISSUER_SALT: process.env.SURVEY_PASS_ISSUER_SALT || 'dev_salt_surveysui_v2',
-        // OAuth credentials — loaded from bff/.env when reuseExistingServer=true
+        // OAuth credentials — from root .env (playwright loads ../.env)
         GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
         GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
         GITHUB_OAUTH_CLIENT_ID: process.env.GITHUB_OAUTH_CLIENT_ID || '',

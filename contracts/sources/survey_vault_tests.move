@@ -11,6 +11,7 @@ use surveysui::survey_vault::{Self, SurveyVault};
 use surveysui::survey_pass::{Self, NullifierRegistry, SurveyPass, IssuerConfig};
 use surveysui::stacked_survey_reward::STACKED_SURVEY_REWARD;
 use surveysui::survey_registry::{Self, Survey};
+use surveysui::amm_pool::{Self, Pool};
 
 // 輔助：生成長度 32 的 nullifier bytes
 fun make_nullifier(seed: u8): vector<u8> {
@@ -753,7 +754,7 @@ fun test_claim_with_nft_marking_success() {
         @0x2222,
         5_000_000,
         0,
-        0, // premium_fee = 0
+        0, // ticket_fee = 0
         allowed_nft,
         ctx
     );
@@ -923,6 +924,352 @@ fun test_claim_with_nft_marking_duplicate_fails() {
         let DummyNFT { id } = nft;
         sui::object::delete(id);
         test_scenario::return_shared(vault);
+    };
+
+    test_scenario::end(scenario);
+}
+
+fun make_payload(len: u64): vector<u8> {
+    let mut v = vector<u8>[];
+    let mut i = 0u64;
+    while (i < len) {
+        vector::push_back(&mut v, (i % 256) as u8);
+        i = i + 1;
+    };
+    v
+}
+
+#[test]
+fun test_inline_answer_at_max_bytes_succeeds() {
+    let creator = @0x1111;
+    let sponsor = @0x2222;
+    let respondent = @0x3333;
+    let max_bytes = 1024u64;
+
+    let mut scenario = test_scenario::begin(creator);
+    let ctx = test_scenario::ctx(&mut scenario);
+
+    let ssr_coin = coin::mint_for_testing<STACKED_SURVEY_REWARD>(1000, ctx);
+    let gas_coin = coin::mint_for_testing<SUI>(500_000_000, ctx);
+
+    let mut vault = survey_vault::create(
+        ssr_coin,
+        10,
+        0,
+        1,
+        100,
+        100000,
+        @0xEEEE,
+        gas_coin,
+        sponsor,
+        5_000_000,
+        0,
+        0,
+        option::none(),
+        ctx
+    );
+    survey_vault::set_max_inline_answer_bytes(&mut vault, max_bytes, ctx);
+    let vault_id = sui::object::id(&vault);
+    survey_vault::share_vault(vault);
+
+    let pass = survey_pass::create_for_testing(respondent, 200000, ctx);
+
+    test_scenario::next_tx(&mut scenario, respondent);
+    {
+        let mut vault = test_scenario::take_shared<SurveyVault>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        let clock = clock::create_for_testing(ctx);
+        let survey = survey_registry::create_survey_for_testing(
+            vault_id,
+            creator,
+            vector[1, 2, 3],
+            option::some(vector[1, 2, 3]),
+            option::none(),
+            vector[1, 2, 3],
+            vector[],
+            vector[2],
+            ctx
+        );
+
+        survey_vault::claim(
+            &mut vault,
+            &survey,
+            &pass,
+            option::some(make_payload(max_bytes)),
+            option::none(),
+            &clock,
+            ctx
+        );
+
+        clock::destroy_for_testing(clock);
+        survey_registry::destroy_survey_for_testing(survey);
+        test_scenario::return_shared(vault);
+    };
+
+    survey_pass::delete_pass_for_testing(pass);
+    test_scenario::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = surveysui::survey_vault::EInlineAnswerTooLarge)]
+fun test_inline_answer_exceeds_max_bytes_fails() {
+    let creator = @0x1111;
+    let sponsor = @0x2222;
+    let respondent = @0x3333;
+    let max_bytes = 1024u64;
+
+    let mut scenario = test_scenario::begin(creator);
+    let ctx = test_scenario::ctx(&mut scenario);
+
+    let ssr_coin = coin::mint_for_testing<STACKED_SURVEY_REWARD>(1000, ctx);
+    let gas_coin = coin::mint_for_testing<SUI>(500_000_000, ctx);
+
+    let mut vault = survey_vault::create(
+        ssr_coin,
+        10,
+        0,
+        1,
+        100,
+        100000,
+        @0xEEEE,
+        gas_coin,
+        sponsor,
+        5_000_000,
+        0,
+        0,
+        option::none(),
+        ctx
+    );
+    survey_vault::set_max_inline_answer_bytes(&mut vault, max_bytes, ctx);
+    let vault_id = sui::object::id(&vault);
+    survey_vault::share_vault(vault);
+
+    let pass = survey_pass::create_for_testing(respondent, 200000, ctx);
+
+    test_scenario::next_tx(&mut scenario, respondent);
+    {
+        let mut vault = test_scenario::take_shared<SurveyVault>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        let clock = clock::create_for_testing(ctx);
+        let survey = survey_registry::create_survey_for_testing(
+            vault_id,
+            creator,
+            vector[1, 2, 3],
+            option::some(vector[1, 2, 3]),
+            option::none(),
+            vector[1, 2, 3],
+            vector[],
+            vector[2],
+            ctx
+        );
+
+        survey_vault::claim(
+            &mut vault,
+            &survey,
+            &pass,
+            option::some(make_payload(max_bytes + 1)),
+            option::none(),
+            &clock,
+            ctx
+        );
+
+        clock::destroy_for_testing(clock);
+        survey_pass::delete_pass_for_testing(pass);
+        survey_registry::destroy_survey_for_testing(survey);
+        test_scenario::return_shared(vault);
+    };
+
+    test_scenario::end(scenario);
+}
+
+#[test]
+fun test_blob_answer_not_bounded_by_inline_max() {
+    let creator = @0x1111;
+    let sponsor = @0x2222;
+    let respondent = @0x3333;
+    let max_bytes = 1024u64;
+
+    let mut scenario = test_scenario::begin(creator);
+    let ctx = test_scenario::ctx(&mut scenario);
+
+    let ssr_coin = coin::mint_for_testing<STACKED_SURVEY_REWARD>(1000, ctx);
+    let gas_coin = coin::mint_for_testing<SUI>(500_000_000, ctx);
+
+    let mut vault = survey_vault::create(
+        ssr_coin,
+        10,
+        0,
+        1,
+        100,
+        100000,
+        @0xEEEE,
+        gas_coin,
+        sponsor,
+        5_000_000,
+        0,
+        0,
+        option::none(),
+        ctx
+    );
+    survey_vault::set_max_inline_answer_bytes(&mut vault, max_bytes, ctx);
+    let vault_id = sui::object::id(&vault);
+    survey_vault::share_vault(vault);
+
+    let pass = survey_pass::create_for_testing(respondent, 200000, ctx);
+
+    test_scenario::next_tx(&mut scenario, respondent);
+    {
+        let mut vault = test_scenario::take_shared<SurveyVault>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        let clock = clock::create_for_testing(ctx);
+        let survey = survey_registry::create_survey_for_testing(
+            vault_id,
+            creator,
+            vector[1, 2, 3],
+            option::some(vector[1, 2, 3]),
+            option::none(),
+            vector[1, 2, 3],
+            vector[],
+            vector[2],
+            ctx
+        );
+
+        survey_vault::claim(
+            &mut vault,
+            &survey,
+            &pass,
+            option::none(),
+            option::some(make_payload(64)),
+            &clock,
+            ctx
+        );
+
+        clock::destroy_for_testing(clock);
+        survey_registry::destroy_survey_for_testing(survey);
+        test_scenario::return_shared(vault);
+    };
+
+    survey_pass::delete_pass_for_testing(pass);
+    test_scenario::end(scenario);
+}
+
+#[test]
+fun test_split_fee_on_reward_budget() {
+    let admin = @0xAD;
+    let treasury = @0xEE;
+    let creator = @0x11;
+
+    let mut scenario = test_scenario::begin(creator);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        amm_pool::init_pool(admin, ctx);
+    };
+    test_scenario::next_tx(&mut scenario, admin);
+    {
+        let pool = test_scenario::take_shared<Pool>(&scenario);
+        test_scenario::return_shared(pool);
+    };
+
+    test_scenario::next_tx(&mut scenario, creator);
+    {
+        let pool = test_scenario::take_shared<Pool>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        let per_response = 1_000_000_000u64;
+        let max_responses = 1000u64;
+        let budget = per_response * max_responses;
+        let effective_bps = amm_pool::effective(amm_pool::fee_config(&pool));
+        let fee = budget * effective_bps / 10_000;
+        let gross = budget + fee;
+
+        let gas = coin::zero<SUI>(ctx);
+        let mut vault = survey_vault::create_empty(
+            per_response,
+            0,
+            1,
+            max_responses,
+            100000,
+            treasury,
+            gas,
+            @0x0,
+            0,
+            0,
+            0,
+            option::none(),
+            ctx,
+        );
+
+        let ssr = coin::mint_for_testing<STACKED_SURVEY_REWARD>(gross, ctx);
+        survey_vault::deposit_existing_ssr(&mut vault, ssr);
+
+        let zero_ssr = coin::zero<STACKED_SURVEY_REWARD>(ctx);
+        survey_vault::merge_balances(&mut vault, zero_ssr, &pool);
+
+        assert!(survey_vault::balance_value(&vault) == gross, 900);
+        assert!(effective_bps == 1000, 901);
+
+        survey_vault::split_fee_to_treasury(&mut vault, &pool, ctx);
+
+        assert!(survey_vault::balance_value(&vault) == budget, 902);
+
+        test_scenario::return_shared(pool);
+        survey_vault::share_vault(vault);
+    };
+
+    test_scenario::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = surveysui::survey_vault::EInsufficientVaultBalance)]
+fun test_merge_balances_rejects_underfunded_gross() {
+    let admin = @0xAD;
+    let creator = @0x11;
+
+    let mut scenario = test_scenario::begin(creator);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        amm_pool::init_pool(admin, ctx);
+    };
+    test_scenario::next_tx(&mut scenario, admin);
+    {
+        let pool = test_scenario::take_shared<Pool>(&scenario);
+        test_scenario::return_shared(pool);
+    };
+
+    test_scenario::next_tx(&mut scenario, creator);
+    {
+        let pool = test_scenario::take_shared<Pool>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        let per_response = 1_000_000_000u64;
+        let max_responses = 100u64;
+        let budget = per_response * max_responses;
+
+        let gas = coin::zero<SUI>(ctx);
+        let mut vault = survey_vault::create_empty(
+            per_response,
+            0,
+            1,
+            max_responses,
+            100000,
+            @0xEE,
+            gas,
+            @0x0,
+            0,
+            0,
+            0,
+            option::none(),
+            ctx,
+        );
+
+        let ssr = coin::mint_for_testing<STACKED_SURVEY_REWARD>(budget, ctx);
+        survey_vault::deposit_existing_ssr(&mut vault, ssr);
+
+        let zero_ssr = coin::zero<STACKED_SURVEY_REWARD>(ctx);
+        survey_vault::merge_balances(&mut vault, zero_ssr, &pool);
+
+        test_scenario::return_shared(pool);
+        survey_vault::share_vault(vault);
     };
 
     test_scenario::end(scenario);

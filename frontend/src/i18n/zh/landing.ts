@@ -3,6 +3,7 @@ const landing = {
   heroDesc: '填答免費、獎勵自動發放、資料不可竄改——SurveySui 是建立在公開區塊鏈上的問卷平台。',
   btnCreate: '建立問卷',
   btnGuide: '新手教學',
+  btnDocs: '說明文件',
   btnExplore: '探索廣場',
   stepsTitle: '三步驟，完成一份問卷',
   stepLabel: '步驟',

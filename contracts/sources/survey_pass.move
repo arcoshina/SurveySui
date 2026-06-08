@@ -19,10 +19,14 @@ const SRC_WORLD_ID: u8 = 5;
 // 皆映射到與 SRC_SOCIAL 相同的 tier 1。保留 SRC_SOCIAL(3) 給舊資料／未知 provider。
 const SRC_SOCIAL_GOOGLE: u8 = 6;
 const SRC_SOCIAL_GITHUB: u8 = 7;
+/// 受眾自填維度：無 CredentialSlot、無 tier；篩選靠 claim_v2 的 attribute_nullifiers 輸入。
+const SRC_ATTRIBUTES: u8 = 8;
 
 // Status types
 const STATUS_ACTIVE: u8 = 0;
 const STATUS_REVOKED: u8 = 3;
+const CREDENTIAL_ACTIVE: u8 = 0;
+const CREDENTIAL_REVOKED: u8 = 1;
 
 // Error codes
 const EDuplicateNullifier: u64 = 0;
@@ -33,6 +37,8 @@ const ENotAdmin: u64 = 4;
 const ENotActive: u64 = 5;
 const EPassRevoked: u64 = 6;
 const EFeeTooLow: u64 = 7;
+const EPassAlreadyExists: u64 = 8;
+const EExtraTicketsMismatch: u64 = 9;
 
 // 自付逃生門：使用者自刪「項目方代付」的 Pass 時，需附 ≥ 此額度的費用轉回項目方，
 // 以抵銷其作為 gas owner 拿到的儲存返還，杜絕女巫套利。
@@ -73,6 +79,7 @@ public struct CredentialSlot has store {
     nullifiers: vector<vector<u8>>, // index 0 = primary, 1+ = secondary
     issued_at: u64,
     expires_at: u64,
+    status: u8,
 }
 
 public struct TicketPayload has copy, drop {
@@ -102,7 +109,7 @@ public fun is_source_valid(pass: &SurveyPass, source: u8, clock: &Clock): bool {
     let key = CredentialKey { source };
     if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
         let slot = dynamic_field::borrow<CredentialKey, CredentialSlot>(&pass.id, key);
-        clock::timestamp_ms(clock) < slot.expires_at
+        slot.status == CREDENTIAL_ACTIVE && clock::timestamp_ms(clock) < slot.expires_at
     } else {
         false
     }
@@ -148,6 +155,36 @@ fun verify_ticket(
     );
 }
 
+/// 寫入或更新 Pass 上單一 source 的 credential slot（不含 ticket 驗證／nullifier 註冊）。
+fun apply_credential_slot(
+    pass: &mut SurveyPass,
+    source: u8,
+    nullifiers: vector<vector<u8>>,
+    commitment: vector<u8>,
+    expires_at: u64,
+    clock: &Clock,
+) {
+    let key = CredentialKey { source };
+    if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
+        let slot = dynamic_field::borrow_mut<CredentialKey, CredentialSlot>(&mut pass.id, key);
+        slot.commitment = commitment;
+        slot.nullifiers = nullifiers;
+        slot.issued_at = clock::timestamp_ms(clock);
+        slot.expires_at = expires_at;
+        slot.status = CREDENTIAL_ACTIVE;
+    } else {
+        vector::push_back(&mut pass.credential_sources, source);
+        let slot = CredentialSlot {
+            commitment,
+            nullifiers,
+            issued_at: clock::timestamp_ms(clock),
+            expires_at,
+            status: CREDENTIAL_ACTIVE,
+        };
+        dynamic_field::add(&mut pass.id, key, slot);
+    };
+}
+
 // 註冊 nullifier
 fun register_nullifier(
     registry: &mut NullifierRegistry,
@@ -177,6 +214,7 @@ public fun mint_pass(
     ctx: &mut TxContext,
 ) {
     assert!(ctx.sender() == owner, EOwnerMismatch);
+    assert!(!table::contains(&registry.passes, owner), EPassAlreadyExists);
     verify_ticket(config, owner, source, &nullifiers, &commitment, expires_at, &bff_sig, clock);
     register_all_nullifiers(registry, &nullifiers, owner);
 
@@ -190,19 +228,87 @@ public fun mint_pass(
         encrypted_payload: option::none(),
     };
 
-    if (table::contains(&registry.passes, owner)) {
-        table::remove(&mut registry.passes, owner);
-    };
     table::add(&mut registry.passes, owner, object::id(&pass));
 
-    let key = CredentialKey { source };
-    let slot = CredentialSlot {
-        commitment,
-        nullifiers,
-        issued_at: clock::timestamp_ms(clock),
-        expires_at,
+    apply_credential_slot(&mut pass, source, nullifiers, commitment, expires_at, clock);
+
+    transfer::share_object(pass);
+}
+
+/// Mint a new SurveyPass and apply additional credentials in the same transaction (OAuth 雙 ticket 單筆代付)。
+public fun mint_pass_with_extra_credentials(
+    registry: &mut NullifierRegistry,
+    config: &IssuerConfig,
+    owner: address,
+    deposit_payer: address,
+    source: u8,
+    nullifiers: vector<vector<u8>>,
+    commitment: vector<u8>,
+    expires_at: u64,
+    bff_sig: vector<u8>,
+    extra_sources: vector<u8>,
+    extra_nullifiers: vector<vector<vector<u8>>>,
+    extra_commitments: vector<vector<u8>>,
+    extra_expires_at: vector<u64>,
+    extra_bff_sigs: vector<vector<u8>>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(ctx.sender() == owner, EOwnerMismatch);
+    assert!(!table::contains(&registry.passes, owner), EPassAlreadyExists);
+
+    let extra_len = vector::length(&extra_sources);
+    assert!(extra_len == vector::length(&extra_nullifiers), EExtraTicketsMismatch);
+    assert!(extra_len == vector::length(&extra_commitments), EExtraTicketsMismatch);
+    assert!(extra_len == vector::length(&extra_expires_at), EExtraTicketsMismatch);
+    assert!(extra_len == vector::length(&extra_bff_sigs), EExtraTicketsMismatch);
+
+    verify_ticket(config, owner, source, &nullifiers, &commitment, expires_at, &bff_sig, clock);
+    register_all_nullifiers(registry, &nullifiers, owner);
+
+    let mut pass = SurveyPass {
+        id: object::new(ctx),
+        owner,
+        deposit_payer,
+        credential_sources: vector[],
+        created_at: clock::timestamp_ms(clock),
+        status: STATUS_ACTIVE,
+        encrypted_payload: option::none(),
     };
-    dynamic_field::add(&mut pass.id, key, slot);
+
+    table::add(&mut registry.passes, owner, object::id(&pass));
+
+    apply_credential_slot(&mut pass, source, nullifiers, commitment, expires_at, clock);
+
+    let mut i = 0;
+    while (i < extra_len) {
+        let ex_source = *vector::borrow(&extra_sources, i);
+        let ex_nullifiers = *vector::borrow(&extra_nullifiers, i);
+        let ex_commitment = *vector::borrow(&extra_commitments, i);
+        let ex_expires_at = *vector::borrow(&extra_expires_at, i);
+        let ex_bff_sig = *vector::borrow(&extra_bff_sigs, i);
+
+        verify_ticket(
+            config,
+            owner,
+            ex_source,
+            &ex_nullifiers,
+            &ex_commitment,
+            ex_expires_at,
+            &ex_bff_sig,
+            clock,
+        );
+        register_all_nullifiers(registry, &ex_nullifiers, owner);
+        apply_credential_slot(
+            &mut pass,
+            ex_source,
+            ex_nullifiers,
+            ex_commitment,
+            ex_expires_at,
+            clock,
+        );
+        i = i + 1;
+    };
 
     transfer::share_object(pass);
 }
@@ -226,23 +332,7 @@ public fun update_pass_credential(
     verify_ticket(config, owner, source, &nullifiers, &commitment, expires_at, &bff_sig, clock);
     register_all_nullifiers(registry, &nullifiers, owner);
 
-    let key = CredentialKey { source };
-    if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
-        let slot = dynamic_field::borrow_mut<CredentialKey, CredentialSlot>(&mut pass.id, key);
-        slot.commitment = commitment;
-        slot.nullifiers = nullifiers;
-        slot.issued_at = clock::timestamp_ms(clock);
-        slot.expires_at = expires_at;
-    } else {
-        vector::push_back(&mut pass.credential_sources, source);
-        let slot = CredentialSlot {
-            commitment,
-            nullifiers,
-            issued_at: clock::timestamp_ms(clock),
-            expires_at,
-        };
-        dynamic_field::add(&mut pass.id, key, slot);
-    };
+    apply_credential_slot(pass, source, nullifiers, commitment, expires_at, clock);
 }
 
 public fun revoke_pass(
@@ -253,6 +343,39 @@ public fun revoke_pass(
     assert!(ctx.sender() == config.admin, ENotAdmin);
     assert!(pass.status == STATUS_ACTIVE, ENotActive);
     pass.status = STATUS_REVOKED;
+}
+
+public fun admin_rescue_revoke(
+    registry: &mut NullifierRegistry,
+    pass: &mut SurveyPass,
+    config: &IssuerConfig,
+    source_to_revoke: u8,
+    ctx: &mut TxContext,
+) {
+    assert!(ctx.sender() == config.admin, ENotAdmin);
+    assert!(pass.status == STATUS_ACTIVE, ENotActive);
+
+    let key = CredentialKey { source: source_to_revoke };
+    assert!(
+        dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key),
+        ENotActive,
+    );
+
+    let slot = dynamic_field::borrow_mut<CredentialKey, CredentialSlot>(&mut pass.id, key);
+    assert!(slot.status == CREDENTIAL_ACTIVE, ENotActive);
+    slot.status = CREDENTIAL_REVOKED;
+
+    let nullifiers = *&slot.nullifiers;  // 複製，避免從 &mut 移出
+    let owner = pass.owner;
+    let mut k = 0;
+    let klen = vector::length(&nullifiers);
+    while (k < klen) {
+        let nh = *vector::borrow(&nullifiers, k);
+        if (table::contains(&registry.used, nh) && *table::borrow(&registry.used, nh) == owner) {
+            table::remove(&mut registry.used, nh);
+        };
+        k = k + 1;
+    };
 }
 
 /// 刪除 Pass。授權直接綁定 `deposit_payer`（押金付款人）：只有付款人本人能執行，
@@ -284,8 +407,10 @@ public fun self_delete_sponsored_pass(
     assert!(pass.deposit_payer != pass.owner, EOwnerMismatch);
     // 僅 Pass 擁有者本人可執行
     assert!(ctx.sender() == pass.owner, EOwnerMismatch);
-    // 費用須 ≥ 保守上界，確保 >= 實際儲存返還
-    assert!(coin::value(&fee) >= REBATE_FEE_FLOOR, EFeeTooLow);
+    // 費用須 ≥ 動態計算的規費，確保 >= 實際儲存返還
+    let credentials_count = vector::length(&pass.credential_sources);
+    let required_fee = REBATE_FEE_FLOOR * (1 + credentials_count);
+    assert!(coin::value(&fee) >= required_fee, EFeeTooLow);
     // 費用退回押金付款人（代付鑄造時 = sponsor）
     transfer::public_transfer(fee, pass.deposit_payer);
     do_delete(registry, pass, ctx);
@@ -301,7 +426,10 @@ fun do_delete(
     let owner = pass.owner;
 
     if (table::contains(&registry.passes, owner)) {
-        table::remove(&mut registry.passes, owner);
+        let current_id = *table::borrow(&registry.passes, owner);
+        if (current_id == object::id(&pass)) {
+            table::remove(&mut registry.passes, owner);
+        };
     };
 
     // 清除 SurveyPass 內部所有 dynamic fields（憑證內容），並釋放其 nullifier。
@@ -314,17 +442,19 @@ fun do_delete(
         let src = *vector::borrow(&sources, i);
         let key = CredentialKey { source: src };
         if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
-            let CredentialSlot { commitment: _, nullifiers, issued_at: _, expires_at: _ } =
+            let CredentialSlot { commitment: _, nullifiers, issued_at: _, expires_at: _, status } =
                 dynamic_field::remove<CredentialKey, CredentialSlot>(&mut pass.id, key);
-            let mut k = 0;
-            let klen = vector::length(&nullifiers);
-            while (k < klen) {
-                let nh = *vector::borrow(&nullifiers, k);
-                // 僅釋放確屬本擁有者的 nullifier（register_nullifier 保證一致）
-                if (table::contains(&registry.used, nh) && *table::borrow(&registry.used, nh) == owner) {
-                    table::remove(&mut registry.used, nh);
+            if (pass.status == STATUS_ACTIVE && status == CREDENTIAL_ACTIVE) {
+                let mut k = 0;
+                let klen = vector::length(&nullifiers);
+                while (k < klen) {
+                    let nh = *vector::borrow(&nullifiers, k);
+                    // 僅釋放確屬本擁有者的 nullifier（register_nullifier 保證一致）
+                    if (table::contains(&registry.used, nh) && *table::borrow(&registry.used, nh) == owner) {
+                        table::remove(&mut registry.used, nh);
+                    };
+                    k = k + 1;
                 };
-                k = k + 1;
             };
         };
         i = i + 1;
@@ -363,7 +493,7 @@ public fun is_valid(pass: &SurveyPass, clock: &Clock): bool {
         let key = CredentialKey { source: src };
         if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
             let slot = dynamic_field::borrow<CredentialKey, CredentialSlot>(&pass.id, key);
-            if (slot.expires_at > now) {
+            if (slot.status == CREDENTIAL_ACTIVE && slot.expires_at > now) {
                 has_valid = true;
                 break
             };
@@ -385,17 +515,21 @@ public fun all_nullifiers(pass: &SurveyPass): vector<vector<u8>> {
         let key = CredentialKey { source: src };
         if (dynamic_field::exists_with_type<CredentialKey, CredentialSlot>(&pass.id, key)) {
             let slot = dynamic_field::borrow<CredentialKey, CredentialSlot>(&pass.id, key);
-            let mut j = 0;
-            let nlen = vector::length(&slot.nullifiers);
-            while (j < nlen) {
-                vector::push_back(&mut out, *vector::borrow(&slot.nullifiers, j));
-                j = j + 1;
+            if (slot.status == CREDENTIAL_ACTIVE) {
+                let mut j = 0;
+                let nlen = vector::length(&slot.nullifiers);
+                while (j < nlen) {
+                    vector::push_back(&mut out, *vector::borrow(&slot.nullifiers, j));
+                    j = j + 1;
+                };
             };
         };
         i = i + 1;
     };
     out
 }
+
+public fun src_attributes(): u8 { SRC_ATTRIBUTES }
 
 public fun owner(pass: &SurveyPass): address { pass.owner }
 public fun status(pass: &SurveyPass): u8 { pass.status }
@@ -422,6 +556,68 @@ public fun mint_pass_for_testing(
 ) {
     // 測試預設 deposit_payer = owner（自付鑄造語意）；需測代付授權分流者用 mint_pass_for_testing_with_payer
     mint_pass_for_testing_with_payer(registry, owner, owner, source, nullifiers, commitment, expires_at, clock, ctx);
+}
+
+#[test_only]
+public fun mint_pass_with_extra_for_testing(
+    registry: &mut NullifierRegistry,
+    owner: address,
+    deposit_payer: address,
+    source: u8,
+    nullifiers: vector<vector<u8>>,
+    commitment: vector<u8>,
+    expires_at: u64,
+    extra_sources: vector<u8>,
+    extra_nullifiers: vector<vector<vector<u8>>>,
+    extra_commitments: vector<vector<u8>>,
+    extra_expires_at: vector<u64>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    register_all_nullifiers(registry, &nullifiers, owner);
+
+    let extra_len = vector::length(&extra_sources);
+    let mut i = 0;
+    while (i < extra_len) {
+        register_all_nullifiers(registry, vector::borrow(&extra_nullifiers, i), owner);
+        i = i + 1;
+    };
+
+    let mut pass = SurveyPass {
+        id: object::new(ctx),
+        owner,
+        deposit_payer,
+        credential_sources: vector[],
+        created_at: clock::timestamp_ms(clock),
+        status: STATUS_ACTIVE,
+        encrypted_payload: option::none(),
+    };
+
+    if (table::contains(&registry.passes, owner)) {
+        table::remove(&mut registry.passes, owner);
+    };
+    table::add(&mut registry.passes, owner, object::id(&pass));
+
+    apply_credential_slot(&mut pass, source, nullifiers, commitment, expires_at, clock);
+
+    i = 0;
+    while (i < extra_len) {
+        let ex_source = *vector::borrow(&extra_sources, i);
+        let ex_nullifiers = *vector::borrow(&extra_nullifiers, i);
+        let ex_commitment = *vector::borrow(&extra_commitments, i);
+        let ex_expires_at = *vector::borrow(&extra_expires_at, i);
+        apply_credential_slot(
+            &mut pass,
+            ex_source,
+            ex_nullifiers,
+            ex_commitment,
+            ex_expires_at,
+            clock,
+        );
+        i = i + 1;
+    };
+
+    transfer::share_object(pass);
 }
 
 #[test_only]
@@ -459,6 +655,7 @@ public fun mint_pass_for_testing_with_payer(
         nullifiers,
         issued_at: clock::timestamp_ms(clock),
         expires_at,
+        status: CREDENTIAL_ACTIVE,
     };
     dynamic_field::add(&mut pass.id, key, slot);
 
@@ -486,6 +683,7 @@ public fun create_for_testing(
         nullifiers: vector[],
         issued_at: 0,
         expires_at,
+        status: CREDENTIAL_ACTIVE,
     };
     sui::dynamic_field::add(&mut pass.id, key, slot);
     pass

@@ -16,6 +16,7 @@ import {
   signWorldIdRequest,
   verifyWorldIdProof,
 } from './worldId.js'
+import { isNullifierRevoked, checkMintRateLimit, recordMintSuccess } from '../security/revocation.js'
 
 interface OtpRequestBody {
   email: string
@@ -166,11 +167,25 @@ export function registerAuthRoutes(app: FastifyInstance): void {
 
       try {
         const emailNullifier = computeNullifierHash(email)
+
+        if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+          if (await isNullifierRevoked(emailNullifier, SRC_EMAIL)) {
+            return reply.status(403).send({ error: 'nullifier_revoked', message: 'This email account is revoked and cannot be minted' })
+          }
+          if (!checkMintRateLimit(emailNullifier, SRC_EMAIL)) {
+            return reply.status(429).send({ error: 'rate_limited', message: 'Ticket request is too frequent. Please retry later.' })
+          }
+        }
+
         const nullifiers = [emailNullifier]
         const commitment = new Uint8Array(0)
         const expiresAtMs = Date.now() + getPassTtlMs(SRC_EMAIL)
 
         const ticket = await signTicket(owner, SRC_EMAIL, nullifiers, commitment, expiresAtMs)
+
+        if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+          recordMintSuccess(emailNullifier, SRC_EMAIL)
+        }
 
         return { ...ticket, source: SRC_EMAIL }
       } catch (err: any) {
@@ -324,6 +339,24 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       const emailNullifier = shouldAddEmail ? computeEmailSecondaryNullifier(email!) : null
 
       const socialSource = SOCIAL_SOURCE_BY_PROVIDER[provider] ?? SRC_SOCIAL
+
+      if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+        if (await isNullifierRevoked(primaryNullifier, socialSource)) {
+          return reply.redirect(`${frontendUrl}/auth?oauth_error=nullifier_revoked`)
+        }
+        if (!checkMintRateLimit(primaryNullifier, socialSource)) {
+          return reply.redirect(`${frontendUrl}/auth?oauth_error=rate_limited`)
+        }
+        if (emailNullifier) {
+          if (await isNullifierRevoked(emailNullifier, SRC_EMAIL)) {
+            return reply.redirect(`${frontendUrl}/auth?oauth_error=nullifier_revoked`)
+          }
+          if (!checkMintRateLimit(emailNullifier, SRC_EMAIL)) {
+            return reply.redirect(`${frontendUrl}/auth?oauth_error=rate_limited`)
+          }
+        }
+      }
+
       const commitment = new Uint8Array(0)
       const oauthExpiresAtMs = Date.now() + getPassTtlMs(socialSource)
 
@@ -338,6 +371,13 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         const emailExpiresAtMs = Date.now() + getPassTtlMs(SRC_EMAIL)
         const emailTicket = await signTicket(owner, SRC_EMAIL, [emailNullifier], commitment, emailExpiresAtMs)
         tickets.push({ ...emailTicket, source: SRC_EMAIL })
+      }
+
+      if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+        recordMintSuccess(primaryNullifier, socialSource)
+        if (emailNullifier) {
+          recordMintSuccess(emailNullifier, SRC_EMAIL)
+        }
       }
 
       const oauthResult = Buffer.from(
@@ -386,11 +426,26 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         }
 
         const primary = computeWorldIdPrimaryNullifier(result.nullifier)
+
+        if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+          if (await isNullifierRevoked(primary, SRC_WORLD_ID)) {
+            return reply.status(403).send({ error: 'nullifier_revoked', message: 'This World ID account is revoked and cannot be minted' })
+          }
+          if (!checkMintRateLimit(primary, SRC_WORLD_ID)) {
+            return reply.status(429).send({ error: 'rate_limited', message: 'Ticket request is too frequent. Please retry later.' })
+          }
+        }
+
         const nullifiers = [primary]
         const commitment = new Uint8Array(0)
         const expiresAtMs = Date.now() + getPassTtlMs(SRC_WORLD_ID)
 
         const ticket = await signTicket(owner, SRC_WORLD_ID, nullifiers, commitment, expiresAtMs)
+
+        if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+          recordMintSuccess(primary, SRC_WORLD_ID)
+        }
+
         return { ...ticket, source: SRC_WORLD_ID }
       } catch (err: any) {
         req.log.error(err)

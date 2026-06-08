@@ -9,7 +9,6 @@ export interface FrontmatterData {
   encryptAnswers: boolean
   storageCompensationAmount: number
   allowedNftType?: string
-  premiumFee?: number
   allowedSources?: number[]
   language?: string
   isPublic?: boolean
@@ -75,7 +74,6 @@ export function parseFrontmatter(md: string): FrontmatterResult {
   }
 
   const allowedNftType = getVal('allowedNftType') ?? ''
-  const premiumFee = getVal('premiumFee') ? Number(getVal('premiumFee')) : 0
 
   let allowedSources: number[] = [2]
   if (allowedSourcesStr) {
@@ -111,7 +109,6 @@ export function parseFrontmatter(md: string): FrontmatterResult {
       encryptAnswers,
       storageCompensationAmount,
       allowedNftType,
-      premiumFee,
       allowedSources,
       language: languageStr ? languageStr.toLowerCase() : undefined,
       isPublic: publicStr === 'true',
@@ -144,7 +141,6 @@ export interface FullSurveyData {
   encryptAnswers: boolean
   storageCompensationAmount: number
   allowedNftType: string
-  premiumFee?: number
   /** 問卷說明文字（純 markdown，frontmatter 與 questions 程式碼區塊之間） */
   description: string
   questions: Question[]
@@ -219,7 +215,6 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
   const encryptAnswersStr = getVal('encryptAnswers')
   const storageCompensationAmountStr = getVal('storageCompensationAmount')
   const allowedNftType = getVal('allowedNftType') ?? ''
-  const premiumFee = getVal('premiumFee') ? Number(getVal('premiumFee')) : 0
   const languageStr = getVal('language')
   const publicStr = getVal('public')
 
@@ -306,7 +301,6 @@ export function parseFullSurveyMarkdown(md: string): FullSurveyResult {
       encryptAnswers,
       storageCompensationAmount,
       allowedNftType,
-      premiumFee,
       description,
       questions: questionsResult.questions,
       language: languageStr ? languageStr.toLowerCase() : undefined,

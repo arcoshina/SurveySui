@@ -43,10 +43,15 @@ export function getSourceTier(source: number): number {
       return 2
     case 5: // SRC_WORLD_ID
       return 2
+    case 8: // SRC_ATTRIBUTES — no tier; audience via claim_v2
+      return 0
     default:
       return 0
   }
 }
+
+/** Mirrors `survey_pass::src_attributes()`. */
+export const SRC_ATTRIBUTES = 8
 
 /**
  * Fetches per-credential slots for a SurveyPass by enumerating its CredentialKey dynamic fields.

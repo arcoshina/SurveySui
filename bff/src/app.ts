@@ -8,10 +8,13 @@ import { registerStatsRoutes } from './stats/handler.js'
 import { registerOgRoutes } from './og/handler.js'
 import { registerAuthRoutes } from './auth/handler.js'
 import { registerGasRoutes } from './gas/handler.js'
+import type { SponsorCoinQueue } from './gas/sponsorCoinQueue.js'
 import { registerPassRoutes } from './pass/handler.js'
 import { registerTicketRoutes } from './pass/ticket_handler.js'
 import { registerStorageRoutes } from './storage/handler.js'
 import { registerImageProxyRoutes } from './security/imageProxy.js'
+import { registerAdminRevocationRoutes } from './security/revocation_handler.js'
+import { initializeDb } from './security/db.js'
 
 export interface BffAppDeps {
   suiClient: SuiClient
@@ -19,9 +22,11 @@ export interface BffAppDeps {
   packageId: string
   frontendUrl?: string
   logger?: boolean
+  sponsorCoinQueue?: SponsorCoinQueue
 }
 
 export async function buildApp(deps: BffAppDeps): Promise<FastifyInstance> {
+  initializeDb()
   const app = Fastify({ logger: deps.logger ?? false })
   
   await app.register(cors, {
@@ -31,16 +36,21 @@ export async function buildApp(deps: BffAppDeps): Promise<FastifyInstance> {
 
   await app.register(rateLimit, {
     global: true,
-    max: 100,
+    max: 60,
     timeWindow: '1 minute',
   })
 
   app.get('/health', async () => ({ status: 'ok' }))
   registerImageProxyRoutes(app)
+  registerAdminRevocationRoutes(app)
   registerStatsRoutes(app, deps)
   registerOgRoutes(app, { frontendUrl: deps.frontendUrl ?? 'http://localhost:5173' })
   registerAuthRoutes(app)
-  registerGasRoutes(app, deps)
+  registerGasRoutes(app, {
+    suiClient: deps.suiClient,
+    packageId: deps.packageId,
+    coinQueue: deps.sponsorCoinQueue,
+  })
   registerPassRoutes(app, deps)
   registerTicketRoutes(app, deps)
   registerStorageRoutes(app, deps)

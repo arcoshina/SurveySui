@@ -32,7 +32,7 @@ const fund = {
   timesPerPerson: '次/人',
   totalRewardLabel: '總獎勵:',
   exchangeRateLabel: '參考兌換率:',
-  platformFeeLabel: '平台服務費:',
+  platformFeeLabel: '授權費:',
   calculating: '計算中...',
   estimatedTotal: '預估總計',
   withSlippage: '含 1% 滑點',

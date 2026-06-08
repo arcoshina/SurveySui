@@ -16,6 +16,7 @@ import {
   extractSurveyIdFromEffects,
   extractVaultIdFromEffects,
 } from '../lib/ptb'
+import { getTicketFeeMist } from '../lib/ticketFee'
 import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
@@ -184,11 +185,12 @@ export default function FundPage() {
     return BigInt(Math.round(amount * 1_000_000_000))
   }, [frontmatter])
 
+  const ticketFeeMist = useMemo(() => getTicketFeeMist(), [])
+
   const requiredGas = useMemo(() => {
     if (!frontmatter?.ok) return 0n
     const params = frontmatter.data
-    const premiumFeeMIST = BigInt(params.premiumFee ?? 0)
-    const perResponseSui = gasCompensationAmount + storageCompensationAmountMIST + premiumFeeMIST
+    const perResponseSui = gasCompensationAmount + storageCompensationAmountMIST + ticketFeeMist
     if (perResponseSui === 0n) return 0n
     const repeatMaxTimes = BigInt(params.repeatMaxTimes ?? 1)
     if (params.repeatReward > 0) {
@@ -196,7 +198,7 @@ export default function FundPage() {
     } else {
       return BigInt(params.maxResponses) * perResponseSui
     }
-  }, [frontmatter, gasCompensationAmount, storageCompensationAmountMIST])
+  }, [frontmatter, gasCompensationAmount, storageCompensationAmountMIST, ticketFeeMist])
 
   const SURVEY_SIZE_THRESHOLD_KB = Number(import.meta.env.VITE_SURVEY_SIZE_THRESHOLD_KB || '10')
 
@@ -366,12 +368,17 @@ export default function FundPage() {
     }
 
     let surveyBlobId: Uint8Array | undefined = undefined
+    let surveyBlobObjectId: string | undefined = undefined
     let surveyBlobIdStr = ''
     if (encryptedBlob.length > SURVEY_SIZE_THRESHOLD_KB * 1024) {
       setStatus('uploading')
       try {
         const uploadRes = await uploadToDecentralizedStorage(encryptedBlob)
+        if (uploadRes.provider !== 'walrus' || !uploadRes.blobObjectId) {
+          throw new Error('Walrus upload did not return a blob object ID')
+        }
         surveyBlobIdStr = uploadRes.blobId
+        surveyBlobObjectId = uploadRes.blobObjectId
         surveyBlobId = new TextEncoder().encode(uploadRes.blobId)
       } catch (err) {
         console.error('[FundPage] Decentralized upload failed:', err)
@@ -408,9 +415,10 @@ export default function FundPage() {
         sponsorAddress: gasHealth?.sponsorAddress,
         gasCompensationAmount,
         surveyBlobId,
+        surveyBlobObjectId,
         storageCompensationAmount: storageCompensationAmountMIST,
         requiredStorageFund,
-        premiumFee: params.premiumFee ? BigInt(params.premiumFee) : 0n,
+        ticketFee: ticketFeeMist,
         allowedNftType: params.allowedNftType || undefined,
       })
     }
@@ -753,11 +761,11 @@ export default function FundPage() {
                 <span
                   className="font-semibold text-slate-800 dark:text-white tabular-nums"
                   aria-label="platform-fee"
-                  title={cost ? `${formatFullPrecision((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} SSR` : undefined}
+                  title={cost ? `${formatFullPrecision(cost.feeBase)} SSR` : undefined}
                 >
                   {cost ? (
                     <>
-                      {ssr((cost.grossSsrBase * cost.effectiveFeeBps) / 10000n)} <span className="text-sm font-normal text-slate-500 dark:text-neutral-400">SSR</span>
+                      {ssr(cost.feeBase)} <span className="text-sm font-normal text-slate-500 dark:text-neutral-400">SSR</span>
                     </>
                   ) : (
                     t.calculating

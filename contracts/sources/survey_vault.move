@@ -8,9 +8,11 @@ use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
 use sui::event;
+use sui::object::{Self, ID};
 use sui::table::{Self, Table};
 use sui::dynamic_field as df;
 use sui::sui::SUI;
+use sui::tx_context::TxContext;
 use surveysui::stacked_survey_reward::{Self, STACKED_SURVEY_REWARD};
 use surveysui::survey_pass::{Self, SurveyPass};
 use surveysui::amm_pool::{Self, Pool};
@@ -33,6 +35,12 @@ const MIN_PURGE_GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// so the window is env-tunable without recompiling; this is just the fallback.
 const DEFAULT_PURGE_GRACE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
+/// Default inline answer size cap (6 KiB). Overridden per-vault via
+/// `set_max_inline_answer_bytes` from deployment env at create time.
+const DEFAULT_MAX_INLINE_ANSWER_BYTES: u64 = 6144;
+const MIN_MAX_INLINE_ANSWER_BYTES: u64 = 1024;
+const MAX_MAX_INLINE_ANSWER_BYTES: u64 = 32768;
+
 const ENotCreator: u64           = 0;
 const ENoQuota: u64              = 1;
 const EExpired: u64              = 2;
@@ -54,6 +62,8 @@ const ENotClosed: u64 = 17;
 const ETicketExpired: u64 = 18;
 const EInvalidTicketSig: u64 = 19;
 const EInvalidNftType: u64 = 20;
+const EInlineAnswerTooLarge: u64 = 21;
+const EMaxInlineOutOfRange: u64 = 22;
 
 /// One stored answer, kept as a dynamic field on the vault's UID so it can be
 /// individually removed (and its storage rebated) when the vault is purged.
@@ -124,7 +134,9 @@ public struct SurveyVault has key {
     /// Stored per-vault (sourced from a deployment env at creation) so the window
     /// is tunable without recompiling the contract.
     purge_grace_ms: u64,
-    premium_fee: u64,
+    /// Max bytes for inline (kind=0) encrypted answers; larger payloads must use Walrus.
+    max_inline_answer_bytes: u64,
+    ticket_fee: u64,
     allowed_nft_type: Option<vector<u8>>,
 }
 
@@ -144,7 +156,7 @@ public fun create(
     sponsor_address: address,
     gas_compensation_amount: u64,
     storage_compensation_amount: u64,
-    premium_fee: u64,
+    ticket_fee: u64,
     allowed_nft_type: Option<vector<u8>>,
     ctx: &mut TxContext,
 ): SurveyVault {
@@ -154,9 +166,9 @@ public fun create(
 
     let per_response_sui = gas_compensation_amount + storage_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
-        max_responses * (1 + repeat_max_times) * (per_response_sui + premium_fee)
+        max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
     } else {
-        max_responses * (per_response_sui + premium_fee)
+        max_responses * (per_response_sui + ticket_fee)
     };
     assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
 
@@ -182,7 +194,8 @@ public fun create(
         storage_compensation_amount,
         answers_count: 0,
         purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
-        premium_fee,
+        max_inline_answer_bytes: DEFAULT_MAX_INLINE_ANSWER_BYTES,
+        ticket_fee,
         allowed_nft_type,
     }
 }
@@ -208,7 +221,8 @@ fun check_eligibility(pass: &SurveyPass, allowed_sources: &vector<u8>, clock: &C
     let len = vector::length(allowed_sources);
     while (i < len) {
         let src = *vector::borrow(allowed_sources, i);
-        if (surveysui::survey_pass::is_source_valid(pass, src, clock)) {
+        // SRC_ATTRIBUTES has no CredentialSlot; screening uses claim_v2 audience input.
+        if (src != survey_pass::src_attributes() && survey_pass::is_source_valid(pass, src, clock)) {
             return true
         };
         i = i + 1;
@@ -216,26 +230,31 @@ fun check_eligibility(pass: &SurveyPass, allowed_sources: &vector<u8>, clock: &C
     false
 }
 
-public fun claim(
-    vault: &mut SurveyVault,
+/// Shared vault / survey / pass checks before eligibility (used by claim and claim_v2).
+public(package) fun assert_claim_common(
+    vault: &SurveyVault,
     survey: &Survey,
+    pass: &SurveyPass,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
+    assert!(vault.status == STATUS_OPEN, EVaultClosed);
+    assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
+    assert!(survey_registry::vault_id(survey) == object::id(vault), EInvalidSurveyVaultMatch);
+    assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
+    assert!(survey_pass::owner(pass) == ctx.sender(), EInvalidPass);
+}
+
+/// Nullifier scoping + payout. Caller must have already validated eligibility.
+public(package) fun apply_nullifiers_and_payout(
+    vault: &mut SurveyVault,
     pass: &SurveyPass,
     encrypted_answers: Option<vector<u8>>,
     answer_blob_id: Option<vector<u8>>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    assert!(vault.status == STATUS_OPEN, EVaultClosed);
-    assert!(clock::timestamp_ms(clock) < vault.deadline_ms, EExpired);
-    assert!(survey_registry::vault_id(survey) == object::id(vault), EInvalidSurveyVaultMatch);
-    assert!(survey_pass::is_valid(pass, clock), EInvalidPass);
-    assert!(check_eligibility(pass, &survey_registry::allowed_sources(survey), clock), EInvalidPass);
-    assert!(survey_pass::owner(pass) == ctx.sender(), EInvalidPass);
-
     // ── nullifier 聯集去重（scope 至本 vault，疊加於位址去重之上）──
-    // 取 Pass 上所有憑證 nullifier，逐一以 H(nullifier‖vault_id) 為 key：
-    // 已被別的身分用過 → 擋（EDuplicateNullifier）；同 owner（含重複填答）放行。
-    // 無 nullifier 的 Pass（自填／測試）聯集為空，自然退回純位址去重。
     let vault_id_bytes = bcs::to_bytes(&object::id(vault));
     let nullifiers = survey_pass::all_nullifiers(pass);
     let mut n = 0;
@@ -257,8 +276,22 @@ public fun claim(
         encrypted_answers,
         answer_blob_id,
         clock,
-        ctx
+        ctx,
     );
+}
+
+public fun claim(
+    vault: &mut SurveyVault,
+    survey: &Survey,
+    pass: &SurveyPass,
+    encrypted_answers: Option<vector<u8>>,
+    answer_blob_id: Option<vector<u8>>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert_claim_common(vault, survey, pass, clock, ctx);
+    assert!(check_eligibility(pass, &survey_registry::allowed_sources(survey), clock), EInvalidPass);
+    apply_nullifiers_and_payout(vault, pass, encrypted_answers, answer_blob_id, clock, ctx);
 }
 
 /// 內部共用的實際填答處理與發放獎勵/補貼邏輯
@@ -289,6 +322,10 @@ fun process_claim_and_payout(
         payload = *blob_id;
     } else {
         abort EEmptyAnswers
+    };
+
+    if (kind == 0) {
+        assert!(vector::length(&payload) <= vault.max_inline_answer_bytes, EInlineAnswerTooLarge);
     };
 
     let key = bcs::to_bytes(&ctx.sender());
@@ -424,11 +461,11 @@ public fun claim_with_ticket(
     assert!(!table::contains(&vault.used_nullifiers, scoped), EDuplicateNullifier);
     table::add(&mut vault.used_nullifiers, scoped, ctx.sender());
 
-    // 扣除手續費給國庫
-    if (vault.premium_fee > 0) {
-        assert!(balance::value(&vault.gas_balance) >= vault.premium_fee, EInsufficientGasBalance);
+    // 扣除 Ticket 填答費用給國庫
+    if (vault.ticket_fee > 0) {
+        assert!(balance::value(&vault.gas_balance) >= vault.ticket_fee, EInsufficientGasBalance);
         let fee_coin = coin::from_balance(
-            balance::split(&mut vault.gas_balance, vault.premium_fee),
+            balance::split(&mut vault.gas_balance, vault.ticket_fee),
             ctx
         );
         transfer::public_transfer(fee_coin, vault.admin_treasury);
@@ -577,7 +614,8 @@ public fun purge(
         storage_compensation_amount: _,
         answers_count,
         purge_grace_ms: _,
-        premium_fee: _,
+        max_inline_answer_bytes: _,
+        ticket_fee: _,
         allowed_nft_type: _,
     } = vault;
 
@@ -636,7 +674,7 @@ public fun create_empty(
     sponsor_address: address,
     gas_compensation_amount: u64,
     storage_compensation_amount: u64,
-    premium_fee: u64,
+    ticket_fee: u64,
     allowed_nft_type: Option<vector<u8>>,
     ctx: &mut TxContext,
 ): SurveyVault {
@@ -645,9 +683,9 @@ public fun create_empty(
 
     let per_response_sui = gas_compensation_amount + storage_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
-        max_responses * (1 + repeat_max_times) * (per_response_sui + premium_fee)
+        max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
     } else {
-        max_responses * (per_response_sui + premium_fee)
+        max_responses * (per_response_sui + ticket_fee)
     };
     assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
 
@@ -673,7 +711,8 @@ public fun create_empty(
         storage_compensation_amount,
         answers_count: 0,
         purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
-        premium_fee,
+        max_inline_answer_bytes: DEFAULT_MAX_INLINE_ANSWER_BYTES,
+        ticket_fee,
         allowed_nft_type,
     }
 }
@@ -685,14 +724,27 @@ public fun deposit_existing_ssr(
     balance::join(&mut vault.balance, coin::into_balance(ssr_coin));
 }
 
+/// Worst-case SSR reward budget locked for respondents (base units).
+fun reward_budget(vault: &SurveyVault): u64 {
+    vault.per_response * vault.max_responses
+        + vault.repeat_reward * vault.max_responses * vault.repeat_max_times
+}
+
+/// Royalty on reward budget (base units): budget × effective_fee_bps / 10_000.
+fun royalty_on_budget(budget: u64, effective_fee_bps: u64): u64 {
+    budget * effective_fee_bps / 10_000
+}
+
 public fun merge_balances(
     vault: &mut SurveyVault,
     new_ssr: Coin<STACKED_SURVEY_REWARD>,
+    pool: &Pool,
 ) {
     balance::join(&mut vault.balance, coin::into_balance(new_ssr));
-    let required = vault.per_response * vault.max_responses
-        + vault.repeat_reward * vault.max_responses * vault.repeat_max_times;
-    assert!(balance::value(&vault.balance) >= required, EInsufficientVaultBalance);
+    let budget = reward_budget(vault);
+    let effective_fee_bps = amm_pool::effective(amm_pool::fee_config(pool));
+    let fee = royalty_on_budget(budget, effective_fee_bps);
+    assert!(balance::value(&vault.balance) >= budget + fee, EInsufficientVaultBalance);
 }
 
 public fun split_fee_to_treasury(
@@ -700,9 +752,9 @@ public fun split_fee_to_treasury(
     pool: &Pool,
     ctx: &mut TxContext,
 ) {
-    let total = balance::value(&vault.balance);
+    let budget = reward_budget(vault);
     let effective_fee_bps = amm_pool::effective(amm_pool::fee_config(pool));
-    let fee = total * (effective_fee_bps as u64) / 10_000;
+    let fee = royalty_on_budget(budget, effective_fee_bps);
     if (fee > 0) {
         let fee_coin = coin::from_balance(
             balance::split(&mut vault.balance, fee),
@@ -725,7 +777,7 @@ public fun status(vault: &SurveyVault): u8            { vault.status }
 public fun closed_at_ms(vault: &SurveyVault): u64     { vault.closed_at_ms }
 public fun creator(vault: &SurveyVault): address      { vault.creator }
 public fun admin_treasury(vault: &SurveyVault): address { vault.admin_treasury }
-public fun premium_fee(vault: &SurveyVault): u64 { vault.premium_fee }
+public fun ticket_fee(vault: &SurveyVault): u64 { vault.ticket_fee }
 public fun allowed_nft_type(vault: &SurveyVault): Option<vector<u8>> { vault.allowed_nft_type }
 
 public fun has_claimed(vault: &SurveyVault, respondent: address): bool {
@@ -787,11 +839,22 @@ public fun set_purge_grace_ms(vault: &mut SurveyVault, new_grace_ms: u64, ctx: &
     vault.purge_grace_ms = new_grace_ms;
 }
 
+/// Override the per-vault inline answer size cap. Creator-only; the create PTB
+/// calls this with `MAX_INLINE_ANSWER_BYTES` from deployment env.
+public fun set_max_inline_answer_bytes(vault: &mut SurveyVault, new_max: u64, ctx: &TxContext) {
+    assert!(ctx.sender() == vault.creator, ENotCreator);
+    assert!(new_max >= MIN_MAX_INLINE_ANSWER_BYTES, EMaxInlineOutOfRange);
+    assert!(new_max <= MAX_MAX_INLINE_ANSWER_BYTES, EMaxInlineOutOfRange);
+    vault.max_inline_answer_bytes = new_max;
+}
+
 public fun storage_compensation_amount(vault: &SurveyVault): u64 {
     vault.storage_compensation_amount
 }
 
 public fun purge_grace_ms(vault: &SurveyVault): u64 { vault.purge_grace_ms }
+
+public fun max_inline_answer_bytes(vault: &SurveyVault): u64 { vault.max_inline_answer_bytes }
 
 public fun answers_count(vault: &SurveyVault): u64 { vault.answers_count }
 

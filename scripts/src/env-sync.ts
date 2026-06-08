@@ -57,7 +57,7 @@ function mergeEnvFile(filePath: string, updates: Record<string, string>): void {
 }
 
 const inputPath = process.argv[2] ?? resolve(__dirname, '../../scripts/deploy-output.json')
-const outputPath = process.argv[3] ?? resolve(__dirname, '../../.env.shared')
+const outputPath = process.argv[3] ?? resolve(__dirname, '../../.env')
 
 const raw = readFileSync(inputPath, 'utf8')
 const deployOutput = JSON.parse(raw) as DeployOutput

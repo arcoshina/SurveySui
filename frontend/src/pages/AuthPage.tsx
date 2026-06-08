@@ -5,7 +5,12 @@ import { IdCard, AlertTriangle, Check } from 'lucide-react'
 import { ProviderIcon } from '../components/ProviderIcon'
 import { Transaction } from '@mysten/sui/transactions'
 import { fromBase64 } from '@mysten/sui/utils'
-import { buildMintPassPtb, buildUpdatePassCredentialPtb, buildDeletePassPtb, buildSelfDeleteSponsoredPassPtb } from '../lib/ptb'
+import {
+  buildMintPassPtb,
+  buildMintPassWithExtraCredentialsPtb,
+  buildDeletePassPtb,
+  buildSelfDeleteSponsoredPassPtb,
+} from '../lib/ptb'
 import { fetchActivePass, fetchPassCredentials, SurveyPassData, CredentialInfo } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
@@ -73,6 +78,8 @@ export default function AuthPage() {
   const [step, setStep] = useState<'input' | 'verify'>('input')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const [otpSentNotice, setOtpSentNotice] = useState<string | null>(null)
+  const [canReturnToSurvey, setCanReturnToSurvey] = useState(false)
   const [loading, setLoading] = useState(false)
   const [debugOtp, setDebugOtp] = useState<string | null>(null)
   const [txDigest, setTxDigest] = useState<string | null>(null)
@@ -103,6 +110,7 @@ export default function AuthPage() {
   const [worldIdOpen, setWorldIdOpen] = useState(false)
   // 重入守衛：onSuccess 回調可能在同一 tick 內被 widget 重複觸發，loading（非同步 state）擋不住，需用 ref 同步擋
   const worldIdSubmittingRef = useRef(false)
+  const oauthSubmittingRef = useRef(false)
   const [worldIdConfig, setWorldIdConfig] = useState<{
     app_id: `app_${string}`
     action: string
@@ -169,8 +177,11 @@ export default function AuthPage() {
   // 當 OAuth callback 帶回 tickets 時自動消費（標準 Social OAuth）
   useEffect(() => {
     if (!oauthResult || !account || !activeSigner) return
+    if (oauthSubmittingRef.current) return
+    oauthSubmittingRef.current = true
     setPendingMsg(t.oauthSuccess)
     handleMintOrUpdateWithTickets(oauthResult.tickets, account.address, activeSigner).finally(() => {
+      oauthSubmittingRef.current = false
       setPendingMsg(null)
       clearOAuthResult()
     })
@@ -231,6 +242,8 @@ export default function AuthPage() {
     setLoading(true)
     setErrorMsg(null)
     setSuccessMsg(null)
+    setOtpSentNotice(null)
+    setCanReturnToSurvey(false)
 
     try {
       const resolvedPass = activePass ?? (await fetchActivePass(suiClient, owner, registryId))
@@ -262,7 +275,6 @@ export default function AuthPage() {
 
         await executeAndBroadcast(tx, owner, signer)
       } else {
-        // 如果 Pass 不存在，我們先用第一個 Ticket mint_pass
         const firstTicket = tickets[0]
         const nullifiers = firstTicket.nullifiers.map((hex) => hexToBytes(hex))
         const commitment = new Uint8Array(0)
@@ -273,7 +285,7 @@ export default function AuthPage() {
           !health.available || !health.sponsorAddress || (sponsorQuota != null && sponsorQuota.remaining <= 0)
         const depositPayer = willSelfPay ? owner : health.sponsorAddress!
 
-        const tx = buildMintPassPtb({
+        const mintBase = {
           packageId,
           registryId,
           configId,
@@ -284,41 +296,23 @@ export default function AuthPage() {
           commitment,
           expiresAt: firstTicket.expires_at,
           bffSig,
-        })
+        }
+
+        const tx =
+          tickets.length > 1
+            ? buildMintPassWithExtraCredentialsPtb({
+                ...mintBase,
+                extraTickets: tickets.slice(1).map((ticket) => ({
+                  source: ticket.source,
+                  nullifiers: ticket.nullifiers.map((hex) => hexToBytes(hex)),
+                  commitment: new Uint8Array(0),
+                  expiresAt: ticket.expires_at,
+                  bffSig: hexToBytes(ticket.bff_sig),
+                })),
+              })
+            : buildMintPassPtb(mintBase)
 
         await executeAndBroadcast(tx, owner, signer)
-
-        // 鑄造成功後，重新獲取 activePass，如果 tickets 還剩餘，我們將剩下的 Tickets 寫入 (透過 update)
-        if (tickets.length > 1) {
-          setPendingMsg('正在寫入關聯的 Email 驗證憑證...')
-          const nextPass = await fetchActivePass(suiClient, owner, registryId)
-          if (nextPass) {
-            const updateTx = new Transaction()
-            const passObj = updateTx.object(nextPass.objectId)
-            for (let i = 1; i < tickets.length; i++) {
-              const ticket = tickets[i]
-              const tNullifiers = ticket.nullifiers.map((hex) => hexToBytes(hex))
-              const tCommitment = new Uint8Array(0)
-              const tBffSig = hexToBytes(ticket.bff_sig)
-
-              updateTx.moveCall({
-                target: `${packageId}::survey_pass::update_pass_credential`,
-                arguments: [
-                  passObj,
-                  updateTx.object(registryId),
-                  updateTx.object(configId),
-                  updateTx.pure.u8(ticket.source),
-                  updateTx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(tNullifiers.map((n) => Array.from(n))).toBytes()),
-                  updateTx.pure.vector('u8', Array.from(tCommitment)),
-                  updateTx.pure.u64(BigInt(ticket.expires_at).toString()),
-                  updateTx.pure.vector('u8', Array.from(tBffSig)),
-                  updateTx.object('0x6'), // Clock
-                ],
-              })
-            }
-            await executeAndBroadcast(updateTx, owner, signer)
-          }
-        }
       }
 
       setSuccessMsg(resolvedPass ? t.upgradeSuccess : t.mintSuccess)
@@ -329,6 +323,7 @@ export default function AuthPage() {
       // 若由問卷導向而來，鑄造/升級成功後返回原問卷
       const rt = sessionStorage.getItem('surveysui:returnTo')
       if (isSafeReturnPath(rt)) {
+        setCanReturnToSurvey(true)
         sessionStorage.removeItem('surveysui:returnTo')
         setTimeout(() => navigate(rt), 1200)
       }
@@ -354,6 +349,8 @@ export default function AuthPage() {
     setLoading(true)
     setErrorMsg(null)
     setSuccessMsg(null)
+    setOtpSentNotice(null)
+    setCanReturnToSurvey(false)
     setDebugOtp(null)
 
     try {
@@ -369,7 +366,7 @@ export default function AuthPage() {
       }
 
       setStep('verify')
-      setSuccessMsg(t.otpSentSuccess)
+      setOtpSentNotice(t.otpSentSuccess)
       if (data.code) {
         setDebugOtp(data.code)
       }
@@ -393,6 +390,7 @@ export default function AuthPage() {
     setLoading(true)
     setErrorMsg(null)
     setSuccessMsg(null)
+    setOtpSentNotice(null)
 
     try {
       const res = await fetch('/auth/email/verify', {
@@ -545,7 +543,9 @@ export default function AuthPage() {
   // 自付逃生門：使用者自付刪除代付 Pass，附 REBATE_FEE_FLOOR 費用回項目方
   async function offerEscapeHatch() {
     if (!activePass || !activeSigner) return
-    const estSui = (Number(REBATE_FEE_FLOOR_MIST) / 1_000_000_000).toFixed(4)
+    const credentialsCount = BigInt(activePass.credentialSources?.length ?? 1)
+    const dynamicFeeMist = REBATE_FEE_FLOOR_MIST * (1n + credentialsCount)
+    const estSui = (Number(dynamicFeeMist) / 1_000_000_000).toFixed(4)
     const ok = window.confirm(t.deleteEscapeHatchPrompt(estSui))
     if (!ok) {
       setErrorMsg(t.deleteSponsorUnavailable)
@@ -555,7 +555,7 @@ export default function AuthPage() {
       packageId,
       registryId,
       passId: activePass.objectId,
-      feeMist: REBATE_FEE_FLOOR_MIST,
+      feeMist: dynamicFeeMist,
     })
     const { digest } = await activeSigner.signAndExecute(tx as Transaction)
     setTxDigest(digest)
@@ -896,6 +896,8 @@ export default function AuthPage() {
                       const v = e.target.value as typeof verifyMethod
                       setVerifyMethod(v)
                       sessionStorage.setItem('surveysui:verifyMethod', v)
+                      setOtpSentNotice(null)
+                      setCanReturnToSurvey(false)
                     }}
                     className="form-input"
                   >
@@ -933,6 +935,12 @@ export default function AuthPage() {
                   </div>
                 )}
 
+                {otpSentNotice && (
+                  <div role="status" className="alert-info text-sm font-normal">
+                    {otpSentNotice}
+                  </div>
+                )}
+
                 {successMsg && (
                   <div role="status" className="alert-success space-y-2 flex-col items-start">
                     <h3 className="text-base font-semibold flex items-center gap-2 text-emerald-900 dark:text-emerald-400">
@@ -948,11 +956,12 @@ export default function AuthPage() {
                         {txDigest}
                       </div>
                     )}
-                    {returnTo && (
+                    {returnTo && canReturnToSurvey && (
                       <button
                         type="button"
                         onClick={() => {
                           sessionStorage.removeItem('surveysui:returnTo')
+                          setCanReturnToSurvey(false)
                           navigate(returnTo)
                         }}
                         className="btn-primary w-full mt-2"
@@ -1012,7 +1021,7 @@ export default function AuthPage() {
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          onClick={() => { setStep('input'); setDebugOtp(null) }}
+                          onClick={() => { setStep('input'); setDebugOtp(null); setOtpSentNotice(null) }}
                           className="btn-secondary flex-1"
                         >
                           {t.btnBack}

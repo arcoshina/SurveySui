@@ -61,22 +61,17 @@ ISSUER_CONFIG_ID=0x...
 
 ## Tier 1 認證方案環境變數（2026-05-28 起）
 
-合約已升級為多 nullifier（`nullifiers: vector<vector<u8>>`）。devnet reset 後腳本不需修改，但需確認以下環境變數已設定：
+合約已升級為多 nullifier（`nullifiers: vector<vector<u8>>`）。devnet reset 後腳本不需修改，但需確認根目錄 `.env` 已設定：
 
-### `bff/.env` 必填項（Tier 1）
+### 根目錄 `.env` 後端區段（Tier 1）
 
-# zkLogin salt（保持固定，換了 salt 會使現有 Sui 地址失效）
+- `SURVEY_PASS_ISSUER_PRIV`、`SURVEY_PASS_ISSUER_SALT`
+- OAuth：`GOOGLE_OAUTH_*`、`GITHUB_OAUTH_*`
+- `ZKLOGIN_SALT_SECRET`（若啟用 zkLogin；**設定後嚴禁更換**）
 
-### `frontend/.env` 必填項（Tier 1）
+### 根目錄 `.env` 前端區段（Tier 1）
 
-```
-VITE_GOOGLE_CLIENT_ID=
-VITE_FACEBOOK_CLIENT_ID=
-VITE_TWITCH_CLIENT_ID=
-VITE_KAKAO_CLIENT_ID=
-VITE_APPLE_CLIENT_ID=
-VITE_SLACK_CLIENT_ID=
-```
+前端合約 ID 由 `vite.config.ts` 從後端區段的 Object ID 自動映射；其餘 `VITE_*` 設於根目錄 `.env`（見 [SETUP.md](../SETUP.md)）。
 
 > **注意**：`ZKLOGIN_SALT_SECRET` 決定 zkLogin 用戶的 Sui 地址推導，一旦設定後嚴禁更換，否則所有 zkLogin 用戶的地址會變更。
 
@@ -113,14 +108,14 @@ pnpm deploy:Devnet
 | `Package 0x... not found`             | `sui client active-env` 不是 devnet。重跑步驟 1。                                                                                                    |
 | `chain-id mismatch`                   | `Move.lock` 或 `Pub.devnet.toml` 還留著舊 chain-id。重跑步驟 3，或手動刪除整份 `Move.lock` 後重 build。                                              |
 | `EDuplicateSurvey`                    | **不會在 reset 場景出現**。若只是想清空 `SurveyRegistry`（不重置整個 devnet），改跑 `pnpm --filter scripts exec tsx scripts/src/reset-registry.ts`。 |
-| `SUI_ADMIN_ADDRESS not found in .env` | `.env` 缺欄位。對照 `.env.example` 或 [docs/SETUP.md](../SETUP.md) 補上。                                                                            |
+| `SUI_ADMIN_ADDRESS not found in .env` | `.env` 缺欄位。對照 [SETUP.md](../SETUP.md) 補上。                                                                                                  |
 
 ---
 
 ## 注意事項
 
 - 所有鏈上舊的 Survey / Vault / Pass / Pool 物件在 devnet reset 後**全部變孤兒**，無法回收。
-- 本腳本只更新合約 ID，**不會**動 PostgreSQL、不會清 BFF 的 issuer keypair（issuer pubkey 會用 `bff/.env` 中既有的 `SURVEY_PASS_ISSUER_PRIV` 推導後寫上鏈）。
+- 本腳本只更新合約 ID，**不會**動 PostgreSQL、不會清 BFF 的 issuer keypair（issuer pubkey 會用根目錄 `.env` 中既有的 `SURVEY_PASS_ISSUER_PRIV` 推導後寫上鏈）。
 - `pnpm deploy:Devnet` 用 `--build-env testnet` 編譯（見 [scripts/src/init.ts:50](../../scripts/src/init.ts#L50)）；對 devnet publish 沒有影響，但意味著 `Pub.devnet.toml` 平常不會被 deploy 流程寫入，第 3 步只是保險。
 
 ---

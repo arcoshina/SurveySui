@@ -5,8 +5,11 @@ import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { bcs } from '@mysten/sui/bcs'
 import { registerGasRoutes } from '../src/gas/handler.js'
+import { __resetGasConfigCache } from '../src/gas/gasConfig.js'
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
+import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
 import { signTicket } from '../src/auth/ticket.js'
+import { initializeDb } from '../src/security/db.js'
 
 describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   let server: any
@@ -25,11 +28,18 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     .getPublicKey()
     .toSuiAddress()
 
+  const sponsorCoinBalance = '500000000'
+
   beforeEach(async () => {
     process.env.SURVEY_PASS_ISSUER_PRIV = devIssuerPriv
     process.env.SUI_PACKAGE_ID = packageId
+    delete process.env.GAS_STATION_MODE
+    delete process.env.GAS_STATION_URL
+    __resetGasConfigCache()
 
     __resetSponsorState()
+    initializeDb()
+    await __resetPlatformSponsorLedger()
 
     server = Fastify()
     await server.register(cors, { origin: true })
@@ -38,40 +48,77 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       queryTransactionBlocks: vi.fn().mockResolvedValue({ data: [], hasNextPage: false }),
       getReferenceGasPrice: vi.fn().mockResolvedValue('1000'),
       getCoins: vi.fn().mockResolvedValue({
-        data: [
-          {
-            coinObjectId: '0x0000000000000000000000000000000000000000000000000000000000000001',
-            version: '1',
-            digest: '11111111111111111111111111111111',
-            balance: '50000000',
-          },
-        ],
+        data: [1, 2, 3, 4, 5].map((i) => ({
+          coinObjectId: `0x${i.toString(16).padStart(64, '0')}`,
+          version: '1',
+          digest: '11111111111111111111111111111111',
+          balance: sponsorCoinBalance,
+        })),
+        hasNextPage: false,
       }),
+      getOwnedObjects: vi.fn().mockResolvedValue({ data: [] }),
       dryRunTransactionBlock: vi.fn().mockResolvedValue({
         effects: {
           status: { status: 'success' },
+          gasUsed: {
+            computationCost: '1000000',
+            storageCost: '500000',
+            storageRebate: '100000',
+          },
         },
       }),
       getNormalizedMoveFunction: vi.fn().mockImplementation(async ({ module, function: func }) => {
-        if (module === 'survey_pass' && func === 'mint_pass') {
+        if (module === 'survey_pass' && (func === 'mint_pass' || func === 'mint_pass_with_extra_credentials')) {
+          const mintParams = [
+            { MutableReference: { Struct: { address: packageId, module: 'survey_pass', name: 'NullifierRegistry', typeArguments: [] } } },
+            { Reference: { Struct: { address: packageId, module: 'survey_pass', name: 'IssuerConfig', typeArguments: [] } } },
+            'Address',
+            'Address',
+            'U8',
+            { Vector: 'U8' },
+            { Vector: 'U8' },
+            'U64',
+            { Vector: 'U8' },
+          ]
+          if (func === 'mint_pass_with_extra_credentials') {
+            mintParams.push(
+              { Vector: 'U8' },
+              { Vector: { Vector: { Vector: 'U8' } } },
+              { Vector: { Vector: 'U8' } },
+              { Vector: 'U64' },
+              { Vector: { Vector: 'U8' } }
+            )
+          }
+          mintParams.push(
+            { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
+            { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
+          )
+          return {
+            visibility: 'Public',
+            isEntry: false,
+            typeParameters: [],
+            parameters: mintParams,
+            return_: [],
+          }
+        }
+        if (module === 'survey_pass' && func === 'update_pass_credential') {
           return {
             visibility: 'Public',
             isEntry: false,
             typeParameters: [],
             parameters: [
+              { MutableReference: { Struct: { address: packageId, module: 'survey_pass', name: 'SurveyPass', typeArguments: [] } } },
               { MutableReference: { Struct: { address: packageId, module: 'survey_pass', name: 'NullifierRegistry', typeArguments: [] } } },
               { Reference: { Struct: { address: packageId, module: 'survey_pass', name: 'IssuerConfig', typeArguments: [] } } },
-              'Address',
-              'Address',
               'U8',
               { Vector: 'U8' },
               { Vector: 'U8' },
               'U64',
               { Vector: 'U8' },
               { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
-              { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
+              { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } },
             ],
-            return_: []
+            return_: [],
           }
         }
         if (module === 'survey_vault' && func === 'claim') {
@@ -164,6 +211,8 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
             fields: {
               gas_balance: '100000000',
               gas_compensation_amount: '5000000',
+              storage_compensation_amount: '0',
+              max_inline_answer_bytes: '6144',
             },
           },
         },
@@ -176,8 +225,12 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   afterEach(async () => {
     await server.close()
     __resetSponsorState()
+    await __resetPlatformSponsorLedger()
+    __resetGasConfigCache()
     delete process.env.SURVEY_PASS_ISSUER_PRIV
     delete process.env.SUI_PACKAGE_ID
+    delete process.env.MAX_PLATFORM_CLAIM_GAS_MIST
+    delete process.env.MIN_PLATFORM_SPONSOR_TIER
   })
 
   // Helper: build a queryTransactionBlocks result page with N sponsored pass txs.
@@ -339,6 +392,135 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     })
     expect(res.statusCode).toBe(400)
     expect(JSON.parse(res.payload).error).toBe('invalid_deposit_payer')
+  })
+
+  async function buildBatchMintExtraTx(opts?: { invalidExtraSig?: boolean }) {
+    const googleNull = new Uint8Array(32)
+    googleNull[0] = 20
+    const emailNull = new Uint8Array(32)
+    emailNull[0] = 21
+
+    const googleTicket = await signTicket(userAddress, 6, [googleNull], new Uint8Array(0), Date.now() + 1_000_000)
+    const emailTicket = await signTicket(userAddress, 2, [emailNull], new Uint8Array(0), Date.now() + 1_000_000)
+
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_pass::mint_pass_with_extra_credentials`,
+      arguments: [
+        tx.object(registryId),
+        tx.object(configId),
+        tx.pure.address(userAddress),
+        tx.pure.address(sponsorAddress),
+        tx.pure.u8(6), // SRC_SOCIAL_GOOGLE
+        tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize([[...googleNull]]).toBytes()),
+        tx.pure.vector('u8', []),
+        tx.pure.u64(googleTicket.expires_at),
+        tx.pure.vector('u8', Array.from(hexToBytes(googleTicket.bff_sig))),
+        tx.pure(bcs.vector(bcs.u8()).serialize([2]).toBytes()), // SRC_EMAIL
+        tx.pure(
+          bcs
+            .vector(bcs.vector(bcs.vector(bcs.u8())))
+            .serialize([[Array.from(emailNull)]])
+            .toBytes()
+        ),
+        tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize([[]]).toBytes()),
+        tx.pure(bcs.vector(bcs.u64()).serialize([emailTicket.expires_at]).toBytes()),
+        tx.pure(
+          bcs
+            .vector(bcs.vector(bcs.u8()))
+            .serialize([
+              opts?.invalidExtraSig
+                ? Array.from(new Uint8Array(64))
+                : Array.from(hexToBytes(emailTicket.bff_sig)),
+            ])
+            .toBytes()
+        ),
+        tx.object('0x6'),
+      ],
+    })
+    tx.setSender(userAddress)
+    return tx
+  }
+
+  it('should accept mint_pass_with_extra_credentials when all tickets are valid', async () => {
+    const txBytes = Buffer.from(
+      await buildBatchMintExtraTx().then((tx) => tx.build({ client: mockSuiClient, onlyTransactionKind: true }))
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toHaveProperty('sponsorSignature')
+  })
+
+  it('should reject mint_pass_with_extra_credentials when an extra ticket signature is invalid', async () => {
+    const txBytes = Buffer.from(
+      await buildBatchMintExtraTx({ invalidExtraSig: true }).then((tx) =>
+        tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+      )
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('invalid_ticket_signature')
+  })
+
+  it('should reject dual update_pass_credential when the second ticket signature is invalid', async () => {
+    const passObjectId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    const null1 = new Uint8Array(32)
+    null1[0] = 30
+    const null2 = new Uint8Array(32)
+    null2[0] = 31
+    const ticket1 = await signTicket(userAddress, 6, [null1], new Uint8Array(0), Date.now() + 1_000_000)
+    const ticket2 = await signTicket(userAddress, 2, [null2], new Uint8Array(0), Date.now() + 1_000_000)
+
+    const tx = new Transaction()
+    const passObj = tx.object(passObjectId)
+    for (const [ticket, nullifier, invalid] of [
+      [ticket1, null1, false],
+      [ticket2, null2, true],
+    ] as const) {
+      tx.moveCall({
+        target: `${packageId}::survey_pass::update_pass_credential`,
+        arguments: [
+          passObj,
+          tx.object(registryId),
+          tx.object(configId),
+          tx.pure.u8(ticket.source),
+          tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize([[...nullifier]]).toBytes()),
+          tx.pure.vector('u8', []),
+          tx.pure.u64(ticket.expires_at),
+          tx.pure.vector(
+            'u8',
+            invalid ? Array.from(new Uint8Array(64)) : Array.from(hexToBytes(ticket.bff_sig))
+          ),
+          tx.object('0x6'),
+        ],
+      })
+    }
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('invalid_ticket_signature')
   })
 
   it('should report count 0 / remaining 2 when there is no on-chain history', async () => {
@@ -530,6 +712,149 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     expect(response.statusCode).toBe(200)
     expect(JSON.parse(response.payload)).toHaveProperty('sponsorSignature')
+  })
+
+  it('should reject claim with inline answers exceeding vault max_inline_answer_bytes', async () => {
+    const tx = new Transaction()
+    const vaultObjectId = '0x0000000000000000000000000000000000000000000000000000000000000008'
+    const surveyObjectId = '0x0000000000000000000000000000000000000000000000000000000000000009'
+    const passObjectId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    const oversized = Array.from(new Uint8Array(7000))
+
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      arguments: [
+        tx.object(vaultObjectId),
+        tx.object(surveyObjectId),
+        tx.object(passObjectId),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(oversized).toBytes()),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
+        tx.object('0x6'),
+      ],
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.payload).error).toBe('inline_answer_too_large')
+  })
+
+  it('should reject claim when dry-run gas exceeds vault compensation', async () => {
+    mockSuiClient.dryRunTransactionBlock.mockResolvedValue({
+      effects: {
+        status: { status: 'success' },
+        gasUsed: {
+          computationCost: '20000000',
+          storageCost: '10000000',
+          storageRebate: '0',
+        },
+      },
+    })
+
+    const tx = new Transaction()
+    const vaultObjectId = '0x0000000000000000000000000000000000000000000000000000000000000008'
+    const surveyObjectId = '0x0000000000000000000000000000000000000000000000000000000000000009'
+    const passObjectId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      arguments: [
+        tx.object(vaultObjectId),
+        tx.object(surveyObjectId),
+        tx.object(passObjectId),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize([1, 2, 3]).toBytes()),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
+        tx.object('0x6'),
+      ],
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(422)
+    expect(JSON.parse(response.payload).error).toBe('gas_exceeds_compensation')
+  })
+
+  it('should reject platform claim_with_ticket when wallet pass is email-only (tier bypass fix)', async () => {
+    process.env.MIN_PLATFORM_SPONSOR_TIER = '1'
+    __resetGasConfigCache()
+
+    mockSuiClient.getObject.mockResolvedValue({
+      data: {
+        objectId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            gas_balance: '0',
+            gas_compensation_amount: '5000000',
+            storage_compensation_amount: '0',
+            max_inline_answer_bytes: '6144',
+          },
+        },
+      },
+    })
+
+    mockSuiClient.getOwnedObjects.mockResolvedValue({
+      data: [
+        {
+          data: {
+            content: {
+              dataType: 'moveObject',
+              fields: { credential_sources: [2] },
+            },
+          },
+        },
+      ],
+    })
+
+    const tx = new Transaction()
+    const vaultObjectId = '0x0000000000000000000000000000000000000000000000000000000000000008'
+    const issuerConfigObjectId = '0x000000000000000000000000000000000000000000000000000000000000000b'
+
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim_with_ticket`,
+      arguments: [
+        tx.object(vaultObjectId),
+        tx.object(issuerConfigObjectId),
+        tx.pure.vector('u8', Array.from(new Uint8Array(64))),
+        tx.pure.vector('u8', Array.from(new Uint8Array(32))),
+        tx.pure.u64('9999999999999'),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
+        tx.object('0x6'),
+      ],
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
   })
 })
 

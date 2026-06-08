@@ -36,6 +36,29 @@ const getPurgeGraceMs = (): number => {
 
 export const PURGE_GRACE_MS = BigInt(getPurgeGraceMs())
 
+/** Mirrors `survey_vault::DEFAULT_MAX_INLINE_ANSWER_BYTES` (6 KiB). */
+const getMaxInlineAnswerBytes = (): number => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      const kb = import.meta.env.VITE_ANSWER_SIZE_THRESHOLD_KB
+      if (kb) return Math.floor(Number(kb) * 1024)
+      const bytes = import.meta.env.VITE_MAX_INLINE_ANSWER_BYTES
+      if (bytes) return Number(bytes)
+    }
+  } catch {}
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      const kb = process.env.MAX_INLINE_ANSWER_KB ?? process.env.VITE_ANSWER_SIZE_THRESHOLD_KB
+      if (kb) return Math.floor(Number(kb) * 1024)
+      const bytes = process.env.MAX_INLINE_ANSWER_BYTES
+      if (bytes) return Number(bytes)
+    }
+  } catch {}
+  return 6144
+}
+
+export const MAX_INLINE_ANSWER_BYTES = getMaxInlineAnswerBytes()
+
 // ── estimate fund cost ────────────────────────────────────────────────────────
 
 export interface EstimateFundCostParams {
@@ -59,20 +82,13 @@ export interface EstimateFundCostResult {
 }
 
 /**
- * Estimate funding cost for a survey vault.
- *
- * Bonding curve: `ssr_out = sui_in * INITIAL_SSR_PER_SUI * DECAY / (DECAY + total_sui_invested)`.
- * Inverse:       `sui_in   = ceil(ssr_out * (DECAY + total) / (DECAY * INITIAL_SSR_PER_SUI))`.
- *
- * Vault charges 30 bps on deposit → mint enough gross SSR so that after
- * the fee the vault still holds at least `perResponse * maxResponses` SSR.
+ * @deprecated Use `estimateFundCostV2`. Legacy V1 estimator (no repeat rewards).
  */
 export function estimateFundCost(p: EstimateFundCostParams): EstimateFundCostResult {
   const netSsrBase = p.perResponse * BigInt(p.maxResponses) * SSR_BASE_PER_UNIT
 
-  // grossSsr = ceil(net * 10000 / 9970)
-  const grossSsrBase = (netSsrBase * 10_000n + 9_970n - 1n) / 9_970n
-  const vaultFeeBase = (grossSsrBase * VAULT_FEE_BPS) / 10_000n
+  const vaultFeeBase = (netSsrBase * VAULT_FEE_BPS) / 10_000n
+  const grossSsrBase = netSsrBase + vaultFeeBase
 
   // suiToInvest = ceil(gross * (DECAY + total) / (DECAY * INITIAL_SSR_PER_SUI))
   const denom = BONDING_DECAY * INITIAL_SSR_PER_SUI
@@ -109,7 +125,9 @@ export interface EstimateFundCostV2Result {
   netSsrBase: bigint
   /** Effective fee in basis points. */
   effectiveFeeBps: bigint
-  /** Gross SSR (base units) the vault needs to have before fee split. */
+  /** Royalty on reward budget (base units): net × effectiveFeeBps / 10_000. */
+  feeBase: bigint
+  /** Total SSR (base units) creator deposits: net + feeBase. */
   grossSsrBase: bigint
   /** SSR (base units) from creator's balance used as offset. */
   offsetIn: bigint
@@ -137,12 +155,8 @@ export function estimateFundCostV2(p: EstimateFundCostV2Params): EstimateFundCos
     throw new Error('Effective fee rate cannot be 100% or more')
   }
 
-  // Calculate the required gross SSR
-  // grossSsrBase - (grossSsrBase * effectiveFeeBps / 10000n) >= netSsrBase
-  let grossSsrBase = (netSsrBase * 10000n) / (10000n - effectiveFeeBps)
-  while (grossSsrBase - (grossSsrBase * effectiveFeeBps) / 10000n < netSsrBase) {
-    grossSsrBase++
-  }
+  const feeBase = (netSsrBase * effectiveFeeBps) / 10000n
+  const grossSsrBase = netSsrBase + feeBase
 
   let offsetIn = 0n
   let minted = 0n
@@ -165,6 +179,7 @@ export function estimateFundCostV2(p: EstimateFundCostV2Params): EstimateFundCos
   return {
     netSsrBase,
     effectiveFeeBps,
+    feeBase,
     grossSsrBase,
     offsetIn,
     minted,
@@ -199,6 +214,8 @@ export interface BuildCreateSurveyPtbParams {
 
   // Hybrid decentralized storage parameters
   surveyBlobId?: Uint8Array
+  /** Walrus blob Sui object ID; required when surveyBlobId is set. */
+  surveyBlobObjectId?: string
   storageCompensationAmount?: bigint // in MIST
   requiredStorageFund?: bigint // in MIST
 
@@ -217,7 +234,7 @@ export interface BuildCreateSurveyPtbParams {
   creatorSsrCoins?: { coinObjectId: string; balance: string }[]
   sponsorAddress?: string
   gasCompensationAmount?: bigint
-  premiumFee?: bigint
+  ticketFee?: bigint
   allowedNftType?: string
 }
 
@@ -246,10 +263,10 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   const repeatMaxTimes = BigInt(p.repeatMaxTimes ?? 1)
   const gasCompensationAmount = p.gasCompensationAmount ?? 0n
   const storageCompensationAmount = p.storageCompensationAmount ?? 0n
-  const premiumFee = p.premiumFee ?? 0n
+  const ticketFee = p.ticketFee ?? 0n
 
   const perResponseSui = gasCompensationAmount + storageCompensationAmount
-  const perResponseGasAndFee = perResponseSui + premiumFee
+  const perResponseGasAndFee = perResponseSui + ticketFee
   let requiredGas = 0n
   if (perResponseGasAndFee > 0n) {
     if (repeatReward > 0n) {
@@ -294,7 +311,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.address(sponsorAddr),
       tx.pure.u64(gasCompensationAmount),
       tx.pure.u64(storageCompensationAmount),
-      tx.pure.u64(premiumFee.toString()),
+      tx.pure.u64(ticketFee.toString()),
       allowedNftTypeArg,
     ],
   })
@@ -303,6 +320,12 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   tx.moveCall({
     target: `${p.packageId}::survey_vault::set_purge_grace_ms`,
     arguments: [vault, tx.pure.u64(PURGE_GRACE_MS)],
+  })
+
+  // 1c. Set inline answer size cap from deployment env (Walrus above this threshold).
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::set_max_inline_answer_bytes`,
+    arguments: [vault, tx.pure.u64(MAX_INLINE_ANSWER_BYTES)],
   })
 
   // 2. Deposit existing SSR offset
@@ -379,7 +402,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   // 4. Merge balances
   tx.moveCall({
     target: `${p.packageId}::survey_vault::merge_balances`,
-    arguments: [vault, mintedCoin],
+    arguments: [vault, mintedCoin, tx.object(p.poolId)],
   })
 
   // 5. Split fee to treasury
@@ -418,10 +441,18 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   })
 
   const surveyBlobIdOpt = p.surveyBlobId ? p.surveyBlobId : null
+  const surveyBlobObjectIdOpt = p.surveyBlobObjectId ?? null
   const encryptedContentOpt = p.surveyBlobId ? null : p.encryptedContent
+
+  if (surveyBlobIdOpt && !surveyBlobObjectIdOpt) {
+    throw new Error('surveyBlobObjectId is required when using Walrus storage')
+  }
 
   const encryptedContentArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedContentOpt).toBytes())
   const surveyBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(surveyBlobIdOpt).toBytes())
+  const surveyBlobObjectIdArg = tx.pure(
+    bcs.option(bcs.Address).serialize(surveyBlobObjectIdOpt).toBytes()
+  )
 
   // 6. Register survey
   tx.moveCall({
@@ -432,10 +463,17 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.vector('u8', Array.from(contentHash)),
       encryptedContentArg,
       surveyBlobIdArg,
+      surveyBlobObjectIdArg,
       tx.pure.vector('u8', Array.from(schemaHash)),
       tx.pure.vector('u8', Array.from(creatorPubKey)),
       questionsVec,
       tx.pure.vector('u8', p.allowedSources ?? [2]),
+      // Eligibility v1 placeholders (see docs/V4_Eligibility.md)
+      tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize([]).toBytes()), // allowed_nullifiers
+      tx.pure.u64(0), // match_threshold
+      tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()), // disclosure_rule_blob
+      tx.pure(bcs.option(bcs.Address).serialize(null).toBytes()), // stage1_survey_id (Option<ID>)
+      tx.pure.u8(0), // claim_mode
       tx.object('0x6'), // Clock
     ],
   })
@@ -572,6 +610,60 @@ export function buildMintPassPtb(p: BuildMintPassPtbParams): Transaction {
       tx.pure.vector('u8', Array.from(p.commitment)),
       tx.pure.u64(BigInt(p.expiresAt).toString()),
       tx.pure.vector('u8', Array.from(p.bffSig)),
+      tx.object('0x6'), // Clock
+    ],
+  })
+  return tx
+}
+
+export interface PassTicketPtbFields {
+  source: number
+  nullifiers: Uint8Array[]
+  commitment: Uint8Array
+  expiresAt: bigint | string
+  bffSig: Uint8Array
+}
+
+export interface BuildMintPassWithExtraCredentialsPtbParams extends BuildMintPassPtbParams {
+  extraTickets: PassTicketPtbFields[]
+}
+
+/**
+ * Mint a new SurveyPass with additional credentials in a single transaction (OAuth dual-ticket).
+ */
+export function buildMintPassWithExtraCredentialsPtb(p: BuildMintPassWithExtraCredentialsPtbParams): Transaction {
+  const tx = new Transaction()
+  const extra = p.extraTickets
+  const extraSources = extra.map((t) => t.source)
+  const extraNullifiers = extra.map((t) =>
+    t.nullifiers.map((n) => Array.from(n))
+  )
+  const extraCommitments = extra.map((t) => Array.from(t.commitment))
+  const extraExpiresAt = extra.map((t) => BigInt(t.expiresAt).toString())
+  const extraBffSigs = extra.map((t) => Array.from(t.bffSig))
+
+  tx.moveCall({
+    target: `${p.packageId}::survey_pass::mint_pass_with_extra_credentials`,
+    arguments: [
+      tx.object(p.registryId),
+      tx.object(p.configId),
+      tx.pure.address(p.owner),
+      tx.pure.address(p.depositPayer),
+      tx.pure.u8(p.source),
+      tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(p.nullifiers.map((n) => Array.from(n))).toBytes()),
+      tx.pure.vector('u8', Array.from(p.commitment)),
+      tx.pure.u64(BigInt(p.expiresAt).toString()),
+      tx.pure.vector('u8', Array.from(p.bffSig)),
+      tx.pure(bcs.vector(bcs.u8()).serialize(extraSources).toBytes()),
+      tx.pure(
+        bcs
+          .vector(bcs.vector(bcs.vector(bcs.u8())))
+          .serialize(extraNullifiers)
+          .toBytes()
+      ),
+      tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(extraCommitments).toBytes()),
+      tx.pure(bcs.vector(bcs.u64()).serialize(extraExpiresAt.map((v) => BigInt(v))).toBytes()),
+      tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(extraBffSigs).toBytes()),
       tx.object('0x6'), // Clock
     ],
   })

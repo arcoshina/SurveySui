@@ -5,6 +5,7 @@ const landing: LandingDict = {
   heroDesc: '무료 설문조사 참여, 보상 자동 지급, 변조 불가능한 데이터. SurveySui는 퍼블릭 블록체인에 구축된 설문조사 플랫폼입니다.',
   btnCreate: '설문조사 만들기',
   btnGuide: '초보자 가이드',
+  btnDocs: '설명서',
   btnExplore: '광장 탐색',
   stepsTitle: '3단계로 설문조사 완료',
   stepLabel: '단계',

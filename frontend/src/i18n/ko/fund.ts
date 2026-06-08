@@ -34,7 +34,7 @@ const fund: FundDict = {
   timesPerPerson: '회/인',
   totalRewardLabel: '총 보상:',
   exchangeRateLabel: '참고 환율:',
-  platformFeeLabel: '플랫폼 수수료:',
+  platformFeeLabel: '로열티:',
   calculating: '계산 중...',
   estimatedTotal: '예상 총합',
   withSlippage: '1% 슬리피지 포함',
