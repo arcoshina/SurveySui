@@ -23,61 +23,59 @@
 =====
 
 ## 待辦清單
-- [x] Gas 代付 2-of-3 multisig ；見 /安全指引.md、/託管架構.md  
+
+- [ ] 完成前端說明文件，注意要遵守 ./docs/Style_Guide.md
 - [ ] Ticket issuer 改 threshold multisig / KMS（Phase 3+）  
-- [x] 秘密及金鑰的輪換及管理準則 → [安全指引.md](./安全指引.md)  
-- [ ] 
+- [x] Gas 代付 2-of-3 multisig ；見 /安全指引.md、/託管架構.md  
+- [x] 秘密及金鑰的輪換及管理準則  ./安全指引.md  
+- [x] 檢查代幣經濟已對齊 ./system_design/TokenEconomics.md 
+
 
 ## 收尾檢查
-- [ ] Env 集中在一個檔案，加註解（模板見 [安全指引.md](./安全指引.md) §11） 
+- [ ] Env 集中在一個檔案，加註解（模板見 ./安全指引.md 
 - [ ] 檢查前端說明文案：引導、防護、設計、代付及退回機制、儲存及銷毀機制
-- [x] 檢查代幣經濟已對齊 [TokenEconomics.md](system_design/TokenEconomics.md) 
 - [ ] 再次確認答卷上鏈的格式問題  
 - [ ] 應對私鑰洩漏問題：錢包持有者可以完全銷毀錢包內的 SurveyPass，認證資訊從一個地址中刪除後，能綁到另一個地址  
 - [ ] 確認 OAuth JWT 有驗簽
 - [ ] 檢查 Gas 補助的計算邏輯
 - [ ] 檢查防女巫抽乾補助池的機制: 刪除 Pass 及問卷時的押金處理
-- [ ] **上線前重設所有 Secrets**（清單見 [安全指引.md](./安全指引.md) §8）
+- [ ] **上線前重設所有 Secrets** ./安全指引.md  
 - [ ] 確認佈署時的提示  
 - [ ] 文件完整說明運作方式，特別是安全措施及利用的 Sui 特性
 - [ ] 銷毀 Pass時的提示 message
 
-
-一、確定不做的事
-鏈上 revoked_nullifiers、ON_CHAIN_SYNC、Merkle、刪 slot 註銷、整本 Pass 因單一來源註銷而拒填等
-自願刪除自動寫庫、Walrus 作為 Mint 查詢權威等
-二、要做的事
-主：Production 註銷庫改為 Cloudflare 託管 DB（D1／Turso 等），非本地 surveysui.db
-輔：DB 寫入成功後可選 Walrus 歸檔（失敗不阻擋主流程）
-Mint 守衛預設開啟、REVOCATION_REGISTRY_BACKEND 收斂為 bff_db 或 bff_db+walrus
-Move／BFF 測試清單（#1 刪除回歸、細粒度註銷、拒簽、頻控、CLI 整合）
-前端提示、Gas 預檢標為可並行、非阻擋上線
-
-
 ## 進度紀錄  
 
+### 2026/6/12
+- [ ] 修正在代付 Pass 中不能掛自付 credencial 的限制_opus  
+- [ ] 準備上線文件
+- [ ] 
+
+
 ### 2026/6/11
-- [ ] 修復 Pass &代付問題
+- [x] 修復 Pass &代付問題
   - [x] BFF Gas 只有1包gas、Gas 序列問題_fable  
-  - [x] mint Pass 需要多次簽名_Composer_opus  
-  - [x] 額度用盡後自付，顯示代付失效中
-  - [x] 公開問卷顯示及跳轉問題
-  - [x] BFF 不自動關閉過期問卷，等過期未銷毀才動作
-  - [x] 韓文介面仍顯示：中文憑證驗證不符 本問卷需要以下其中一種未過期的憑證： 
-  - [x] 過期後從前端去填答，答卷者只會看到一個錯誤訊息(原始 EExpired MoveAbort 文字,非友善文案
-  - [x] 型別檢查 sponsoredTx.ts:101 的錯誤
+  - [x] mint Pass 需要多次簽名_opus  
+  - [x] 額度用盡後自付，顯示代付失效中_opus  
+  - [x] 公開問卷顯示及跳轉問題_opus  
+  - [x] BFF 不自動關閉過期問卷，等過期未銷毀才動作_opus  
+  - [x] 部分文案沒有多語化_opus  
+  - [x] 過期後前端去填答文案_opus  
+  - [x] 型別檢查 sponsoredTx.ts:101 的錯誤_opus  
+  - [x] 完成 certik 審計 + Claude code-review 內容修補
+  - [ ] 
+  - [ ] 
 
 
 
 ### 2026/6/10
-- [~] 修改審計報告中的漏洞
+- [x] 修改審計報告中的漏洞
   - [x] 建立AMM 及經濟模型文件初稿_Composer  
   - [x] 修正到期不自動結束的問題_Composer  
   - [x] 修正 Vault:問卷不是一對一的問題_Composer  
   - [x] 修正註銷行為問題_Composer  
-  - [x] F14 RPC 歷史掃描上限 250
-  - [ ] F46
-- [ ] Claude code-review
+  - [x] F14 RPC 歷史掃描上限 250_Composer
+- [x] Claude code-review
   - [x] S1 所有 claim 在建構 PTB 前即 throw_Fable
   - [x] S2 revoke不再釋放 nullifier_Fable
   - [x] 補充系統行為文件_Fable
