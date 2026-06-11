@@ -576,7 +576,7 @@ fun test_same_owner_same_nullifier_allowed() {
 }
 
 #[test]
-fun test_admin_rescue_revoke_success() {
+fun test_admin_revoke_credential_success() {
     let mut scenario = test_scenario::begin(ADMIN);
     {
         let ctx = test_scenario::ctx(&mut scenario);
@@ -610,20 +610,17 @@ fun test_admin_rescue_revoke_success() {
     // 2. 管理員註銷 Google (6) 憑證
     test_scenario::next_tx(&mut scenario, ADMIN);
     {
-        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
         let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
         let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
 
-        survey_pass::admin_rescue_revoke(
-            &mut registry,
+        survey_pass::admin_revoke_credential(
             &mut pass,
             &config,
             6, // 註銷 Google
             ctx,
         );
 
-        test_scenario::return_shared(registry);
         test_scenario::return_shared(config);
         test_scenario::return_shared(pass);
     };
@@ -643,15 +640,51 @@ fun test_admin_rescue_revoke_success() {
         test_scenario::return_shared(pass);
     };
 
-    // 4. 驗證 nullifier 已從 registry.used 釋放，新錢包 (OTHER) 可重綁 Google
+    test_scenario::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = surveysui::survey_pass::EDuplicateNullifier)]
+fun test_admin_revoke_credential_nullifier_stays_pinned() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        let google_nullifier = make_nullifier(6);
+        survey_pass::mint_pass_for_testing(
+            &mut registry,
+            OWNER,
+            6,
+            vector[google_nullifier],
+            vector[],
+            9_999_999_999_999u64,
+            &clock,
+            ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, ADMIN);
+    {
+        let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::admin_revoke_credential(&mut pass, &config, 6, ctx);
+        test_scenario::return_shared(config);
+        test_scenario::return_shared(pass);
+    };
     test_scenario::next_tx(&mut scenario, OTHER);
     {
         let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
         let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
         let ctx = test_scenario::ctx(&mut scenario);
-
         let google_nullifier = make_nullifier(6);
-        // 重綁應成功
         survey_pass::mint_pass_for_testing(
             &mut registry,
             OTHER,
@@ -662,11 +695,9 @@ fun test_admin_rescue_revoke_success() {
             &clock,
             ctx,
         );
-
         clock::destroy_for_testing(clock);
         test_scenario::return_shared(registry);
     };
-
     test_scenario::end(scenario);
 }
 
@@ -723,9 +754,10 @@ fun test_mint_with_extra_credentials_dual_source() {
     test_scenario::end(scenario);
 }
 
-// extra 與 primary 同 source 時刷新效期（apply_credential_slot 覆寫路徑）
+// F55: extra 與 primary 同 source 時拒絕 mint
 #[test]
-fun test_mint_with_extra_same_source_refreshes_expiry() {
+#[expected_failure(abort_code = surveysui::survey_pass::EDuplicateSource)]
+fun test_mint_with_extra_same_source_aborts() {
     let mut scenario = test_scenario::begin(ADMIN);
     {
         let ctx = test_scenario::ctx(&mut scenario);
@@ -823,6 +855,7 @@ fun test_mint_pass_duplicate_pass_aborts() {
             vector[make_nullifier(2)],
             vector[],
             9_999_999_999_999u64,
+            0,
             vector[],
             &clock,
             ctx,
@@ -831,6 +864,264 @@ fun test_mint_pass_duplicate_pass_aborts() {
         clock::destroy_for_testing(clock);
         test_scenario::return_shared(registry);
         test_scenario::return_shared(config);
+    };
+    test_scenario::end(scenario);
+}
+
+// F60/F61: 竄改 commitment 後填答資格失效
+#[test]
+fun test_tampered_commitment_fails_is_source_valid() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_for_testing(
+            &mut registry,
+            OWNER,
+            2,
+            vector[make_nullifier(90)],
+            vector[],
+            9_999_999_999_999u64,
+            &clock,
+            ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        assert!(survey_pass::is_source_valid(&pass, 2, &clock), 0);
+        survey_pass::set_slot_commitment_for_testing(&mut pass, 2, vector[0, 1, 2]);
+        assert!(!survey_pass::is_source_valid(&pass, 2, &clock), 1);
+        assert!(!survey_pass::is_valid(&pass, &clock), 2);
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// F59/F61: 救援註銷後不可再以 ticket 覆寫 slot
+#[test]
+#[expected_failure(abort_code = surveysui::survey_pass::ECredentialRevoked)]
+fun test_apply_credential_on_revoked_slot_aborts() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_for_testing(
+            &mut registry,
+            OWNER,
+            6,
+            vector[make_nullifier(91)],
+            vector[],
+            9_999_999_999_999u64,
+            &clock,
+            ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, ADMIN);
+    {
+        let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::admin_revoke_credential(&mut pass, &config, 6, ctx);
+        test_scenario::return_shared(config);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let _ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::apply_credential_slot_for_testing(
+            &mut pass,
+            6,
+            vector[make_nullifier(91)],
+            9_999_999_999_999u64,
+            &clock,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// F54: mint 後 credential_sources 長度與實際 slot 一致
+#[test]
+fun test_mint_single_credential_sources_length() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_for_testing(
+            &mut registry,
+            OWNER,
+            2,
+            vector[make_nullifier(92)],
+            vector[],
+            9_999_999_999_999u64,
+            &clock,
+            ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        assert!(vector::length(&survey_pass::credential_sources(&pass)) == 1, 0);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// 代付 mint：clawback 寫入 Pass
+#[test]
+fun test_sponsored_mint_sets_escape_clawback() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        let clawback = 50_000_000u64;
+        survey_pass::mint_pass_for_testing_with_payer_and_clawback(
+            &mut registry,
+            OWNER,
+            SPONSOR,
+            5,
+            vector[make_nullifier(70)],
+            vector<u8>[],
+            9_999_999_999_999u64,
+            clawback,
+            &clock,
+            ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        assert!(survey_pass::escape_clawback_mist(&pass) == 50_000_000u64, 0);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// 逃生門：clawback 高於 floor 時以 clawback 為 required_fee
+#[test]
+fun test_self_delete_uses_clawback_when_higher_than_floor() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        let clawback = REBATE_FEE_FLOOR * 5;
+        survey_pass::mint_pass_for_testing_with_payer_and_clawback(
+            &mut registry,
+            OWNER,
+            SPONSOR,
+            5,
+            vector[make_nullifier(71)],
+            vector<u8>[],
+            9_999_999_999_999u64,
+            clawback,
+            &clock,
+            ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        let required = REBATE_FEE_FLOOR * 5;
+        let fee = coin::mint_for_testing<SUI>(required, ctx);
+        survey_pass::self_delete_sponsored_pass(&mut registry, pass, fee, ctx);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, SPONSOR);
+    {
+        let received = test_scenario::take_from_address<coin::Coin<SUI>>(&scenario, SPONSOR);
+        assert!(coin::value(&received) == REBATE_FEE_FLOOR * 5, 0);
+        test_scenario::return_to_address(SPONSOR, received);
+    };
+    test_scenario::end(scenario);
+}
+
+// 逃生門：clawback 高於 floor 時費用不足 → EFeeTooLow
+#[test]
+#[expected_failure(abort_code = surveysui::survey_pass::EFeeTooLow)]
+fun test_self_delete_clawback_fee_too_low() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        let clawback = REBATE_FEE_FLOOR * 5;
+        survey_pass::mint_pass_for_testing_with_payer_and_clawback(
+            &mut registry,
+            OWNER,
+            SPONSOR,
+            5,
+            vector[make_nullifier(72)],
+            vector<u8>[],
+            9_999_999_999_999u64,
+            clawback,
+            &clock,
+            ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        let required = REBATE_FEE_FLOOR * 5;
+        let fee = coin::mint_for_testing<SUI>(required - 1, ctx);
+        survey_pass::self_delete_sponsored_pass(&mut registry, pass, fee, ctx);
+        test_scenario::return_shared(registry);
     };
     test_scenario::end(scenario);
 }

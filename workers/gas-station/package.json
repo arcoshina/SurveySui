@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@mysten/sui": "^1.25.0",
+    "@mysten/sui": "1.45.2",
     "@surveysui/gas-station-core": "workspace:*"
   },
   "devDependencies": {

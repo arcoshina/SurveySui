@@ -64,6 +64,7 @@ const auth: AuthDict = {
   deleteSuccess: 'SurveyPass가 온체인에서 성공적으로 소멸되었습니다!',
   txFailed: '트랜잭션 실행 실패',
   authFailed: '인증 또는 트랜잭션 전송 실패',
+  mintSponsorUnavailable: '가스 대납 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.',
   upgradeSuccess: '인증서 갱신 성공!',
   mintSuccess: 'SurveyPass 민팅 성공!',
   destroyFailed: '소멸 실패',

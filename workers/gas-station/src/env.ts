@@ -13,6 +13,7 @@ export interface GasStationEnv {
   GAS_SPONSOR_ADDRESS?: string
   NODE_ENV?: string
   SUI_PACKAGE_ID?: string
+  GAS_STATION_SHARED_SECRET?: string
   COIN_MERGE_TRIGGER_COUNT?: string
   COIN_MERGE_THRESHOLD_SUI?: string
   COIN_MERGE_INTERVAL_MS?: string

@@ -12,9 +12,15 @@ export function netGasFromEffects(gasUsed: GasUsedEffects): bigint {
   )
 }
 
+export function upfrontGasFromEffects(gasUsed: GasUsedEffects): bigint {
+  return BigInt(gasUsed.computationCost ?? 0) + BigInt(gasUsed.storageCost ?? 0)
+}
+
 export function resolveGasBudget(netGas: bigint, cap: bigint, buffer: bigint): bigint {
-  const withBuffer = netGas + buffer
-  return withBuffer < cap ? withBuffer : cap
+  const clampedNet = netGas < 0n ? 0n : netGas
+  const withBuffer = clampedNet + buffer
+  const capped = withBuffer < cap ? withBuffer : cap
+  return capped < 1n ? 1n : capped
 }
 
 export function computeRebateSurplus(netGas: bigint, buffer: bigint): bigint {

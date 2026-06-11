@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Transaction } from '@mysten/sui/transactions'
-import { executeTxWithFallback } from './sponsoredTx.js'
+import { buildClaimPtb, executeTxWithFallback } from './sponsoredTx.js'
 
 describe('Frontend Sponsored Transaction Fallback Tests', () => {
   let mockSuiClient: any
@@ -65,5 +65,124 @@ describe('Frontend Sponsored Transaction Fallback Tests', () => {
     expect(result.mode).toBe('self_paid')
     expect(result).toHaveProperty('digest', 'self_paid_digest_mock')
     expect(mockSignAndExecute).toHaveBeenCalledWith(tx)
+  })
+
+  it('should fall back to self-paid when gas_exceeds_compensation', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        error: 'gas_exceeds_compensation',
+        message: 'Estimated gas exceeds vault compensation',
+      }),
+    })
+
+    const tx = new Transaction()
+    tx.build = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
+
+    let fallbackCalled = false
+    const result = await executeTxWithFallback({
+      tx,
+      senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
+      client: mockSuiClient,
+      backendUrl: 'http://localhost:3100',
+      signAndExecute: mockSignAndExecute,
+      onSelfPaidFallback: async () => {
+        fallbackCalled = true
+        return true
+      },
+    })
+
+    expect(fallbackCalled).toBe(true)
+    expect(result.mode).toBe('self_paid')
+  })
+})
+
+describe('buildClaimPtb sentinel padding (ADR unified claim)', () => {
+  const id = (n: string) => `0x${n.padStart(64, '0')}`
+  const PKG = id('aa')
+  const VAULT = id('1')
+  const SURVEY = id('2')
+  const PASS = id('3')
+  const ISSUER = id('4')
+  const NFT = id('5')
+  const VOID_NFT = id('6')
+  const PASS_SENTINEL = id('7')
+  const NFT_TYPE = `${PKG}::some_collection::Member`
+
+  const base = {
+    packageId: PKG,
+    vaultId: VAULT,
+    surveyId: SURVEY,
+    issuerConfigId: ISSUER,
+  }
+
+  function claimCallOf(tx: Transaction) {
+    const data = tx.getData()
+    const call = data.commands.find(
+      (c) => c.$kind === 'MoveCall' && c.MoveCall?.function === 'claim'
+    )
+    expect(call?.MoveCall).toBeDefined()
+    const inputObjectIds = data.inputs
+      .map((i) => (i.$kind === 'UnresolvedObject' ? i.UnresolvedObject.objectId : null))
+      .filter((v): v is string => !!v)
+    return { moveCall: call!.MoveCall!, inputObjectIds }
+  }
+
+  it('Pass-only claim pads NFT side with VoidNft sentinel', () => {
+    const tx = buildClaimPtb({ ...base, passId: PASS, voidNftId: VOID_NFT })
+    const { moveCall, inputObjectIds } = claimCallOf(tx)
+    expect(moveCall.package).toBe(PKG)
+    expect(moveCall.module).toBe('survey_vault')
+    expect(moveCall.typeArguments).toEqual([`${PKG}::claim_sentinel::VoidNft`])
+    expect(inputObjectIds).toContain(PASS)
+    expect(inputObjectIds).toContain(VOID_NFT)
+  })
+
+  it('NFT-only claim pads Pass side with shared pass sentinel', () => {
+    const tx = buildClaimPtb({
+      ...base,
+      nftId: NFT,
+      nftType: NFT_TYPE,
+      claimPassSentinelId: PASS_SENTINEL,
+    })
+    const { moveCall, inputObjectIds } = claimCallOf(tx)
+    expect(moveCall.typeArguments).toEqual([NFT_TYPE])
+    expect(inputObjectIds).toContain(NFT)
+    expect(inputObjectIds).toContain(PASS_SENTINEL)
+  })
+
+  it('Pass + NFT claim carries both real objects without sentinels', () => {
+    const tx = buildClaimPtb({
+      ...base,
+      passId: PASS,
+      nftId: NFT,
+      nftType: NFT_TYPE,
+      voidNftId: '',
+      claimPassSentinelId: '',
+    })
+    const { moveCall, inputObjectIds } = claimCallOf(tx)
+    expect(moveCall.typeArguments).toEqual([NFT_TYPE])
+    expect(inputObjectIds).toContain(PASS)
+    expect(inputObjectIds).toContain(NFT)
+  })
+
+  // 明確傳 ''(覆寫 import.meta.env),確保缺 sentinel 設定時 fail-fast 路徑穩定可測
+  it('throws when Pass-only claim lacks VITE_VOID_NFT_ID', () => {
+    expect(() => buildClaimPtb({ ...base, passId: PASS, voidNftId: '' })).toThrow(
+      'VITE_VOID_NFT_ID required for Pass-only claim'
+    )
+  })
+
+  it('throws when NFT-only claim lacks VITE_CLAIM_PASS_SENTINEL_ID', () => {
+    expect(() =>
+      buildClaimPtb({ ...base, nftId: NFT, nftType: NFT_TYPE, claimPassSentinelId: '' })
+    ).toThrow('VITE_CLAIM_PASS_SENTINEL_ID required for NFT-only claim')
+  })
+
+  it('throws when neither Pass nor NFT eligibility is provided', () => {
+    expect(() => buildClaimPtb({ ...base })).toThrow(
+      'Claim requires SurveyPass or NFT eligibility'
+    )
   })
 })

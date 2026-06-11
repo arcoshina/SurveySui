@@ -1,3 +1,5 @@
+> 現行規格已收斂至 [system_design/PassLifecycle.md](../system_design/PassLifecycle.md)；本文為設計過程紀錄，不作規格引用。
+
 # 專案設計：管理員救援註銷與憑證細粒度停權機制
 
 本文件規劃當受訪者的一個或多個驗證來源遭駭、或需管理員介入止損時的**細粒度註銷機制**，涵蓋鏈上合約、BFF 與管理員工具。設計討論過程見 `docs/dialog.md`；漏洞與取捨摘要見 `docs/Pass停權設計討論紀錄.md`（待與本文件同步）。
@@ -14,6 +16,7 @@
   - `commitment`、`issued_at`、`expires_at`
   - `status`：`ACTIVE` | `REVOKED`（**新增**）
 - **Mint 簽章**：鑄造／更新憑證時，BFF 簽發短期 Ticket（類 JWT）；合約在 `mint_pass` / `update_pass_credential` 時驗證簽章。鏈上持久保存的是綁定後的 slot 內容，而非每次填答重驗簽章。
+- **Claim 完整性**：填答時不跑 ed25519；`is_source_valid` / `is_valid` 對每個 ACTIVE slot 重算 `credential_digest(owner, source, nullifiers, expires_at)`（BLAKE2b-256 over BCS），須與 slot `commitment` 一致，防止竄改 nullifier。
 
 ### 1.2 正常填答流程
 
@@ -39,7 +42,7 @@
 
 ### 1.4 Nullifier 與防重複填答
 
-- 註銷某來源時，其 nullifier 自 `registry.used` 釋放，合法用戶可在新錢包重綁**該來源**。
+- **救援註銷（`admin_rescue_revoke`）不釋放** `registry.used`：一身分一 Pass，註銷後同 nullifier 仍無法再 mint 新 Pass。合法用戶換錢包重綁須走管理員流程，或於 Pass 仍 `ACTIVE` 時由 owner 刪除 Pass（`do_delete` 才釋放 `used`）。
 - `SurveyVault.used_nullifiers` 以 `H(nullifier ‖ vault_id)` **永久**記錄填答史；註銷／刪除 Pass **不會**清除，故同一身分無法重複領同一問卷獎勵。
 - `claim` 做 vault 去重時，**僅納入 `status == ACTIVE` 的 slot 之 nullifier**，避免已註銷來源干擾聯集邏輯。
 
@@ -61,8 +64,8 @@
 ## 二、核心設計目標
 
 1. **細粒度註銷**：`admin_rescue_revoke(source)` 將該 slot 標為 `REVOKED`（**不刪除** dynamic field），Pass 與其他來源保持 `ACTIVE`。
-2. **身分釋放**：被註銷來源的 nullifier 自 `registry.used` 移除，供合法用戶在新錢包重綁。
-3. **註銷紀錄可配置儲存**：鏈上 **必寫** slot `REVOKED` + 釋放 `used`；已註銷 nullifier **清單**預設寫 BFF DB（可選 Walrus），**不預設**寫鏈上 `revoked_nullifiers`（見 §4.1）。
+2. **registry 釘選**：救援註銷**不**自 `registry.used` 移除 nullifier（與產品「一身分一 Pass」一致）；僅 owner 主動刪除 ACTIVE Pass 時釋放。
+3. **註銷紀錄可配置儲存**：鏈上 **必寫** slot `REVOKED`（**不**釋放 `used`）；已註銷 nullifier **清單**預設寫 BFF DB（可選 Walrus），**不預設**寫鏈上 `revoked_nullifiers`（見 §4.1）。
 4. **一錢包一 Pass**：`mint_pass` 若 `registry.passes` 已有該 owner 則 `abort`（不可靜默覆寫 mapping）。
 5. **刪除套利對沖**：`self_delete_sponsored_pass` 規費 `REBATE_FEE_FLOOR * (1 + credentials_count)`。
 6. **刪除不沖銷註銷紀錄**：駭客刪除 Pass 只影響鏈上物件與 `registry.used`／`passes`；**BFF／Walrus 已註銷庫保留**，管理員仍可事後登記。
@@ -126,10 +129,10 @@ public fun all_nullifiers(pass: &SurveyPass): vector<vector<u8>> {
 ### 3.4 `admin_rescue_revoke`（細粒度註銷）
 
 ```move
-/// 管理員救援註銷：標記指定 source 為 REVOKED，釋放 used
+/// 管理員救援註銷：標記指定 source 為 REVOKED（不釋放 registry.used）
 /// （不在此函數寫 revoked_nullifiers；離鏈清單由 BFF／Walrus 維護，鏈上表為可選升級）
 public fun admin_rescue_revoke(
-    registry: &mut NullifierRegistry,
+    _registry: &mut NullifierRegistry,
     pass: &mut SurveyPass,
     config: &IssuerConfig,
     source_to_revoke: u8,
@@ -147,18 +150,6 @@ public fun admin_rescue_revoke(
     let slot = dynamic_field::borrow_mut<CredentialKey, CredentialSlot>(&mut pass.id, key);
     assert!(slot.status == CREDENTIAL_ACTIVE, ENotActive);
     slot.status = CREDENTIAL_REVOKED;
-
-    let nullifiers = *&slot.nullifiers;  // 複製，避免從 &mut 移出
-    let owner = pass.owner;
-    let mut k = 0;
-    let klen = vector::length(&nullifiers);
-    while (k < klen) {
-        let nh = *vector::borrow(&nullifiers, k);
-        if (table::contains(&registry.used, nh) && *table::borrow(&registry.used, nh) == owner) {
-            table::remove(&mut registry.used, nh);
-        };
-        k = k + 1;
-    };
     // credential_sources 保留該 source 條目，便於 UI 顯示「已註銷」
     // 離鏈已註銷庫寫入由 BFF／管理員 CLI 依 REVOCATION_REGISTRY_BACKEND 處理（§4.1）
 }

@@ -2,7 +2,41 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { Transaction } from '@mysten/sui/transactions'
-import { registerGasRoutes, __resetDynamicGasCache } from '../src/gas/handler.js'
+import { bcs } from '@mysten/sui/bcs'
+
+const PKG = '0x0000000000000000000000000000000000000000000000000000000000000007'
+const ISSUER_CONFIG_ID = '0x000000000000000000000000000000000000000000000000000000000000000a'
+const VOID_NFT_ID = '0x000000000000000000000000000000000000000000000000000000000000000c'
+const VOID_NFT_TYPE = `${PKG}::claim_sentinel::VoidNft`
+
+function unifiedClaimArgs(
+  tx: Transaction,
+  vaultId: string,
+  surveyId: string,
+  passId: string
+) {
+  return [
+    tx.object(vaultId),
+    tx.object(surveyId),
+    tx.pure.u8(0),
+    tx.pure.bool(true),
+    tx.object(passId),
+    tx.pure.bool(false),
+    tx.object(VOID_NFT_ID),
+    tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize([]).toBytes()),
+    tx.object(ISSUER_CONFIG_ID),
+    tx.pure.vector('u8', []),
+    tx.pure.vector('u8', []),
+    tx.pure.u64(0),
+    tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
+    tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
+    tx.object('0x6'),
+  ]
+}
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import { createMultisigSponsorSigner, keypairFromHex } from '@surveysui/gas-station-core'
+import { registerGasRoutes, __resetDynamicGasCache, __useInMemoryPassReservationsForTests } from '../src/gas/handler.js'
+import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
 import { __resetGasConfigCache } from '../src/gas/gasConfig.js'
 import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
 import { initializeDb } from '../src/security/db.js'
@@ -11,13 +45,52 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
   let server: any
   let mockSuiClient: any
 
+  const devIssuerPriv = '0101010101010101010101010101010101010101010101010101010101010101'
+  const sponsorPriv2 = '0202020202020202020202020202020202020202020202020202020202020202'
+  const sponsorPriv3 = '0303030303030303030303030303030303030303030303030303030303030303'
+  const coldPubkey3 = Buffer.from(
+    keypairFromHex(sponsorPriv3).getPublicKey().toRawBytes()
+  ).toString('hex')
+  const userPriv = '0404040404040404040404040404040404040404040404040404040404040404'
+  let userKeypair: Ed25519Keypair
+  let userAddress: string
+
+  async function gasSponsorPayload(txBytes: string) {
+    return { txBytes, senderAddress: userAddress }
+  }
+
+  // 完整單簽流程:/sponsor → 使用者簽交易 → /execute(額度在此扣)。
+  async function sponsorThenExecute(txBytes: string) {
+    const sponsorRes = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+    if (sponsorRes.statusCode !== 200) return sponsorRes
+    const { sponsoredTxBytes, sponsorSignature } = JSON.parse(sponsorRes.payload)
+    const { signature: userSignature } = await userKeypair.signTransaction(
+      new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
+    )
+    return server.inject({
+      method: 'POST',
+      url: '/api/gas/execute',
+      payload: { sponsoredTxBytes, userSignature, sponsorSignature },
+    })
+  }
+
   beforeEach(async () => {
-    process.env.SURVEY_PASS_ISSUER_PRIV =
-      '0101010101010101010101010101010101010101010101010101010101010101' // 32 bytes hex
+    process.env.SURVEY_PASS_ISSUER_PRIV = devIssuerPriv
+    process.env.GAS_SPONSOR_PRIV_1 = devIssuerPriv
+    process.env.GAS_SPONSOR_PRIV_2 = sponsorPriv2
+    process.env.GAS_SPONSOR_PUBKEY_3 = coldPubkey3
     process.env.SUI_PACKAGE_ID = '0x0000000000000000000000000000000000000000000000000000000000000007'
     delete process.env.GAS_STATION_MODE
     delete process.env.GAS_STATION_URL
     __resetGasConfigCache()
+    userKeypair = keypairFromHex(userPriv)
+    userAddress = userKeypair.toSuiAddress()
+    __resetSponsorState()
+    __useInMemoryPassReservationsForTests()
 
     initializeDb()
     await __resetPlatformSponsorLedger()
@@ -60,10 +133,14 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
           },
         },
       }),
+      executeTransactionBlock: vi.fn().mockResolvedValue({
+        digest: 'mock_exec_digest',
+        effects: { status: { status: 'success' } },
+      }),
       queryTransactionBlocks: vi.fn().mockResolvedValue({ data: [] }),
       // 預設模擬物件詳情
       getObject: vi.fn().mockImplementation(async ({ id }: { id: string }) => {
-        if (id === '0x0000000000000000000000000000000000000000000000000000000000000009') {
+        if (id === '0x000000000000000000000000000000000000000000000000000000000000000a') {
           return {
             data: {
               objectId: id,
@@ -95,13 +172,24 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
           return {
             visibility: 'Public',
             isEntry: false,
-            typeParameters: [],
+            typeParameters: [{ abilities: ['key'] }],
             parameters: [
-              { MutableReference: { Struct: { address: '0x0000000000000000000000000000000000000000000000000000000000000007', module: 'survey_vault', name: 'SurveyVault', typeArguments: [] } } },
-              { Reference: { Struct: { address: '0x0000000000000000000000000000000000000000000000000000000000000007', module: 'survey_pass', name: 'SurveyPass', typeArguments: [] } } },
+              { MutableReference: { Struct: { address: PKG, module: 'survey_vault', name: 'SurveyVault', typeArguments: [] } } },
+              { Reference: { Struct: { address: PKG, module: 'survey_registry', name: 'Survey', typeArguments: [] } } },
+              'U8',
+              'Bool',
+              { Reference: { Struct: { address: PKG, module: 'survey_pass', name: 'SurveyPass', typeArguments: [] } } },
+              'Bool',
+              { Reference: { TypeParameter: 0 } },
+              { Vector: { Vector: 'U8' } },
+              { Reference: { Struct: { address: PKG, module: 'survey_pass', name: 'IssuerConfig', typeArguments: [] } } },
               { Vector: 'U8' },
-              { Reference: { Struct: { address: '0x0000000000000000000000000000000000000000000000000000000000000002', module: 'clock', name: 'Clock', typeArguments: [] } } },
-              { MutableReference: { Struct: { address: '0x0000000000000000000000000000000000000000000000000000000000000002', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
+              { Vector: 'U8' },
+              'U64',
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Struct: { address: '0x1', module: 'option', name: 'Option', typeArguments: [{ Vector: 'U8' }] } },
+              { Reference: { Struct: { address: '0x2', module: 'clock', name: 'Clock', typeArguments: [] } } },
+              { MutableReference: { Struct: { address: '0x2', module: 'tx_context', name: 'TxContext', typeArguments: [] } } }
             ],
             return_: []
           }
@@ -122,7 +210,10 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
           let type = '0x0000000000000000000000000000000000000000000000000000000000000007::survey_vault::SurveyVault'
           let owner: any = { Shared: { initial_shared_version: '1' } }
           if (id === '0x0000000000000000000000000000000000000000000000000000000000000009') {
-            type = '0x0000000000000000000000000000000000000000000000000000000000000007::survey_pass::SurveyPass'
+            type = `${PKG}::survey_registry::Survey`
+            owner = { Shared: { initial_shared_version: '1' } }
+          } else if (id === '0x000000000000000000000000000000000000000000000000000000000000000a') {
+            type = `${PKG}::survey_pass::SurveyPass`
             owner = { AddressOwner: '0x0000000000000000000000000000000000000000000000000000000000000003' }
           } else if (id === '0x0000000000000000000000000000000000000000000000000000000000000006' || id === '0x6') {
             type = '0x2::clock::Clock'
@@ -148,6 +239,9 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     await server.close()
     __resetGasConfigCache()
     delete process.env.SURVEY_PASS_ISSUER_PRIV
+    delete process.env.GAS_SPONSOR_PRIV_1
+    delete process.env.GAS_SPONSOR_PRIV_2
+    delete process.env.GAS_SPONSOR_PUBKEY_3
     delete process.env.MIN_PLATFORM_SPONSOR_TIER
     delete process.env.SUI_PACKAGE_ID
   })
@@ -162,7 +256,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
         tx.object('0x0000000000000000000000000000000000000000000000000000000000000009')
       ],
     })
-    tx.setSender('0x0000000000000000000000000000000000000000000000000000000000000003')
+    tx.setSender(userAddress)
     
     // 傳入 mockSuiClient 作為 build 參數
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
@@ -170,10 +264,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     const response = await server.inject({
       method: 'POST',
       url: '/api/gas/sponsor',
-      payload: {
-        txBytes,
-        senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
-      },
+      payload: await gasSponsorPayload(txBytes),
     })
 
     // 目前 BFF 尚未實作審查，預期會通過 (500 或 200)，但在 Red 階段我們期望它被 reject (回傳 400)
@@ -186,7 +277,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
   it('should restrict daily platform sponsorships to 3 times per wallet when first-layer gas is insufficient', async () => {
     // 模擬金庫 Gas 餘額不足 (例如為 0)，同時保留 Pass 的憑證欄位
     mockSuiClient.getObject.mockImplementation(async ({ id }: { id: string }) => {
-      if (id === '0x0000000000000000000000000000000000000000000000000000000000000009') {
+      if (id === '0x000000000000000000000000000000000000000000000000000000000000000a') {
         return {
           data: {
             objectId: id,
@@ -216,40 +307,26 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
 
     const tx = new Transaction()
     tx.moveCall({
-      target: '0x0000000000000000000000000000000000000000000000000000000000000007::survey_vault::claim',
-      arguments: [
-        tx.object('0x0000000000000000000000000000000000000000000000000000000000000008'), 
-        tx.object('0x0000000000000000000000000000000000000000000000000000000000000009'), 
-        tx.pure.vector('u8', []), 
-        tx.object('0x0000000000000000000000000000000000000000000000000000000000000006')
-      ],
+      target: `${PKG}::survey_vault::claim`,
+      typeArguments: [VOID_NFT_TYPE],
+      arguments: unifiedClaimArgs(
+        tx,
+        '0x0000000000000000000000000000000000000000000000000000000000000008',
+        '0x0000000000000000000000000000000000000000000000000000000000000009',
+        '0x000000000000000000000000000000000000000000000000000000000000000a'
+      ),
     })
-    tx.setSender('0x0000000000000000000000000000000000000000000000000000000000000003')
+    tx.setSender(userAddress)
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    // 前 3 次請求應成功 (目前未實作次數限制會全部成功，但 TDD 目的是在完成實作後第 4 次失敗)
+    // 平台日額度在 /execute 階段(使用者交易簽章驗過後)遞增。前 3 次應成功廣播。
     for (let i = 0; i < 3; i++) {
-      const response = await server.inject({
-        method: 'POST',
-        url: '/api/gas/sponsor',
-        payload: { 
-          txBytes, 
-          senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003' 
-        },
-      })
+      const response = await sponsorThenExecute(txBytes)
       expect(response.statusCode).toBe(200)
     }
 
-    // 第 4 次請求應失敗並回傳 403 / PLATFORM_SPONSOR_LIMIT_REACHED
-    const response4 = await server.inject({
-      method: 'POST',
-      url: '/api/gas/sponsor',
-      payload: { 
-        txBytes, 
-        senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003' 
-      },
-    })
-
+    // 第 4 次:日額度用罄 → 403 / PLATFORM_SPONSOR_LIMIT_REACHED(/sponsor 唯讀檢查或 /execute 遞增任一處擋)
+    const response4 = await sponsorThenExecute(txBytes)
     expect(response4.statusCode).toBe(403)
     const errData = JSON.parse(response4.payload)
     expect(errData.error).toBe('PLATFORM_SPONSOR_LIMIT_REACHED')

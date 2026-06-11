@@ -2,8 +2,10 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { Transaction } from '@mysten/sui/transactions'
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify'
 import type { SuiClient } from '@mysten/sui/client'
-import { signAndExecuteWithSponsor } from '@surveysui/gas-station-core'
+import { signAndExecuteWithSponsor, normalizeAddress } from '@surveysui/gas-station-core'
 import { loadSponsorSigner } from '../gas/sponsorSigner.js'
+import { assertTxSenderMatches } from '../gas/sponsorAuth.js'
+import { finalizeSponsoredPassTickets } from './finalizeSponsoredTicket.js'
 
 interface PassDeleteRequestBody {
   passId: string
@@ -15,19 +17,55 @@ interface PassDeleteRequestBody {
 // 授權訊息有效期：限制簽名重放窗口
 const SIGNATURE_TTL_MS = 5 * 60_000
 
-function normalizeAddress(addr: string): string {
-  let clean = addr.toLowerCase()
-  if (clean.startsWith('0x')) clean = clean.slice(2)
-  return '0x' + clean.padStart(64, '0')
-}
-
 // 與前端一致的授權訊息格式（綁定 passId + 時間戳，防止跨 Pass / 過期重放）。
 // 直接使用呼叫端傳入的 passId 字串（不正規化），確保前端簽署與後端驗證的 bytes 完全一致。
 export function buildDeleteAuthMessage(passId: string, signedTimestamp: number): string {
   return `surveysui:delete-pass:${passId}:${signedTimestamp}`
 }
 
+interface FinalizeSponsoredTicketBody {
+  txBytes: string
+  senderAddress: string
+}
+
 export function registerPassRoutes(app: FastifyInstance, deps: { suiClient: SuiClient }): void {
+  // 不需前置授權簽章:此端點僅量 gas 並回傳「綁定 owner」的重簽 ticket。該 ticket 只能在
+  // owner 親簽的 mint/update 交易中消費,攻擊者即使取得也無法使用;額度於 /api/gas/execute 把關。
+  app.post(
+    '/api/pass/finalize-sponsored-ticket',
+    async (req: FastifyRequest<{ Body: FinalizeSponsoredTicketBody }>, reply: FastifyReply) => {
+      const { txBytes, senderAddress } = req.body ?? ({} as FinalizeSponsoredTicketBody)
+      if (!txBytes || !senderAddress) {
+        return reply.status(400).send({
+          error: 'missing_params',
+          message: 'txBytes and senderAddress are required',
+        })
+      }
+      try {
+        assertTxSenderMatches(txBytes, senderAddress)
+      } catch {
+        return reply.status(400).send({
+          error: 'tx_sender_mismatch',
+          message: 'Transaction sender does not match senderAddress',
+        })
+      }
+      try {
+        const result = await finalizeSponsoredPassTickets({
+          suiClient: deps.suiClient,
+          txBytes,
+          senderAddress,
+        })
+        return result
+      } catch (err: unknown) {
+        const e = err as { statusCode?: number; message?: string }
+        req.log.error(err)
+        return reply.status(e.statusCode ?? 500).send({
+          error: 'finalize_failed',
+          message: e.message ?? 'Failed to finalize sponsored ticket',
+        })
+      }
+    }
+  )
   // 後端代為執行「項目方代付」Pass 的刪除：admin 為 gas owner，使儲存返還回到項目方。
   // 使用者僅需做一次免 gas 的 personal-message 簽名授權；運算費由項目方負擔（但淨收返還）。
   app.post(

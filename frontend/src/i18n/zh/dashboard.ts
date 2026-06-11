@@ -41,7 +41,7 @@ const dashboard = {
   purgeLabel: '資料銷毀',
   purgeNoticeAt: (ts: string) => `答卷與題目將於 ${ts} 永久銷毀,無法復原。`,
   closeAndPurgeNotice: (days: number) =>
-    `結束後未使用的 SSR 與 Gas 會退回您的錢包。銷毀時題目與答卷將被永久刪除，鏈上儲存押金將退回。若結束後超過 ${days} 天仍未銷毀，系統將自動銷毀，扣除 gas 及 50% 手續費。`,
+    `結束後未使用的 SSR 與 Gas 會退回您的錢包。銷毀時題目與答卷將被永久刪除，鏈上儲存押金將退回。若超過截止時間後 ${days} 天仍未銷毀，系統將自動銷毀，並收取 gas 及 50% 手續費。`,
   listPurgeReminder: (days: number) => `每份問卷結束後 ${days} 天,其答卷與題目會自動永久銷毀,請於期限前匯出或查看所需結果。`,
   vaultLabel: 'Vault ID',
   deadlineLabel: '截止時間',

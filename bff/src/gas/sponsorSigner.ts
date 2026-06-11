@@ -13,7 +13,7 @@ export function requireSponsorSigner(): SponsorSigner {
   const signer = loadSponsorSigner()
   if (!signer) {
     throw new Error(
-      'Gas sponsor not configured: set GAS_SPONSOR_PRIV_1/2 + GAS_SPONSOR_PUBKEY_3, or SURVEY_PASS_ISSUER_PRIV (dev only)'
+      'Gas sponsor not configured: set GAS_SPONSOR_PRIV_1, GAS_SPONSOR_PRIV_2, and GAS_SPONSOR_PUBKEY_3'
     )
   }
   return signer

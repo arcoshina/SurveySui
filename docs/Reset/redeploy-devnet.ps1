@@ -103,7 +103,7 @@ if ($LASTEXITCODE -ne 0) {
 # ── [5/6] 印出新 ID ───────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '[5/6] 新合約 ID 摘要（從 .env 讀回）…' -ForegroundColor Yellow
-$idKeys = 'SUI_PACKAGE_ID|SR_TREASURY_ID|SSR_TREASURY_ID|AMM_POOL_ID|SURVEY_REGISTRY_ID|PASS_REGISTRY_ID|ISSUER_CONFIG_ID'
+$idKeys = 'SUI_PACKAGE_ID|SR_TREASURY_ID|SSR_TREASURY_ID|AMM_POOL_ID|SURVEY_REGISTRY_ID|PASS_REGISTRY_ID|ISSUER_CONFIG_ID|VOID_NFT_ID|CLAIM_PASS_SENTINEL_ID'
 Get-Content $envPath | Where-Object { $_ -match "^($idKeys)=" } | ForEach-Object {
   Write-Host "  $_"
 }

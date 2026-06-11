@@ -23,6 +23,7 @@ const OBJ = (n: number) => `0x${n.toString(16).padStart(64, '0')}`
 const PURGE_IDS = {
   packageId: OBJ(1),
   registryId: OBJ(2),
+  protocolConfigId: OBJ(5),
   surveyId: OBJ(3),
   vaultId: OBJ(4),
 }

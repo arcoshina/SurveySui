@@ -86,7 +86,6 @@ async function main() {
   // Load Env Configuration
   const network = (process.env.SUI_NETWORK ?? 'testnet') as 'testnet' | 'devnet' | 'localnet'
   const packageId = requireEnv('SUI_PACKAGE_ID')
-  const passRegistryId = requireEnv('PASS_REGISTRY_ID')
   const issuerConfigId = requireEnv('ISSUER_CONFIG_ID')
   const adminSecret = requireEnv('ADMIN_SECRET')
   const bffUrl = process.env.VITE_BFF_URL || process.env.BFF_URL || 'http://localhost:3100'
@@ -137,12 +136,11 @@ async function main() {
       ? Ed25519Keypair.fromSecretKey(adminPrivKey)
       : Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
     
-    console.log(`[Chain] Sending admin_rescue_revoke transaction for source ${source}...`)
+    console.log(`[Chain] Sending admin_revoke_credential transaction for source ${source}...`)
     const tx = new Transaction()
     tx.moveCall({
-      target: `${packageId}::survey_pass::admin_rescue_revoke`,
+      target: `${packageId}::survey_pass::admin_revoke_credential`,
       arguments: [
-        tx.object(passRegistryId),
         tx.object(passId),
         tx.object(issuerConfigId),
         tx.pure.u8(source),

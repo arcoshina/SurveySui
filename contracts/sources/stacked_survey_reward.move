@@ -2,8 +2,8 @@ module surveysui::stacked_survey_reward;
 use std::string;
 use sui::coin::{Self, Coin, TreasuryCap};
 use sui::coin_registry;
-const DECIMALS: u8 = 9;
-const TOTAL_SUPPLY_CAP: u64 = 1_000_000_000 * 1_000_000_000;
+const DECIMALS: u8 = 6;
+const TOTAL_SUPPLY_CAP: u64 = 10_000_000_000_000_000_000;
 const EExceedsCap: u64 = 0;
 public struct STACKED_SURVEY_REWARD has drop {}
 public struct SsrTreasury has key {
@@ -40,7 +40,7 @@ public fun total_supply(treasury: &SsrTreasury): u64 {
 }
 public fun supply_cap(): u64 { TOTAL_SUPPLY_CAP }
 public fun display_ssr(amount: u64): u64 {
-    let decimals_to_round = 100000;
+    let decimals_to_round = 1000;
     let half = decimals_to_round / 2;
     ((amount + half) / decimals_to_round) * decimals_to_round
 }

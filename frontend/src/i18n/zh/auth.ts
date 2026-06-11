@@ -62,6 +62,7 @@ const auth = {
   deleteSuccess: 'SurveyPass 已成功從鏈上銷毀！',
   txFailed: '交易執行失敗',
   authFailed: '驗證或交易發送失敗',
+  mintSponsorUnavailable: '代付服務暫時不可用，請稍後再試。',
   upgradeSuccess: '通證更新成功！',
   mintSuccess: 'SurveyPass 鑄造成功！',
   destroyFailed: '銷毀失敗',

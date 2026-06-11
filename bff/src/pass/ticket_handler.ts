@@ -3,9 +3,12 @@ import type { SuiClient } from '@mysten/sui/client'
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify'
 import { randomBytes } from 'node:crypto'
 import { issueRealTimeTicket } from '../auth/ticket_issue.js'
+import { hasLiveTicketSlot, insertTicketSlot } from './realtimeTicketSlotStore.js'
+import { normalizeAddress } from '@surveysui/gas-station-core'
 
 interface TicketIssueRequestBody {
   vaultId: string
+  surveyId: string
   walletA: string
   signedTimestamp: number
   signature: string
@@ -13,14 +16,6 @@ interface TicketIssueRequestBody {
 
 // 授權時間窗口 5 分鐘
 const SIGNATURE_TTL_MS = 5 * 60_000
-// 臨時去重記錄 Map: `${walletA.toLowerCase()}:${vaultId.toLowerCase()}` -> timestamp
-const issuedTicketsRegistry = new Map<string, number>()
-
-function normalizeAddress(addr: string): string {
-  let clean = addr.toLowerCase()
-  if (clean.startsWith('0x')) clean = clean.slice(2)
-  return '0x' + clean.padStart(64, '0')
-}
 
 // 生成授權驗證訊息
 export function buildTicketAuthMessage(vaultId: string, signedTimestamp: number): string {
@@ -31,12 +26,13 @@ export function registerTicketRoutes(app: FastifyInstance, deps: { suiClient: Su
   app.post(
     '/api/ticket/issue',
     async (req: FastifyRequest<{ Body: TicketIssueRequestBody }>, reply: FastifyReply) => {
-      const { vaultId, walletA, signedTimestamp, signature } = req.body ?? ({} as TicketIssueRequestBody)
+      const { vaultId, surveyId, walletA, signedTimestamp, signature } =
+        req.body ?? ({} as TicketIssueRequestBody)
 
-      if (!vaultId || !walletA || !signedTimestamp || !signature) {
+      if (!vaultId || !surveyId || !walletA || !signedTimestamp || !signature) {
         return reply.status(400).send({
           error: 'missing_params',
-          message: 'vaultId, walletA, signedTimestamp and signature are required',
+          message: 'vaultId, surveyId, walletA, signedTimestamp and signature are required',
         })
       }
 
@@ -69,9 +65,8 @@ export function registerTicketRoutes(app: FastifyInstance, deps: { suiClient: Su
           })
         }
 
-        // 3. 防重複申請 Ticket 檢查
-        const registryKey = `${normalizeAddress(walletA)}:${normalizeAddress(vaultId)}`
-        if (issuedTicketsRegistry.has(registryKey)) {
+        // 3. 防重複申請 Ticket 檢查（SQLite slot，TTL 過期自動釋放）
+        if (await hasLiveTicketSlot(walletA, vaultId)) {
           return reply.status(400).send({
             error: 'ticket_already_issued',
             message: 'A ticket has already been issued for this wallet and survey',
@@ -92,6 +87,32 @@ export function registerTicketRoutes(app: FastifyInstance, deps: { suiClient: Su
         }
 
         const fields = (vaultObj.data.content as any).fields
+        const surveyObj = await deps.suiClient.getObject({
+          id: surveyId,
+          options: { showContent: true },
+        })
+        if (!surveyObj.data?.content || (surveyObj.data.content as any).dataType !== 'moveObject') {
+          return reply.status(404).send({
+            error: 'survey_not_found',
+            message: `Survey ${surveyId} not found`,
+          })
+        }
+        const surveyFields = (surveyObj.data.content as any).fields
+        const surveyVaultId = surveyFields.vault_id as string
+        if (normalizeAddress(surveyVaultId) !== normalizeAddress(vaultId)) {
+          return reply.status(400).send({
+            error: 'survey_vault_mismatch',
+            message: 'Survey is not bound to the provided vault',
+          })
+        }
+        const claimMode = Number(surveyFields.claim_mode ?? 0)
+        if (claimMode !== 1) {
+          return reply.status(400).send({
+            error: 'claim_mode_not_ticket',
+            message: 'Tickets are only issued for surveys with claim_mode=1 (ONE_TIME_TICKET)',
+          })
+        }
+
         const allowedNftTypeOpt = fields.allowed_nft_type
         const ticketFee = BigInt(fields.ticket_fee ?? '0')
         const gasCompensation = BigInt(fields.gas_compensation_amount ?? '0')
@@ -142,10 +163,17 @@ export function registerTicketRoutes(app: FastifyInstance, deps: { suiClient: Su
         // Ticket 5 分鐘有效
         const expiresAtMs = Date.now() + SIGNATURE_TTL_MS
 
-        const ticket = await issueRealTimeTicket(vaultId, ephemeralNullifier, expiresAtMs)
+        const ticket = await issueRealTimeTicket(
+          vaultId,
+          surveyId,
+          normalizeAddress(walletA),
+          ephemeralNullifier,
+          expiresAtMs
+        )
 
-        // 8. 寫入去重快取，並回傳
-        issuedTicketsRegistry.set(registryKey, Date.now())
+        // 8. 寫入 SQLite slot，並回傳
+        const issuedAt = Date.now()
+        await insertTicketSlot(walletA, vaultId, issuedAt, expiresAtMs)
 
         return ticket
       } catch (err: any) {

@@ -24,9 +24,12 @@ export interface PurgeTaskConfig {
   sponsorSigner: SponsorSigner
   packageId: string
   registryId: string
+  protocolConfigId: string
   /** Max surveys to purge per cycle (bounds run time / gas). */
   maxPerCycle?: number
 }
+
+const MAX_PURGE_ROUNDS_PER_VAULT = 200
 
 interface VaultState {
   status: number
@@ -70,7 +73,14 @@ function isPurgeable(v: VaultState, nowMs: bigint): boolean {
 
 /** One scan: find purge-eligible surveys and destroy them. Returns the count purged. */
 export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
-  const { suiClient, sponsorSigner, packageId, registryId, maxPerCycle = 10 } = config
+  const {
+    suiClient,
+    sponsorSigner,
+    packageId,
+    registryId,
+    protocolConfigId,
+    maxPerCycle = 10,
+  } = config
 
   const nowMs = BigInt(Date.now())
 
@@ -109,24 +119,51 @@ export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
       const creator =
         state.creator ?? (await readVaultCreator(suiClient, vaultId))
 
-      const { tx, gasBudget, transferAmount, platformFee, creator: refundCreator } =
-        await buildAndDryRunPurgeWithRebateRefund(
-          suiClient,
-          sponsorSigner,
-          { packageId, registryId, surveyId, vaultId },
-          creator
-        )
+      const purgeIds = { packageId, registryId, protocolConfigId, surveyId, vaultId }
+      let rounds = 0
+      let lastTransferAmount = 0n
+      let lastPlatformFee = 0n
+      let refundCreator = creator ?? ''
 
-      tx.setGasBudget(Number(gasBudget))
-      await signAndExecuteWithSponsor(suiClient, sponsorSigner, tx)
+      while (rounds < MAX_PURGE_ROUNDS_PER_VAULT) {
+        const before = await readVaultState(suiClient, vaultId)
+        if (!before) break
+
+        const { tx, gasBudget, transferAmount, platformFee, creator: rebateCreator } =
+          await buildAndDryRunPurgeWithRebateRefund(
+            suiClient,
+            sponsorSigner,
+            purgeIds,
+            creator
+          )
+
+        tx.setGasBudget(Number(gasBudget))
+        await signAndExecuteWithSponsor(suiClient, sponsorSigner, tx)
+
+        lastTransferAmount = transferAmount
+        lastPlatformFee = platformFee
+        refundCreator = rebateCreator
+        rounds++
+
+        const after = await readVaultState(suiClient, vaultId)
+        if (!after) break
+      }
+
+      const vaultGone = (await readVaultState(suiClient, vaultId)) === null
+      if (!vaultGone) {
+        console.warn(
+          `[PurgeTask] Vault ${vaultId} still exists after ${rounds} purge round(s) — may need another cycle`
+        )
+        continue
+      }
 
       purged++
-      if (transferAmount > 0n) {
+      if (lastTransferAmount > 0n) {
         console.log(
-          `[PurgeTask] Purged vault ${vaultId}, rebate ${transferAmount} MIST → creator ${refundCreator} (platform fee ${platformFee} MIST)`
+          `[PurgeTask] Purged vault ${vaultId} (${rounds} tx), rebate ${lastTransferAmount} MIST → creator ${refundCreator} (platform fee ${lastPlatformFee} MIST)`
         )
       } else {
-        console.log(`[PurgeTask] Purged survey ${surveyId} (vault ${vaultId})`)
+        console.log(`[PurgeTask] Purged survey ${surveyId} (vault ${vaultId}, ${rounds} tx)`)
       }
     } catch (err) {
       console.warn(`[PurgeTask] purge failed for ${vaultId}:`, err)
@@ -153,8 +190,13 @@ export function startPurgeTask(
     return () => {}
   }
   const registryId = process.env.SURVEY_REGISTRY_ID
+  const protocolConfigId = process.env.PROTOCOL_CONFIG_ID
   if (!registryId) {
     console.warn('[PurgeTask] SURVEY_REGISTRY_ID not set — purge task not started.')
+    return () => {}
+  }
+  if (!protocolConfigId) {
+    console.warn('[PurgeTask] PROTOCOL_CONFIG_ID not set — purge task not started.')
     return () => {}
   }
 
@@ -168,7 +210,14 @@ export function startPurgeTask(
   if (purgeInterval) clearInterval(purgeInterval)
 
   const run = () => {
-    checkAndPurge({ suiClient, sponsorSigner, packageId, registryId, maxPerCycle }).catch(
+    checkAndPurge({
+      suiClient,
+      sponsorSigner,
+      packageId,
+      registryId,
+      protocolConfigId,
+      maxPerCycle,
+    }).catch(
       (err) => console.error('[PurgeTask] Error in background task:', err)
     )
   }

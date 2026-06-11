@@ -5,9 +5,11 @@ import { createStatsCache } from './stats/cache.js'
 import { assertSecureEnv } from './security.js'
 import { assertGasConfig } from './gas/gasConfig.js'
 import { startCoinMergeTask } from './gas/coinMergeTask.js'
+import { startCoinPoolTask } from './gas/coinPoolTask.js'
 import { InMemoryCoinLockStore } from '@surveysui/gas-station-core'
 import { getGasConfig } from './gas/gasConfig.js'
 import { startPurgeTask } from './purge/purgeTask.js'
+import { startCloseTask } from './purge/closeTask.js'
 
 // Delete the admin private key if loaded from root .env to satisfy assertSecureEnv security check during dev
 delete process.env.SUI_ADMIN_PRIVATE_KEY
@@ -38,7 +40,11 @@ if (sponsorSigner) {
   startCoinMergeTask(suiClient, sponsorSigner, sponsorCoinQueue)
   console.log('[BFF] SUI Coin merge background task started.')
 
-  // Auto-destroy lifecycle: periodically purge surveys past their grace window.
+  startCoinPoolTask(suiClient, sponsorSigner, sponsorCoinQueue)
+  console.log('[BFF] SUI sponsor coin pool background task started.')
+
+  // Lifecycle: close expired OPEN vaults, then purge after grace window.
+  startCloseTask(suiClient, sponsorSigner, packageId)
   startPurgeTask(suiClient, sponsorSigner, packageId)
 }
 

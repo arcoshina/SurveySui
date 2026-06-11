@@ -2,11 +2,15 @@ import { bcs } from '@mysten/sui/bcs'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 export const RealTimeTicketPayload = bcs.struct('RealTimeTicketPayload', {
   vault_id: bcs.Address,
+  survey_id: bcs.Address,
+  claimant: bcs.Address,
   ephemeral_nullifier: bcs.vector(bcs.u8()),
   expires_at: bcs.u64(),
 })
 export async function issueRealTimeTicket(
   vaultId: string,
+  surveyId: string,
+  claimant: string,
   ephemeralNullifier: Uint8Array,
   expiresAtMs: number
 ): Promise<{ ticket_sig: string; ephemeral_nullifier: string; expires_at: string }> {
@@ -21,6 +25,8 @@ export async function issueRealTimeTicket(
   const expires_at = BigInt(expiresAtMs).toString()
   const payloadBytes = RealTimeTicketPayload.serialize({
     vault_id: vaultId,
+    survey_id: surveyId,
+    claimant,
     ephemeral_nullifier: Array.from(ephemeralNullifier),
     expires_at,
   }).toBytes()

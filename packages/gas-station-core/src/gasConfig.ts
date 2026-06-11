@@ -15,9 +15,13 @@ export interface GasConfig {
   coinMergeThresholdMist: bigint
   coinMergeTriggerCount: number
   coinMergeIntervalMs: number
+  sponsorCoinPoolTarget: number
+  sponsorCoinPoolUnitMist: bigint
+  sponsorCoinPoolCheckIntervalMs: number
   coinQueueLockTtlMs: number
   coinQueueAcquireRetries: number
   coinInventoryRefreshMs: number
+  sponsorCoinDryRunMaxRetries: number
 }
 
 const DEFAULT_GAS_BUDGET_CAP_MIST = 100_000_000n
@@ -25,6 +29,7 @@ const DEFAULT_GAS_BUDGET_BUFFER_MIST = 2_000_000n
 const DEFAULT_HEALTH_MIN_CAP_MULTIPLIER = 5n
 const DEFAULT_MIN_GAS_COMPENSATION = 100_000_000n
 const DEFAULT_MAX_PLATFORM_CLAIM_GAS_MIST = 30_000_000n
+const DEFAULT_SPONSOR_COIN_POOL_UNIT_MIST = 150_000_000n
 
 function parseEnvNumber(
   env: Record<string, string | undefined>,
@@ -79,9 +84,17 @@ export function loadGasConfig(env: Record<string, string | undefined> = {}): Gas
     coinMergeThresholdMist: parseCoinMergeThresholdMist(env),
     coinMergeTriggerCount: parseEnvNumber(env, 'COIN_MERGE_TRIGGER_COUNT', 50),
     coinMergeIntervalMs: parseEnvNumber(env, 'COIN_MERGE_INTERVAL_MS', 3_600_000),
+    sponsorCoinPoolTarget: parseEnvNumber(env, 'SPONSOR_COIN_POOL_TARGET', 50),
+    sponsorCoinPoolUnitMist: parseEnvBigInt(
+      env,
+      'SPONSOR_COIN_POOL_UNIT_MIST',
+      DEFAULT_SPONSOR_COIN_POOL_UNIT_MIST
+    ),
+    sponsorCoinPoolCheckIntervalMs: parseEnvNumber(env, 'SPONSOR_COIN_POOL_CHECK_MS', 60_000),
     coinQueueLockTtlMs: parseEnvNumber(env, 'COIN_QUEUE_LOCK_TTL_MS', 30_000),
     coinQueueAcquireRetries: parseEnvNumber(env, 'COIN_QUEUE_ACQUIRE_RETRIES', 3),
     coinInventoryRefreshMs: parseEnvNumber(env, 'COIN_INVENTORY_REFRESH_MS', 5_000),
+    sponsorCoinDryRunMaxRetries: parseEnvNumber(env, 'SPONSOR_COIN_DRY_RUN_MAX_RETRIES', 1),
   }
 }
 
@@ -105,6 +118,18 @@ export function assertGasConfig(config: GasConfig): void {
   if (config.coinMergeThresholdMist > config.gasBudgetCapMist) {
     errors.push(
       `COIN_MERGE_THRESHOLD (${config.coinMergeThresholdMist} MIST) must be <= GAS_BUDGET_CAP_MIST (${config.gasBudgetCapMist})`
+    )
+  }
+  // Pool coins below the merge threshold would be merged right back; below the
+  // budget cap they are never picked by the lock store. Both make the pool useless.
+  if (config.sponsorCoinPoolUnitMist <= config.coinMergeThresholdMist) {
+    errors.push(
+      `SPONSOR_COIN_POOL_UNIT_MIST (${config.sponsorCoinPoolUnitMist}) must be > COIN_MERGE_THRESHOLD (${config.coinMergeThresholdMist} MIST)`
+    )
+  }
+  if (config.sponsorCoinPoolUnitMist < config.gasBudgetCapMist) {
+    errors.push(
+      `SPONSOR_COIN_POOL_UNIT_MIST (${config.sponsorCoinPoolUnitMist}) must be >= GAS_BUDGET_CAP_MIST (${config.gasBudgetCapMist})`
     )
   }
   if (config.gasBudgetCapMist > config.minGasCompensationAmount) {

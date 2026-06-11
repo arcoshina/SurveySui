@@ -64,6 +64,7 @@ const auth: AuthDict = {
   deleteSuccess: 'SurveyPassはオンチェーンから正常に破棄されました！',
   txFailed: '取引の実行に失敗しました',
   authFailed: '検証または取引の送信に失敗しました',
+  mintSponsorUnavailable: 'ガス代行は一時的に利用できません。しばらくしてから再度お試しください。',
   upgradeSuccess: '通証の更新に成功しました！',
   mintSuccess: 'SurveyPassのミントに成功しました！',
   destroyFailed: '破棄に失敗しました',

@@ -2,16 +2,24 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   checkSponsorLimit,
   reserveSponsor,
+  tryReserveSponsorLimit,
   getSponsorCount,
   countOnChainSponsoredTx,
   __resetSponsorState,
+  __resetSponsorProcessState,
+  __useInMemoryPassReservationsForTests,
+  __useInMemoryPassSponsorOnchainCacheForTests,
 } from '../src/gas/sponsorLedger.js'
 
 describe('SponsorLedger Unit Tests', () => {
   let mockSuiClient: any
 
+  const sponsorAddress = '0xabc'
+
   beforeEach(() => {
     __resetSponsorState()
+    __useInMemoryPassReservationsForTests()
+    __useInMemoryPassSponsorOnchainCacheForTests()
     mockSuiClient = {
       queryTransactionBlocks: vi.fn(),
     }
@@ -81,6 +89,25 @@ describe('SponsorLedger Unit Tests', () => {
     expect(mockSuiClient.queryTransactionBlocks).toHaveBeenCalledTimes(1)
   })
 
+  it('tryReserveSponsorLimit atomically enforces limit under concurrent attempts', async () => {
+    mockSuiClient.queryTransactionBlocks.mockResolvedValue(passTxPage(0))
+    const params = {
+      suiClient: mockSuiClient as any,
+      senderAddress: '0x123',
+      sponsorAddress: '0xabc',
+      maxLimit: 2,
+    }
+
+    const results = await Promise.all([
+      tryReserveSponsorLimit(params),
+      tryReserveSponsorLimit(params),
+      tryReserveSponsorLimit(params),
+    ])
+    const allowed = results.filter((r) => r.allowed).length
+    expect(allowed).toBe(2)
+    expect(results.filter((r) => !r.allowed)).toHaveLength(1)
+  })
+
   it('should enforce the 2-time limit via in-flight reservations', async () => {
     mockSuiClient.queryTransactionBlocks.mockResolvedValue(passTxPage(0))
     const params = {
@@ -93,12 +120,12 @@ describe('SponsorLedger Unit Tests', () => {
     const res1 = await checkSponsorLimit(params)
     expect(res1.allowed).toBe(true)
     expect(res1.count).toBe(0)
-    reserveSponsor('0x123')
+    await reserveSponsor('0x123', sponsorAddress)
 
     const res2 = await checkSponsorLimit(params)
     expect(res2.allowed).toBe(true)
     expect(res2.count).toBe(1)
-    reserveSponsor('0x123')
+    await reserveSponsor('0x123', sponsorAddress)
 
     const res3 = await checkSponsorLimit(params)
     expect(res3.allowed).toBe(false)
@@ -126,7 +153,7 @@ describe('SponsorLedger Unit Tests', () => {
     expect(res.count).toBe(1)
 
     // With one on-chain tx + one in-flight reservation we hit the limit.
-    reserveSponsor('0x123')
+    await reserveSponsor('0x123', sponsorAddress)
     const blockRes = await checkSponsorLimit({
       suiClient: mockSuiClient as any,
       senderAddress: '0x123',
@@ -254,13 +281,30 @@ describe('SponsorLedger Unit Tests', () => {
     })
     expect(before).toBe(1)
 
-    reserveSponsor('0x123')
+    await reserveSponsor('0x123', sponsorAddress)
     const after = await getSponsorCount({
       suiClient: mockSuiClient as any,
       senderAddress: '0x123',
       sponsorAddress: '0xabc',
     })
     expect(after).toBe(2)
+  })
+
+  it('reuses persisted on-chain cache after process-state reset within TTL', async () => {
+    mockSuiClient.queryTransactionBlocks.mockResolvedValue(passTxPage(1))
+    const params = {
+      suiClient: mockSuiClient as any,
+      senderAddress: '0x123',
+      sponsorAddress: '0xabc',
+    }
+
+    expect(await getSponsorCount(params)).toBe(1)
+    expect(mockSuiClient.queryTransactionBlocks).toHaveBeenCalledTimes(1)
+
+    __resetSponsorProcessState()
+
+    expect(await getSponsorCount(params)).toBe(1)
+    expect(mockSuiClient.queryTransactionBlocks).toHaveBeenCalledTimes(1)
   })
 
   it('does not double-count a reservation once its tx is reflected on-chain (cache TTL < reservation TTL)', async () => {
@@ -281,7 +325,7 @@ describe('SponsorLedger Unit Tests', () => {
       expect(await getSponsorCount(params)).toBe(0)
 
       // Sign + reserve (tx not yet indexed): reservation bridges the gap.
-      reserveSponsor('0x123')
+      await reserveSponsor('0x123', sponsorAddress)
       expect(await getSponsorCount(params)).toBe(1)
 
       // The tx lands on chain, and enough time passes to expire the on-chain

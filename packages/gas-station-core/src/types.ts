@@ -10,6 +10,8 @@ export interface AcquiredGasCoin {
 export interface CoinLockStore {
   acquire(suiClient: SuiClient, owner: string, minBalanceMist: bigint): Promise<AcquiredGasCoin>
   release(coinObjectId: string): void
+  /** Drop cached coin metadata and release any lock (e.g. after dry-run failure). */
+  invalidateCoin(coinObjectId: string): void
   getLockedCoinIds(now?: number): Set<string>
   isLocked(coinObjectId: string, now?: number): boolean
 }
@@ -47,7 +49,13 @@ export interface SponsorPipelineMetrics {
   queueWaitMs: number
   dryRunMs: number
   coinObjectId?: string
-  outcome: 'success' | 'dry_run_failed' | 'gas_exceeds_compensation' | 'sponsor_coin_unavailable' | 'error'
+  outcome:
+    | 'success'
+    | 'dry_run_failed'
+    | 'gas_exceeds_compensation'
+    | 'sponsor_coin_unavailable'
+    | 'escape_clawback_rejected'
+    | 'error'
 }
 
 export interface GasStationHealth {

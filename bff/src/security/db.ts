@@ -61,6 +61,55 @@ export function initializeDb(): void {
   }).catch((err) => {
     console.error('[DB] Failed to create wallet_sponsor_rate:', err)
   })
+
+  client.execute(`
+    CREATE TABLE IF NOT EXISTS pass_sponsor_reservation (
+      sender_address TEXT NOT NULL,
+      sponsor_address TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `).then(() => {
+    console.log('[DB] Table "pass_sponsor_reservation" is ready')
+  }).catch((err) => {
+    console.error('[DB] Failed to create pass_sponsor_reservation:', err)
+  })
+
+  client.execute(`
+    CREATE INDEX IF NOT EXISTS idx_pass_sponsor_reservation_lookup
+    ON pass_sponsor_reservation (sender_address, sponsor_address, created_at);
+  `).catch((err) => {
+    console.error('[DB] Failed to create pass_sponsor_reservation index:', err)
+  })
+
+  client.execute(`
+    CREATE TABLE IF NOT EXISTS realtime_ticket_slot (
+      wallet_address TEXT NOT NULL,
+      vault_id TEXT NOT NULL,
+      issued_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (wallet_address, vault_id)
+    );
+  `).then(() => {
+    console.log('[DB] Table "realtime_ticket_slot" is ready')
+  }).catch((err) => {
+    console.error('[DB] Failed to create realtime_ticket_slot:', err)
+  })
+
+  client.execute(`
+    CREATE TABLE IF NOT EXISTS pass_sponsor_onchain_cache (
+      sender_address TEXT NOT NULL,
+      sponsor_address TEXT NOT NULL,
+      package_scope TEXT NOT NULL,
+      since_ms INTEGER NOT NULL,
+      count INTEGER NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      PRIMARY KEY (sender_address, sponsor_address, package_scope, since_ms)
+    );
+  `).then(() => {
+    console.log('[DB] Table "pass_sponsor_onchain_cache" is ready')
+  }).catch((err) => {
+    console.error('[DB] Failed to create pass_sponsor_onchain_cache:', err)
+  })
 }
 
 /**

@@ -21,7 +21,7 @@ import {
 } from '../lib/dashboardDecrypt'
 import { buildClosePtb, buildPurgePtb, PURGE_GRACE_MS } from '../lib/ptb'
 import { buildExtendWalrusBlobTx } from '../lib/walrusExtend'
-import { formatSui, formatFullPrecision, formatCompactInt, formatCompactCoin } from '../lib/format'
+import { formatSui, formatFullPrecision, formatSuiFullPrecision, formatCompactInt, formatCompactCoin, formatCompactSui } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
   base64urlToBytes,
@@ -37,6 +37,7 @@ import { useT } from '../i18n'
 import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 const SURVEY_KEY_PREFIX = 'surveysui:survey:'
+const PROTOCOL_CONFIG_ID = import.meta.env.VITE_PROTOCOL_CONFIG_ID ?? ''
 
 function getOptionId(opt: unknown): string | null {
   if (!opt) return null
@@ -100,12 +101,23 @@ function formatDateTime(ms: number): string {
   return `${yyyy}/${mm}/${dd} ${hh}:${min}`
 }
 
-type SurveyState = 'active' | 'full' | 'closed' | 'purged'
+type SurveyState = 'active' | 'pending_close' | 'closed' | 'purged'
 
-function deriveSurveyState(status: number, claimed: number, max: number): SurveyState {
+/**
+ * 鏈上不主動 close；過期或額滿（status 仍為 OPEN）以 `pending_close` 表「待關閉」，
+ * 實際銷毀等 purge（deadline + grace）。deadlineMs 省略時跳過過期判斷（資料未載入）。
+ */
+function deriveSurveyState(
+  status: number,
+  claimed: number,
+  max: number,
+  deadlineMs?: number,
+  nowMs: number = Date.now()
+): SurveyState {
   if (status === 2) return 'purged'
   if (status !== 0) return 'closed'
-  if (max > 0 && claimed >= max) return 'full'
+  if (max > 0 && claimed >= max) return 'pending_close'
+  if (deadlineMs && deadlineMs > 0 && nowMs > deadlineMs) return 'pending_close'
   return 'active'
 }
 
@@ -261,6 +273,7 @@ export default function DashboardPage() {
     status: number
     claimed_count: number
     max_responses: number
+    deadlineMs: number
   }
 
   const [surveyDetails, setSurveyDetails] = useState<CreatorSurveyDetail[]>([])
@@ -469,6 +482,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
             let status = 0
             let claimed_count = 0
             let max_responses = 0
+            let deadlineMs = 0
 
             const isSurveyDeleted = !surveyObj || !surveyObj.data || !!surveyObj.error
             const isVaultDeleted = !vaultObj || !vaultObj.data || !!vaultObj.error
@@ -531,6 +545,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
               if (vFields) {
                 claimed_count = vFields.claimed_count !== undefined ? Number(vFields.claimed_count) : 0
                 max_responses = vFields.max_responses !== undefined ? Number(vFields.max_responses) : 0
+                deadlineMs = vFields.deadline_ms !== undefined ? Number(vFields.deadline_ms) : 0
                 if (vFields.status !== undefined) {
                   status = Number(vFields.status)
                 }
@@ -546,6 +561,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
               status,
               claimed_count,
               max_responses,
+              deadlineMs,
             }
           })
         )
@@ -564,7 +580,8 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
                   s.registered_at_ms === d.registered_at_ms &&
                   s.status === d.status &&
                   s.claimed_count === d.claimed_count &&
-                  s.max_responses === d.max_responses
+                  s.max_responses === d.max_responses &&
+                  s.deadlineMs === d.deadlineMs
                 )
               })
             return isIdentical ? prev : details
@@ -960,11 +977,22 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
       setPurgeStatus('error')
       return
     }
+    if (!PROTOCOL_CONFIG_ID) {
+      setPurgeError(t.errNoRegistry)
+      setPurgeStatus('error')
+      return
+    }
     setPurgeError(null)
     setPurgeStatus('signing')
     let tx
     try {
-      tx = buildPurgePtb({ packageId: getPackageId(), registryId, surveyId, vaultId })
+      tx = buildPurgePtb({
+        packageId: getPackageId(),
+        registryId,
+        protocolConfigId: PROTOCOL_CONFIG_ID,
+        surveyId,
+        vaultId,
+      })
     } catch (err) {
       setPurgeError(err instanceof Error ? err.message : t.errPtbBuildFailed)
       setPurgeStatus('error')
@@ -988,7 +1016,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
   // ── 顯示 ──────────────────────────────────────────────────────────────────
   const displayBalanceSsr = vault ? formatCompactCoin(vault.balance) : null
-  const displayGasBalance = vault ? formatCompactCoin(vault.gas_balance) : null
+  const displayGasBalance = vault ? formatCompactSui(vault.gas_balance) : null
 
   // QR Code 用的 fullUrl 與繪製 effect 必須宣告在任何 early return 之前，
   // 否則 isAccessDenied 在同一 mount 內由 false 翻 true 時會違反 Rules of Hooks。
@@ -1158,11 +1186,11 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
                     {t.mobileStatus}
                   </span>
                   {(() => {
-                    const state = deriveSurveyState(s.status, s.claimed_count, s.max_responses)
+                    const state = deriveSurveyState(s.status, s.claimed_count, s.max_responses, s.deadlineMs)
                     const styles =
                       state === 'active'
                         ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-200/50 dark:border-emerald-800/30'
-                        : state === 'full'
+                        : state === 'pending_close'
                           ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 border-amber-200/50 dark:border-amber-800/30'
                           : state === 'purged'
                             ? 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border-neutral-200/50 dark:border-neutral-700/30'
@@ -1170,7 +1198,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
                     const label =
                       state === 'active'
                         ? t.statusActive
-                        : state === 'full'
+                        : state === 'pending_close'
                           ? t.statusFull
                           : state === 'purged'
                             ? t.statusPurged
@@ -1286,7 +1314,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
         </div>
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
           <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statGasBalance}</p>
-          <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="gas-balance" title={vault ? `${formatFullPrecision(vault.gas_balance)} SUI` : undefined}>
+          <p className="text-2xl font-mono font-normal text-slate-900 dark:text-neutral-100 text-right mt-1 truncate" aria-label="gas-balance" title={vault ? `${formatSuiFullPrecision(vault.gas_balance)} SUI` : undefined}>
             {displayGasBalance !== null ? displayGasBalance : isPendingVault ? t.checkingShort : '—'}
           </p>
         </div>
@@ -1308,12 +1336,13 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
               const state = deriveSurveyState(
                 vault.status,
                 Number(vault.claimed_count),
-                Number(vault.max_responses)
+                Number(vault.max_responses),
+                surveyMeta?.deadlineMs
               )
               if (state === 'active') {
                 return <span className="text-emerald-700 dark:text-emerald-400">{t.statusActive}</span>
               }
-              if (state === 'full') {
+              if (state === 'pending_close') {
                 return <span className="text-amber-700 dark:text-amber-400">{t.statusFull}</span>
               }
               if (state === 'purged') {
@@ -1908,11 +1937,11 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
                         {t.currentlySelected}
                       </span>
                     ) : (() => {
-                      const state = deriveSurveyState(s.status, s.claimed_count, s.max_responses)
+                      const state = deriveSurveyState(s.status, s.claimed_count, s.max_responses, s.deadlineMs)
                       const styles =
                         state === 'active'
                           ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-200/50 dark:border-emerald-800/30'
-                          : state === 'full'
+                          : state === 'pending_close'
                             ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 border-amber-200/50 dark:border-amber-800/30'
                             : state === 'purged'
                               ? 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border-neutral-200/50 dark:border-neutral-700/30'
@@ -1920,7 +1949,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
                       const label =
                         state === 'active'
                           ? t.statusActive
-                          : state === 'full'
+                          : state === 'pending_close'
                             ? t.statusFull
                             : state === 'purged'
                               ? t.statusPurged

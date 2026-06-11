@@ -1,31 +1,27 @@
 module surveysui::survey_eligibility;
-use std::option::{Self, Option};
 use std::vector;
 use sui::clock::Clock;
-use sui::tx_context::TxContext;
 use surveysui::survey_pass::{Self, SurveyPass};
 use surveysui::survey_registry::{Self, Survey};
-use surveysui::survey_vault::{Self, SurveyVault};
-const CLAIM_MODE_ONE_TIME_TICKET: u8 = 1;
-const EClaimModeNotImplemented: u64 = 0;
-const EAudienceMismatch: u64 = 1;
-const EInvalidPass: u64 = 2;
+
 public fun count_hits(submitted: &vector<vector<u8>>, allowlist: &vector<vector<u8>>): u64 {
     let mut hits = 0u64;
-    let mut i = 0;
-    let slen = vector::length(submitted);
-    while (i < slen) {
-        let candidate = vector::borrow(submitted, i);
-        let mut j = 0;
-        let alen = vector::length(allowlist);
-        while (j < alen) {
-            if (vector::borrow(allowlist, j) == candidate) {
-                hits = hits + 1;
+    let mut j = 0;
+    let alen = vector::length(allowlist);
+    while (j < alen) {
+        let allowed = vector::borrow(allowlist, j);
+        let mut i = 0;
+        let slen = vector::length(submitted);
+        let mut found = false;
+        while (i < slen) {
+            if (vector::borrow(submitted, i) == allowed) {
+                found = true;
                 break
             };
-            j = j + 1;
+            i = i + 1;
         };
-        i = i + 1;
+        if (found) hits = hits + 1;
+        j = j + 1;
     };
     hits
 }
@@ -61,36 +57,4 @@ public fun credential_or_audience_ok(
     };
     let aud_ok = audience_ok(survey, submitted);
     credential_ok || (has_attributes_src && aud_ok)
-}
-public fun claim_v2(
-    vault: &mut SurveyVault,
-    survey: &Survey,
-    pass: &SurveyPass,
-    attribute_nullifiers: vector<vector<u8>>,
-    encrypted_answers: Option<vector<u8>>,
-    answer_blob_id: Option<vector<u8>>,
-    clock: &Clock,
-    ctx: &mut TxContext,
-) {
-    assert!(
-        survey_registry::claim_mode(survey) != CLAIM_MODE_ONE_TIME_TICKET,
-        EClaimModeNotImplemented,
-    );
-    survey_vault::assert_claim_common(vault, survey, pass, clock, ctx);
-    assert!(
-        credential_or_audience_ok(pass, survey, &attribute_nullifiers, clock),
-        EInvalidPass,
-    );
-    let allowlist = survey_registry::allowed_nullifiers(survey);
-    if (!vector::is_empty(&allowlist)) {
-        assert!(audience_ok(survey, &attribute_nullifiers), EAudienceMismatch);
-    };
-    survey_vault::apply_nullifiers_and_payout(
-        vault,
-        pass,
-        encrypted_answers,
-        answer_blob_id,
-        clock,
-        ctx,
-    );
 }

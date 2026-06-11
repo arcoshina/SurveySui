@@ -1,3 +1,5 @@
+> 現行規格已收斂至 [system_design/PassLifecycle.md](../system_design/PassLifecycle.md)；本文為設計過程紀錄，不作規格引用。
+
 # SurveySui — SurveyPass KYC 設計方案
 
 > 防女巫 Soulbound Token：同一真人只能持有一組唯一 ID，同一地址只能持有一張有效 Pass。

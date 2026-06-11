@@ -1,19 +1,46 @@
 import { Transaction } from '@mysten/sui/transactions'
 import { bcs } from '@mysten/sui/bcs'
+// SSR 6-decimals 權威值的單一來源（見 format.ts）；此處 re-export 供既有匯入者沿用。
+import { SSR_BASE_PER_UNIT } from './format'
+export { SSR_BASE_PER_UNIT }
 
-// ── bonding curve constants ───────────────────────────────────────────────────
+// ── AMM / token constants (mirrors amm_pool + survey_reward) ─────────────────
 
-/** Mirrors `amm_pool::BONDING_DECAY` (1e12 MIST = 1000 SUI). */
-export const BONDING_DECAY = 1_000_000_000_000n
-
-/** Mirrors `amm_pool::INITIAL_SSR_PER_SUI` (1 MIST → 1000 SSR base at total=0). */
+/** Human units: 1 SUI → 1000 SSR at bootstrap. */
 export const INITIAL_SSR_PER_SUI = 1000n
 
-/** Vault fee in basis points (mirrors `survey_vault::VAULT_FEE_BPS`). */
-export const VAULT_FEE_BPS = 30n
+/** 10^(9 - DECIMALS) bootstrap divisor when DECIMALS=6. */
+export const BOOTSTRAP_DIVISOR = 1000n
 
-/** SSR & SR coins both use 9 decimals. */
-export const SSR_BASE_PER_UNIT = 1_000_000_000n
+/** Marginal mint output (SSR base) from SUI input (MIST). */
+export function computeSsrOut(suiIn: bigint, suiReserve: bigint, srReserve: bigint): bigint {
+  if (suiIn <= 0n) return 0n
+  if (suiReserve === 0n || srReserve === 0n) {
+    return (suiIn * INITIAL_SSR_PER_SUI) / BOOTSTRAP_DIVISOR
+  }
+  return (suiIn * srReserve) / suiReserve
+}
+
+/** SUI (MIST) required to mint at least `minted` SSR base units. */
+export function invertSuiForMint(
+  minted: bigint,
+  suiReserve: bigint,
+  srReserve: bigint,
+): bigint {
+  if (minted <= 0n) return 0n
+  if (suiReserve === 0n || srReserve === 0n) {
+    return (minted * BOOTSTRAP_DIVISOR + INITIAL_SSR_PER_SUI - 1n) / INITIAL_SSR_PER_SUI
+  }
+  return (minted * suiReserve + srReserve - 1n) / srReserve
+}
+
+/** Spot SSR base per MIST when both reserves are positive. */
+export function spotSsrBasePerMist(suiReserve: bigint, srReserve: bigint): number {
+  if (suiReserve === 0n || srReserve === 0n) {
+    return Number(INITIAL_SSR_PER_SUI) / Number(BOOTSTRAP_DIVISOR)
+  }
+  return Number(srReserve) / Number(suiReserve)
+}
 
 /**
  * Auto-destroy grace period (ms) after a survey closes (or expires), before its
@@ -59,6 +86,25 @@ const getMaxInlineAnswerBytes = (): number => {
 
 export const MAX_INLINE_ANSWER_BYTES = getMaxInlineAnswerBytes()
 
+/** Mirrors `survey_vault::DEFAULT_MAX_BLOB_ID_BYTES` (256). Used only at survey create PTB. */
+const getMaxBlobIdBytes = (): number => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      const bytes = import.meta.env.VITE_MAX_BLOB_ID_BYTES
+      if (bytes) return Number(bytes)
+    }
+  } catch {}
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      const bytes = process.env.MAX_BLOB_ID_BYTES ?? process.env.VITE_MAX_BLOB_ID_BYTES
+      if (bytes) return Number(bytes)
+    }
+  } catch {}
+  return 256
+}
+
+export const MAX_BLOB_ID_BYTES = getMaxBlobIdBytes()
+
 // ── estimate fund cost V2 ─────────────────────────────────────────────────────
 
 export interface EstimateFundCostV2Params {
@@ -70,8 +116,10 @@ export interface EstimateFundCostV2Params {
   repeatMaxTimes?: number
   /** Max responses (quota). */
   maxResponses: number
-  /** Current `Pool.total_sui_invested` in MIST. */
-  totalSuiInvested: bigint
+  /** Current `Pool.sui_reserve` in MIST. */
+  suiReserve: bigint
+  /** Current `Pool.sr_reserve` in SSR base units. */
+  srReserve: bigint
   /** FeeConfig parameters from Pool. */
   feeConfig: {
     totalFeeBps: bigint
@@ -130,12 +178,9 @@ export function estimateFundCostV2(p: EstimateFundCostV2Params): EstimateFundCos
     minted = grossSsrBase - offsetIn
   }
 
-  let suiToInvest = 0n
-  if (minted > 0n) {
-    const denom = BONDING_DECAY * INITIAL_SSR_PER_SUI
-    const numer = minted * (BONDING_DECAY + p.totalSuiInvested)
-    suiToInvest = (numer + denom - 1n) / denom
-  }
+  const suiToInvest = minted > 0n
+    ? invertSuiForMint(minted, p.suiReserve, p.srReserve)
+    : 0n
 
   return {
     netSsrBase,
@@ -153,6 +198,8 @@ export function estimateFundCostV2(p: EstimateFundCostV2Params): EstimateFundCos
 export interface BuildCreateSurveyPtbParams {
   packageId: string
   poolId: string
+  /** Shared `amm_pool::ProtocolConfig` — canonical pool gate for fee path. */
+  protocolConfigId: string
   srTreasuryId: string
   ssrTreasuryId: string
   registryId: string
@@ -170,6 +217,8 @@ export interface BuildCreateSurveyPtbParams {
   encryptedContent: Uint8Array
   /** MIST amount of SUI to invest into the pool. */
   suiToSpend: bigint
+  /** Minimum SSR (base units) from invest_and_mint; defaults to 1 when omitted. */
+  minSsrOut?: bigint
   /** 允許的憑證來源：如 [2, 6, 7, 5] (對應 Email=2, Google=6, GitHub=7, WorldID=5) */
   allowedSources?: number[]
 
@@ -206,7 +255,7 @@ export interface BuildCreateSurveyPtbParams {
  *   3. amm_pool::invest_and_mint (if suiToSpend > 0)                       → mintedCoin
  *   4. survey_vault::merge_balances(vault, mintedCoin)
  *   5. survey_vault::split_fee_to_treasury(vault, feeConfig)
- *   6. survey_registry::register(registry, vaultId, contentHash, ...)
+ *   6. survey_vault::register_survey(registry, vault, contentHash, ...)
  *   7. survey_vault::share_vault(vault)
  */
 export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction {
@@ -274,6 +323,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.u64(storageCompensationAmount),
       tx.pure.u64(ticketFee.toString()),
       allowedNftTypeArg,
+      tx.object(p.protocolConfigId),
     ],
   })
 
@@ -287,6 +337,12 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   tx.moveCall({
     target: `${p.packageId}::survey_vault::set_max_inline_answer_bytes`,
     arguments: [vault, tx.pure.u64(MAX_INLINE_ANSWER_BYTES)],
+  })
+
+  // 1d. Set Walrus blob id byte cap (chain enforces on blob claim path).
+  tx.moveCall({
+    target: `${p.packageId}::survey_vault::set_max_blob_id_bytes`,
+    arguments: [vault, tx.pure.u64(MAX_BLOB_ID_BYTES)],
   })
 
   // 2. Deposit existing SSR offset
@@ -342,13 +398,16 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   let mintedCoin
   if (p.suiToSpend > 0n) {
     const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.suiToSpend.toString())])
+    const minSsrOut = p.minSsrOut ?? 1n
     const [newSsrCoin] = tx.moveCall({
       target: `${p.packageId}::amm_pool::invest_and_mint`,
       arguments: [
         tx.object(p.poolId),
+        tx.object(p.protocolConfigId),
         tx.object(p.srTreasuryId),
         tx.object(p.ssrTreasuryId),
         suiCoin,
+        tx.pure.u64(minSsrOut.toString()),
       ],
     })
     mintedCoin = newSsrCoin
@@ -363,13 +422,13 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
   // 4. Merge balances
   tx.moveCall({
     target: `${p.packageId}::survey_vault::merge_balances`,
-    arguments: [vault, mintedCoin, tx.object(p.poolId)],
+    arguments: [vault, mintedCoin, tx.object(p.poolId), tx.object(p.protocolConfigId)],
   })
 
   // 5. Split fee to treasury
   tx.moveCall({
     target: `${p.packageId}::survey_vault::split_fee_to_treasury`,
-    arguments: [vault, tx.object(p.poolId)],
+    arguments: [vault, tx.object(p.poolId), tx.object(p.protocolConfigId)],
   })
 
   // Build questions vector
@@ -394,13 +453,6 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     elements: questionsArgs,
   })
 
-  // Get vault ID to pass to register
-  const [vaultId] = tx.moveCall({
-    target: '0x2::object::id',
-    typeArguments: [`${p.packageId}::survey_vault::SurveyVault`],
-    arguments: [vault],
-  })
-
   const surveyBlobIdOpt = p.surveyBlobId ? p.surveyBlobId : null
   const surveyBlobObjectIdOpt = p.surveyBlobObjectId ?? null
   const encryptedContentOpt = p.surveyBlobId ? null : p.encryptedContent
@@ -415,12 +467,12 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     bcs.option(bcs.Address).serialize(surveyBlobObjectIdOpt).toBytes()
   )
 
-  // 6. Register survey
+  // 6. Register survey (vault creator authorization enforced on-chain — F64)
   tx.moveCall({
-    target: `${p.packageId}::survey_registry::register`,
+    target: `${p.packageId}::survey_vault::register_survey`,
     arguments: [
       tx.object(p.registryId),
-      vaultId,
+      vault,
       tx.pure.vector('u8', Array.from(contentHash)),
       encryptedContentArg,
       surveyBlobIdArg,
@@ -478,6 +530,7 @@ export function buildClosePtb(p: BuildClosePtbParams): Transaction {
 export interface BuildPurgePtbParams {
   packageId: string
   registryId: string
+  protocolConfigId: string
   surveyId: string
   vaultId: string
 }
@@ -497,6 +550,7 @@ export function buildPurgePtb(p: BuildPurgePtbParams): Transaction {
       tx.object(p.registryId),
       tx.object(p.surveyId),
       tx.object(p.vaultId),
+      tx.object(p.protocolConfigId),
       tx.object('0x6'), // Clock
     ],
   })
@@ -551,6 +605,7 @@ export interface BuildMintPassPtbParams {
   nullifiers: Uint8Array[]
   commitment: Uint8Array
   expiresAt: bigint | string
+  escapeClawbackMist?: bigint | string
   bffSig: Uint8Array
 }
 
@@ -570,6 +625,7 @@ export function buildMintPassPtb(p: BuildMintPassPtbParams): Transaction {
       tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(p.nullifiers.map((n) => Array.from(n))).toBytes()),
       tx.pure.vector('u8', Array.from(p.commitment)),
       tx.pure.u64(BigInt(p.expiresAt).toString()),
+      tx.pure.u64(BigInt(p.escapeClawbackMist ?? 0).toString()),
       tx.pure.vector('u8', Array.from(p.bffSig)),
       tx.object('0x6'), // Clock
     ],
@@ -582,6 +638,7 @@ export interface PassTicketPtbFields {
   nullifiers: Uint8Array[]
   commitment: Uint8Array
   expiresAt: bigint | string
+  escapeClawbackMist?: bigint | string
   bffSig: Uint8Array
 }
 
@@ -614,6 +671,7 @@ export function buildMintPassWithExtraCredentialsPtb(p: BuildMintPassWithExtraCr
       tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(p.nullifiers.map((n) => Array.from(n))).toBytes()),
       tx.pure.vector('u8', Array.from(p.commitment)),
       tx.pure.u64(BigInt(p.expiresAt).toString()),
+      tx.pure.u64(BigInt(p.escapeClawbackMist ?? 0).toString()),
       tx.pure.vector('u8', Array.from(p.bffSig)),
       tx.pure(bcs.vector(bcs.u8()).serialize(extraSources).toBytes()),
       tx.pure(
@@ -640,6 +698,7 @@ export interface BuildUpdatePassCredentialPtbParams {
   nullifiers: Uint8Array[]
   commitment: Uint8Array
   expiresAt: bigint | string
+  escapeClawbackMist?: bigint | string
   bffSig: Uint8Array
 }
 
@@ -658,6 +717,7 @@ export function buildUpdatePassCredentialPtb(p: BuildUpdatePassCredentialPtbPara
       tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(p.nullifiers.map((n) => Array.from(n))).toBytes()),
       tx.pure.vector('u8', Array.from(p.commitment)),
       tx.pure.u64(BigInt(p.expiresAt).toString()),
+      tx.pure.u64(BigInt(p.escapeClawbackMist ?? 0).toString()),
       tx.pure.vector('u8', Array.from(p.bffSig)),
       tx.object('0x6'), // Clock
     ],

@@ -46,6 +46,12 @@ export class InMemoryCoinLockStore implements CoinLockStore {
     this.locks.delete(coinObjectId)
   }
 
+  invalidateCoin(coinObjectId: string): void {
+    this.release(coinObjectId)
+    this.cachedCoins = this.cachedCoins.filter((c) => c.coinObjectId !== coinObjectId)
+    this.lastInventoryFetch = 0
+  }
+
   private lock(coinObjectId: string, now = Date.now()): void {
     this.locks.set(coinObjectId, { expiresAt: now + this.lockTtlMs })
   }

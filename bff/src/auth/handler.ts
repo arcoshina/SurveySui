@@ -17,6 +17,8 @@ import {
   verifyWorldIdProof,
 } from './worldId.js'
 import { isNullifierRevoked, checkMintRateLimit, recordMintSuccess } from '../security/revocation.js'
+import { verifyGoogleIdToken } from './idTokenVerify.js'
+import { fetchGitHubUserInfo } from './githubUserInfo.js'
 
 interface OtpRequestBody {
   email: string
@@ -61,51 +63,20 @@ function pkceChallenge(verifier: string): string {
   return base64url(createHash('sha256').update(verifier).digest())
 }
 
-/** 解析 JWT payload（不驗簽，驗簽由 token exchange 已確保） */
-function parseJwtPayload(token: string): Record<string, any> {
-  const parts = token.split('.')
-  if (parts.length < 2) throw new Error('Invalid JWT format')
-  return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
-}
-
 /** 向各 provider 取得 user info（sub + email） */
 async function fetchUserInfo(
   provider: string,
   accessToken: string,
-  idToken: string | null
+  idToken: string | null,
+  clientId: string
 ): Promise<{ sub: string; email: string | null }> {
   if (provider === 'google') {
     if (!idToken) throw new Error(`id_token missing for provider ${provider}`)
-    const payload = parseJwtPayload(idToken)
-    return {
-      sub: String(payload.sub),
-      email: payload.email ? String(payload.email) : null,
-    }
+    return verifyGoogleIdToken(idToken, clientId)
   }
 
   if (provider === 'github') {
-    const userRes = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${accessToken}`, 'User-Agent': 'SurveySui' },
-    })
-    if (!userRes.ok) throw new Error(`GitHub userinfo failed: ${userRes.status}`)
-    const user = (await userRes.json()) as { id: number; email?: string }
-
-    let email: string | null = user.email ?? null
-    if (!email) {
-      const emailRes = await fetch('https://api.github.com/user/emails', {
-        headers: { Authorization: `Bearer ${accessToken}`, 'User-Agent': 'SurveySui' },
-      })
-      if (emailRes.ok) {
-        const emails = (await emailRes.json()) as Array<{
-          email: string
-          primary: boolean
-          verified: boolean
-        }>
-        const primary = emails.find((e) => e.primary && e.verified)
-        email = primary?.email ?? null
-      }
-    }
-    return { sub: String(user.id), email }
+    return fetchGitHubUserInfo(accessToken)
   }
 
   throw new Error(`Unknown provider: ${provider}`)
@@ -317,7 +288,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       const { sub, email } = await fetchUserInfo(
         provider,
         tokenData.access_token,
-        tokenData.id_token ?? null
+        tokenData.id_token ?? null,
+        clientId
       )
 
       const owner = stateEntry.owner

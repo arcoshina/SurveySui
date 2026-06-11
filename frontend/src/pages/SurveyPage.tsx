@@ -8,11 +8,10 @@ import {
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
 import { fromBase64 } from '@mysten/sui/utils'
-import { MAX_INLINE_ANSWER_BYTES, PURGE_GRACE_MS } from '../lib/ptb'
+import { PURGE_GRACE_MS } from '../lib/ptb'
 import { useActiveSigner } from '../lib/useActiveSigner'
 import {
   buildClaimPtb,
-  buildClaimWithNftMarkingPtb,
   executeSponsoredTx,
   executeTxWithFallback,
   probeGasSponsorHealth,
@@ -29,6 +28,7 @@ import { formatSui } from '../lib/format'
 import { downloadFromDecentralizedStorage, uploadToDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
+const ISSUER_CONFIG_ID = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
 
 function normalizeSuiId(id: string): string {
   if (!id) return ''
@@ -79,6 +79,8 @@ interface Survey {
   encryptAnswers?: boolean
   isDecentralized?: boolean
   allowedNftType: string | null
+  /** On-chain caps — authoritative for inline vs Walrus routing at submit time. */
+  vaultLimits: { maxInlineBytes: number; maxBlobIdBytes: number }
 }
 
 type Answers = Record<string, string | string[] | number | number[]>
@@ -258,12 +260,29 @@ export default function SurveyPage() {
   const remainingSubmissions = Math.max(0, maxTotalSubmissions - myClaimCount)
   const atSubmissionLimit = myClaimCount >= maxTotalSubmissions
 
+  // 公開問卷已達填答上限時，回訪填答頁自動導向結果頁（可重複問卷尚有剩餘次數則停留）
+  useEffect(() => {
+    if (
+      phase === 'filling' &&
+      activeSigner?.address &&
+      survey?.encryptAnswers === false &&
+      survey.vaultObjectId &&
+      atSubmissionLimit
+    ) {
+      navigate(`/results/${survey.vaultObjectId}`, { replace: true })
+    }
+  }, [phase, activeSigner?.address, survey, atSubmissionLimit, navigate])
+
   const { submitDisabled, submitLabel } = useMemo(() => {
     if (!survey) {
       return { submitDisabled: true, submitLabel: t.loadingSurvey }
     }
     if ((phase as string) === 'submitting') {
       return { submitDisabled: true, submitLabel: t.submitting }
+    }
+    // 問卷已結束（鏈上已關閉或過 deadline）：鏈上 EExpired 會擋提交，此處先行禁用避免白填。
+    if (survey.status === 'CLOSED' || Date.now() > new Date(survey.deadline).getTime()) {
+      return { submitDisabled: true, submitLabel: t.submitLabelEnded }
     }
     if (atSubmissionLimit) {
       return { submitDisabled: true, submitLabel: t.submitLabelLimit }
@@ -411,23 +430,29 @@ export default function SurveyPage() {
           id: vault_id,
           options: { showContent: true },
         })
-        if (
-          vaultObj.data?.content?.dataType === 'moveObject' &&
-          Number((vaultObj.data.content.fields as any).status) === 1 // STATUS_CLOSED
-        ) {
+        if (!vaultObj.data?.content || vaultObj.data.content.dataType !== 'moveObject') {
+          throw new Error(t.errLoadSurveyFailed)
+        }
+        const vaultFields = vaultObj.data.content.fields as Record<string, any>
+        if (Number(vaultFields.status) === 1) {
           setPhase('closed')
           return
         }
 
-        const vaultFields = (
-          vaultObj.data?.content?.dataType === 'moveObject'
-            ? (vaultObj.data.content.fields as any)
-            : {}
-        ) as Record<string, any>
+        const maxInlineBytes = Number(vaultFields.max_inline_answer_bytes)
+        const maxBlobIdBytes = Number(vaultFields.max_blob_id_bytes)
+        if (
+          !Number.isFinite(maxInlineBytes) ||
+          maxInlineBytes <= 0 ||
+          !Number.isFinite(maxBlobIdBytes) ||
+          maxBlobIdBytes <= 0
+        ) {
+          throw new Error(t.errLoadSurveyFailed)
+        }
         const repeatRewardBase = Number(vaultFields.repeat_reward ?? 0)
         const repeatMaxTimes = Number(vaultFields.repeat_max_times ?? 1)
-        // base units (9 decimals) → human SSR
-        const repeatRewardHuman = Math.floor(repeatRewardBase / 1_000_000_000)
+        // base units (6 decimals) → human SSR
+        const repeatRewardHuman = Math.floor(repeatRewardBase / 1_000_000)
 
         // Extract encrypted content
         const getOptionVec = (opt: any): Uint8Array | null => {
@@ -570,6 +595,7 @@ export default function SurveyPage() {
           encryptAnswers: parsed.data.encryptAnswers !== false,
           isDecentralized: !!surveyBlobIdBytes,
           allowedNftType,
+          vaultLimits: { maxInlineBytes, maxBlobIdBytes },
         })
 
         // Count this wallet's prior claims on this vault (events filtered client-side).
@@ -779,24 +805,24 @@ export default function SurveyPage() {
           (Array.isArray(ans) && ans.length === 0) ||
           (typeof ans === 'string' && ans.trim() === '')
         if (q.required && isAnswerEmpty) {
-          throw new Error(`題目 "${q.prompt}" 是必填的`)
+          throw new Error(t.errQuestionRequired(q.prompt))
         }
         if (ans !== undefined && ans !== null && q.options_json && q.options_json.length > 0) {
           if (q.type === 'single_choice') {
             const idx = Number(ans)
             if (isNaN(idx) || idx < 0 || idx >= q.options_json.length) {
-              throw new Error(`題目 "${q.prompt}" 提交了非法的選項值`)
+              throw new Error(t.errInvalidOption(q.prompt))
             }
           } else if (q.type === 'multi_choice') {
             if (Array.isArray(ans)) {
               for (const val of ans) {
                 const idx = Number(val)
                 if (isNaN(idx) || idx < 0 || idx >= q.options_json.length) {
-                  throw new Error(`題目 "${q.prompt}" 提交了非法的選項值`)
+                  throw new Error(t.errInvalidOption(q.prompt))
                 }
               }
             } else {
-              throw new Error(`多選題 "${q.prompt}" 的答案格式不正確`)
+              throw new Error(t.errMultiChoiceFormat(q.prompt))
             }
           }
         }
@@ -826,14 +852,21 @@ export default function SurveyPage() {
           .join('')
       }
 
-      // Route small answers on-chain; larger payloads go to Walrus (matches on-chain max_inline_answer_bytes).
+      // Route small answers on-chain; larger payloads go to Walrus (chain-authoritative caps).
       let answerBlobId: string | undefined = undefined
+      const { maxInlineBytes, maxBlobIdBytes } = survey.vaultLimits
 
-      if (encryptedAnswersBytes.length > MAX_INLINE_ANSWER_BYTES) {
+      if (encryptedAnswersBytes.length > maxInlineBytes) {
         setIsUploadingAnswer(true)
         try {
           const uploadRes = await uploadToDecentralizedStorage(encryptedAnswersBytes)
           answerBlobId = uploadRes.blobId
+          const blobIdByteLen = new TextEncoder().encode(answerBlobId).length
+          if (blobIdByteLen > maxBlobIdBytes) {
+            throw new Error(
+              `Answer blob id exceeds on-chain limit (${blobIdByteLen} > ${maxBlobIdBytes} bytes)`
+            )
+          }
         } catch (err) {
           console.error('[SurveyPage] Failed to upload answer to decentralized storage:', err)
           throw new Error(t.errEncryptSubmitFailed)
@@ -847,11 +880,13 @@ export default function SurveyPage() {
       const useNftRoute = hasNftLimit && isNftQualified && !isPassQualified
 
       if (useNftRoute) {
-        tx = buildClaimWithNftMarkingPtb({
+        tx = buildClaimPtb({
           packageId: PACKAGE_ID,
           vaultId: survey.vaultObjectId,
-          nftId: selectedNftId,
+          surveyId: survey.id,
+          nftId: selectedNftId!,
           nftType: survey.allowedNftType!,
+          issuerConfigId: ISSUER_CONFIG_ID,
           encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
           answerBlobId: answerBlobId,
         })
@@ -861,6 +896,7 @@ export default function SurveyPage() {
           vaultId: survey.vaultObjectId,
           surveyId: survey.id,
           passId: activePass!.objectId,
+          issuerConfigId: ISSUER_CONFIG_ID,
           encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
           answerBlobId: answerBlobId,
         })
@@ -884,12 +920,11 @@ export default function SurveyPage() {
 
       let digest: string
       if (fallbackResult.mode === 'sponsored') {
-        // 4. User signs the sponsored TX block
+        // 4. 唯一錢包彈窗:使用者簽交易,此簽章即代付同意憑證
         const txBytes = fromBase64(fallbackResult.sponsoredTxBytes)
         const userSignature = await activeSigner.signTxBytes(txBytes)
-        // 5. Broadcast double-signed TX
+        // 5. 經後端 /execute 驗章、原子扣額度後雙簽廣播
         const txResult = await executeSponsoredTx({
-          client: suiClient as any,
           sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
           userSignature,
           sponsorSignature: fallbackResult.sponsorSignature,
@@ -1654,16 +1689,24 @@ export default function SurveyPage() {
                     <div className="text-left flex items-start gap-2.5">
                       <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600 dark:text-amber-500" />
                       <div>
-                        <span className="font-semibold">憑證驗證不符</span>
+                        <span className="font-semibold">{t.credentialInsufficientTitle}</span>
                         <p className="text-xs opacity-90 mt-1">
-                          本問卷需要以下其中一種未過期的憑證：
-                          {surveyAllowedSources.map((src) => {
-                            if (src === 2) return ' Email'
-                            if (src === 6) return ' Google'
-                            if (src === 7) return ' GitHub'
-                            if (src === 5) return ' World ID'
-                            return ' 未知'
-                          }).join(', ')}。
+                          {t.credentialInsufficientDesc(
+                            surveyAllowedSources
+                              .map((src) => {
+                                switch (src) {
+                                  case 1: return t.sourceSelfReport || '自我宣告'
+                                  case 2: return t.sourceEmail || 'Email'
+                                  case 3: return t.sourceSocial || '社群驗證'
+                                  case 4: return t.sourceSelfProtocol || '自我協定'
+                                  case 5: return t.sourceWorldId || 'World ID'
+                                  case 6: return t.sourceGoogle || 'Google'
+                                  case 7: return t.sourceGithub || 'GitHub'
+                                  default: return `Source ${src}`
+                                }
+                              })
+                              .join(', ')
+                          )}
                         </p>
                       </div>
                     </div>

@@ -49,6 +49,13 @@ export class DurableObjectCoinLockStore implements CoinLockStore {
     void this.persist()
   }
 
+  invalidateCoin(coinObjectId: string): void {
+    this.release(coinObjectId)
+    this.state.cachedCoins = this.state.cachedCoins.filter((c) => c.coinObjectId !== coinObjectId)
+    this.state.lastInventoryFetch = 0
+    void this.persist()
+  }
+
   private lock(coinObjectId: string, now = Date.now()): void {
     this.state.locks[coinObjectId] = { expiresAt: now + this.lockTtlMs }
     void this.persist()

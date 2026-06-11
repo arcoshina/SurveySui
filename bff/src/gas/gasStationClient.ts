@@ -1,4 +1,8 @@
-import type { SponsorPipelineContext } from '@surveysui/gas-station-core'
+import {
+  canonicalJsonStringify,
+  signGasStationBody,
+  type SponsorPipelineContext,
+} from '@surveysui/gas-station-core'
 
 export interface GasStationSponsorRequest {
   txBytes: string
@@ -33,11 +37,29 @@ export async function forwardSponsorToGasStation(
     }
   }
 
+  const secret = process.env.GAS_STATION_SHARED_SECRET?.trim()
+  if (!secret) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'gas_station_unconfigured',
+      message: 'GAS_STATION_MODE=do requires GAS_STATION_SHARED_SECRET',
+    }
+  }
+
   const url = new URL('/sponsor', baseUrl.replace(/\/$/, ''))
+  const bodyJson = canonicalJsonStringify(request)
+  const timestamp = String(Date.now())
+  const signature = signGasStationBody(secret, timestamp, bodyJson)
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(request),
+    headers: {
+      'content-type': 'application/json',
+      'x-gas-station-timestamp': timestamp,
+      'x-gas-station-signature': signature,
+    },
+    body: bodyJson,
   })
 
   const body = (await res.json().catch(() => ({}))) as Record<string, string>

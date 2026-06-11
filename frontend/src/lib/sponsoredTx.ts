@@ -6,9 +6,24 @@ export interface ClaimPtbParams {
   packageId: string
   vaultId: string
   surveyId: string
-  passId: string
+  /** When set, Step 1 validates SurveyPass credentials. */
+  passId?: string
+  issuerConfigId: string
+  /** When set with nftType, Step 1 validates NFT ownership/type. */
+  nftId?: string
+  nftType?: string
+  /** 0 = pass audience (production default); 1 = one-time ticket (BFF issue, not wired in UI yet). */
+  authKind?: number
+  attributeNullifiers?: string[]
+  ticketSig?: string
+  ephemeralNullifier?: string
+  expiresAt?: string
   encryptedAnswers?: string // optional hex string
   answerBlobId?: string // optional pointer string
+  /** Shared sentinel from package publish; required when passId is omitted. */
+  claimPassSentinelId?: string
+  /** Shared VoidNft from package publish; required when nftId is omitted. */
+  voidNftId?: string
 }
 
 export interface SponsoredTxResult {
@@ -34,11 +49,38 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+function voidNftType(packageId: string): string {
+  return `${packageId}::claim_sentinel::VoidNft`
+}
+
 /**
- * Build the claim PTB for survey vault.
+ * Build the unified claim PTB for survey vault (ADR Step 0–3).
  */
 export function buildClaimPtb(params: ClaimPtbParams): Transaction {
   const tx = new Transaction()
+
+  const usePass = !!params.passId
+  const useNft = !!(params.nftId && params.nftType)
+
+  if (!usePass && !useNft) {
+    throw new Error('Claim requires SurveyPass or NFT eligibility')
+  }
+
+  const passSentinel =
+    params.claimPassSentinelId ?? import.meta.env.VITE_CLAIM_PASS_SENTINEL_ID ?? ''
+  const voidNftObject =
+    params.voidNftId ?? import.meta.env.VITE_VOID_NFT_ID ?? ''
+
+  const passObjectId = params.passId ?? passSentinel
+  const nftObjectId = params.nftId ?? voidNftObject
+  const nftType = params.nftType ?? voidNftType(params.packageId)
+
+  if (!usePass && !passObjectId) {
+    throw new Error('VITE_CLAIM_PASS_SENTINEL_ID required for NFT-only claim')
+  }
+  if (!useNft && !nftObjectId) {
+    throw new Error('VITE_VOID_NFT_ID required for Pass-only claim')
+  }
 
   const encryptedAnswersOpt = params.encryptedAnswers
     ? hexToBytes(params.encryptedAnswers)
@@ -47,15 +89,37 @@ export function buildClaimPtb(params: ClaimPtbParams): Transaction {
     ? Array.from(new TextEncoder().encode(params.answerBlobId))
     : null
 
-  const encryptedAnswersArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes())
-  const answerBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes())
+  const encryptedAnswersArg = tx.pure(
+    bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes()
+  )
+  const answerBlobIdArg = tx.pure(
+    bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes()
+  )
+
+  const authKind = params.authKind ?? 0
+  const attributeNullifiers =
+    params.attributeNullifiers?.map((n) => Array.from(new TextEncoder().encode(n))) ?? []
+  const ticketSigBytes = params.ticketSig ? hexToBytes(params.ticketSig) : []
+  const ephemeralNullifierBytes = params.ephemeralNullifier
+    ? hexToBytes(params.ephemeralNullifier)
+    : []
 
   tx.moveCall({
     target: `${params.packageId}::survey_vault::claim`,
+    typeArguments: [nftType],
     arguments: [
       tx.object(params.vaultId),
       tx.object(params.surveyId),
-      tx.object(params.passId),
+      tx.pure.u8(authKind),
+      tx.pure.bool(usePass),
+      tx.object(passObjectId),
+      tx.pure.bool(useNft),
+      tx.object(nftObjectId),
+      tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(attributeNullifiers).toBytes()),
+      tx.object(params.issuerConfigId),
+      tx.pure(bcs.vector(bcs.u8()).serialize(ticketSigBytes).toBytes()),
+      tx.pure(bcs.vector(bcs.u8()).serialize(ephemeralNullifierBytes).toBytes()),
+      tx.pure.u64(params.expiresAt ?? '0'),
       encryptedAnswersArg,
       answerBlobIdArg,
       tx.object('0x6'), // clock
@@ -65,9 +129,43 @@ export function buildClaimPtb(params: ClaimPtbParams): Transaction {
   return tx
 }
 
+export type FinalizedPassTicket = {
+  source: number
+  nullifiers: string[]
+  expires_at: string
+  bff_sig: string
+  escape_clawback_mist: string
+}
+
+export async function finalizeSponsoredPassTx(params: {
+  tx: Transaction
+  senderAddress: string
+  client: SuiClient
+  backendUrl?: string
+}): Promise<FinalizedPassTicket[]> {
+  const { tx, senderAddress, client, backendUrl = '' } = params
+  tx.setSender(senderAddress)
+  const txBytes = await tx.build({ client, onlyTransactionKind: true })
+  const res = await fetch(`${backendUrl}/api/pass/finalize-sponsored-ticket`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      txBytes: bytesToBase64(txBytes),
+      senderAddress,
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: 'Finalize sponsored ticket failed' }))
+    throw new Error(err.message || `Finalize failed with status ${res.status}`)
+  }
+  const data = (await res.json()) as { tickets: FinalizedPassTicket[] }
+  return data.tickets
+}
+
 /**
  * Dry run and request sponsorship from backend proxy endpoint.
  * Throws DRY_RUN_REJECTED if dry run fails.
+ * No wallet popup here — consent is the transaction signature, verified at /api/gas/execute.
  */
 export async function dryRunAndSponsorTx(params: {
   tx: Transaction
@@ -96,9 +194,11 @@ export async function dryRunAndSponsorTx(params: {
     const err = await res
       .json()
       .catch(() => ({ error: 'unknown', message: 'Sponsorship request failed' }))
-    const msg = err.message || err.error || `Sponsorship failed with status ${res.status}`
-    // Treat any 422 or server-reported dry-run/move-abort failure as a
-    // pre-flight rejection — the user has not paid gas in this branch.
+    const errCode = typeof err.error === 'string' ? err.error : ''
+    const msg = err.message || errCode || `Sponsorship failed with status ${res.status}`
+    if (errCode === 'gas_exceeds_compensation') {
+      throw new Error(`gas_exceeds_compensation: ${msg}`)
+    }
     if (res.status === 422 || /dry\s*run|MoveAbort/i.test(msg)) {
       throw new Error(`DRY_RUN_REJECTED: ${msg}`)
     }
@@ -122,10 +222,6 @@ export interface GasHealth {
   gasCompensationAmount?: string
 }
 
-/**
- * Probe whether the BFF gas sponsor is available.
- * Resolves with `available: false` on any network/server failure (never throws).
- */
 export async function probeGasSponsorHealth(params: {
   backendUrl?: string
   timeoutMs?: number
@@ -146,15 +242,10 @@ export async function probeGasSponsorHealth(params: {
 }
 
 export const USER_DECLINED_SELF_PAID = 'USER_DECLINED_SELF_PAID'
+// 代付暫時不可用（coin 不足/限流/額度/網路）且呼叫端禁止自付回退時拋出。
+// 用於代付鑄造 Pass：避免把 deposit_payer=sponsor 的交易自付送出而造成雙重收費。
+export const SPONSOR_TEMPORARILY_UNAVAILABLE = 'SPONSOR_TEMPORARILY_UNAVAILABLE'
 
-/**
- * Try BFF-sponsored path; fall back to self-paid gas when BFF is unreachable.
- * Throws without fallback when the dry-run is rejected by the contract (DRY_RUN_REJECTED).
- *
- * When fallback is about to switch to self-paid, `onSelfPaidFallback` (if provided)
- * is consulted with the estimated gas cost in MIST. Returning false aborts with
- * USER_DECLINED_SELF_PAID so the UI can recover gracefully.
- */
 export async function executeTxWithFallback(params: {
   tx: Transaction
   senderAddress: string
@@ -162,12 +253,22 @@ export async function executeTxWithFallback(params: {
   backendUrl?: string
   signAndExecute: SignAndExecuteFn
   onSelfPaidFallback?: (gasEstimateMist: bigint, bffError?: Error) => Promise<boolean>
+  // 預設 true（claim 與「一開始就自付」的 deposit_payer=owner 路徑）。代付鑄造 Pass
+  // （deposit_payer=sponsor）須傳 false：代付失敗不可自付，否則 deposit_payer 與實付方不符。
+  allowSelfPaidFallback?: boolean
 }): Promise<FallbackResult> {
-  const { tx, senderAddress, client, backendUrl = '', signAndExecute, onSelfPaidFallback } = params
+  const {
+    tx,
+    senderAddress,
+    client,
+    backendUrl = '',
+    signAndExecute,
+    onSelfPaidFallback,
+    allowSelfPaidFallback = true,
+  } = params
 
   let bffError: Error | undefined = undefined
 
-  // Path 1: Try BFF-sponsored
   try {
     const { sponsoredTxBytes, sponsorSignature } = await dryRunAndSponsorTx({
       tx,
@@ -178,13 +279,15 @@ export async function executeTxWithFallback(params: {
     return { mode: 'sponsored', sponsoredTxBytes, sponsorSignature }
   } catch (err: any) {
     if (err.message?.startsWith('DRY_RUN_REJECTED')) {
-      throw err // Contract rejected — do NOT fallback to self-paid
+      throw err
     }
     bffError = err
-    // Any other error (network, 5xx, limit reached) → BFF fallback, attempt client dry-run
   }
 
-  // Path 2: Client-side dry-run to validate before asking user to pay gas
+  if (!allowSelfPaidFallback) {
+    throw new Error(SPONSOR_TEMPORARILY_UNAVAILABLE)
+  }
+
   tx.setSender(senderAddress)
   const dryRunBytes = await tx.build({ client })
   const dryRunResult = await client.dryRunTransactionBlock({
@@ -194,14 +297,12 @@ export async function executeTxWithFallback(params: {
     throw new Error(dryRunResult.effects.status.error ?? 'Transaction pre-flight failed')
   }
 
-  // Telemetry: emit warning + DOM event for observability
   const reason = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED' ? 'limit_reached' : 'bff_unreachable'
   console.warn(`[gas-fallback] BFF sponsorship failed (${reason}), switching to self-paid gas mode`)
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('gas-fallback', { detail: { reason } }))
   }
 
-  // Ask the UI for explicit user consent before charging gas
   if (onSelfPaidFallback) {
     const gasUsed = dryRunResult.effects.gasUsed
     const estimate =
@@ -214,37 +315,48 @@ export async function executeTxWithFallback(params: {
     }
   }
 
-  // Execute with self-paid gas via wallet
   const { digest } = await signAndExecute(tx)
   return { mode: 'self_paid', digest }
 }
 
 /**
- * Broadcast double-signed sponsored transaction to Sui.
+ * Broadcast a sponsored transaction through the backend's /api/gas/execute.
+ * The backend verifies the user signature (= consent) and atomically reserves
+ * the lifetime/daily quota before broadcasting, so the quota is only ever
+ * consumed for a transaction the user actually signed.
  */
 export async function executeSponsoredTx(params: {
-  client: SuiClient
   sponsoredTxBytes: string
   userSignature: string
   sponsorSignature: string
-}): Promise<any> {
-  const { client, sponsoredTxBytes, userSignature, sponsorSignature } = params
+  backendUrl?: string
+}): Promise<{ digest: string }> {
+  const { sponsoredTxBytes, userSignature, sponsorSignature, backendUrl = '' } = params
 
-  const result = await client.executeTransactionBlock({
-    transactionBlock: sponsoredTxBytes,
-    signature: [userSignature, sponsorSignature],
-    options: {
-      showEffects: true,
-      showObjectChanges: true,
-    },
+  const res = await fetch(`${backendUrl}/api/gas/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sponsoredTxBytes, userSignature, sponsorSignature }),
   })
-
-  return result
+  if (!res.ok) {
+    const err = await res
+      .json()
+      .catch(() => ({ error: 'unknown', message: 'Sponsored execution failed' }))
+    const errCode = typeof err.error === 'string' ? err.error : ''
+    const msg = err.message || errCode || `Execute failed with status ${res.status}`
+    if (errCode === 'PLATFORM_SPONSOR_LIMIT_REACHED') {
+      throw new Error('PLATFORM_SPONSOR_LIMIT_REACHED')
+    }
+    throw new Error(msg)
+  }
+  return (await res.json()) as { digest: string }
 }
 
 export interface ClaimWithTicketParams {
   packageId: string
   vaultId: string
+  surveyId: string
+  passId: string
   issuerConfigId: string
   ticketSig: string
   ephemeralNullifier: string
@@ -253,72 +365,37 @@ export interface ClaimWithTicketParams {
   answerBlobId?: string
 }
 
+/** @deprecated Use buildClaimPtb with authKind=1 */
 export function buildClaimWithTicketPtb(params: ClaimWithTicketParams): Transaction {
-  const tx = new Transaction()
-
-  const encryptedAnswersOpt = params.encryptedAnswers
-    ? hexToBytes(params.encryptedAnswers)
-    : null
-  const answerBlobIdOpt = params.answerBlobId
-    ? Array.from(new TextEncoder().encode(params.answerBlobId))
-    : null
-
-  const encryptedAnswersArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes())
-  const answerBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes())
-
-  const ticketSigBytes = hexToBytes(params.ticketSig)
-  const ephemeralNullifierBytes = hexToBytes(params.ephemeralNullifier)
-
-  tx.moveCall({
-    target: `${params.packageId}::survey_vault::claim_with_ticket`,
-    arguments: [
-      tx.object(params.vaultId),
-      tx.object(params.issuerConfigId),
-      tx.pure(bcs.vector(bcs.u8()).serialize(ticketSigBytes).toBytes()),
-      tx.pure(bcs.vector(bcs.u8()).serialize(ephemeralNullifierBytes).toBytes()),
-      tx.pure(bcs.u64().serialize(params.expiresAt).toBytes()),
-      encryptedAnswersArg,
-      answerBlobIdArg,
-      tx.object('0x6'), // clock
-    ],
+  return buildClaimPtb({
+    ...params,
+    authKind: 1,
   })
-
-  return tx
 }
 
 export interface ClaimWithNftMarkingParams {
   packageId: string
   vaultId: string
+  surveyId: string
   nftId: string
   nftType: string
+  issuerConfigId: string
   encryptedAnswers?: string
   answerBlobId?: string
+  claimPassSentinelId?: string
 }
 
+/** @deprecated Use buildClaimPtb with nftId/nftType (unified claim). */
 export function buildClaimWithNftMarkingPtb(params: ClaimWithNftMarkingParams): Transaction {
-  const tx = new Transaction()
-
-  const encryptedAnswersOpt = params.encryptedAnswers
-    ? hexToBytes(params.encryptedAnswers)
-    : null
-  const answerBlobIdOpt = params.answerBlobId
-    ? Array.from(new TextEncoder().encode(params.answerBlobId))
-    : null
-
-  const encryptedAnswersArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes())
-  const answerBlobIdArg = tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes())
-
-  tx.moveCall({
-    target: `${params.packageId}::survey_vault::claim_with_nft_marking`,
-    typeArguments: [params.nftType],
-    arguments: [
-      tx.object(params.vaultId),
-      tx.object(params.nftId),
-      encryptedAnswersArg,
-      answerBlobIdArg,
-      tx.object('0x6'), // clock
-    ],
+  return buildClaimPtb({
+    packageId: params.packageId,
+    vaultId: params.vaultId,
+    surveyId: params.surveyId,
+    nftId: params.nftId,
+    nftType: params.nftType,
+    issuerConfigId: params.issuerConfigId,
+    encryptedAnswers: params.encryptedAnswers,
+    answerBlobId: params.answerBlobId,
+    claimPassSentinelId: params.claimPassSentinelId,
   })
-
-  return tx
 }

@@ -44,7 +44,7 @@ const dashboard: DashboardDict = {
   purgeLabel: 'Data purge',
   purgeNoticeAt: (ts: string) => `All responses and questions will be permanently destroyed on ${ts}.`,
   closeAndPurgeNotice: (days: number) =>
-    `After closing, unused SSR and gas are refunded to your wallet. When you purge, questions and responses are permanently deleted and on-chain storage rebates are returned. If not purged within ${days} days after closing, the system will auto-purge, deducting gas and a 50% fee.`,
+    `After closing, unused SSR and gas are refunded to your wallet. When you purge, questions and responses are permanently deleted and on-chain storage rebates are returned. If not purged within ${days} days after the deadline, the system will auto-purge and collect gas and a 50% fee.`,
   listPurgeReminder: (days: number) => `${days} days after each survey closes, its responses and questions are automatically and permanently destroyed; export or review the results you need before then.`,
   vaultLabel: 'Vault ID',
   deadlineLabel: 'Deadline',

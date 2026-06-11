@@ -52,14 +52,45 @@ export class MultisigSponsorSigner implements SponsorSigner {
     return this.signer
   }
 }
-export function keypairFromHex(privKeyHex: string): Ed25519Keypair {
-  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-  return Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
+const ED25519_SECRET_BYTE_LENGTH = 32
+
+/** Reject malformed hex before constructing Ed25519 keys (F22/F23). */
+export function parseStrictHex32(fieldName: string, input: string): Uint8Array {
+  const trimmed = input.trim()
+  if (!trimmed) {
+    throw new Error(`${fieldName}: value must not be empty`)
+  }
+  if (trimmed.toLowerCase().startsWith('suiprivkey')) {
+    throw new Error(
+      `${fieldName}: suiprivkey format is not supported; use 64-character raw Ed25519 secret hex ` +
+        '(see setup-multisig-sponsor.ts output)'
+    )
+  }
+  const clean = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed
+  if (clean.length === 0 || clean.length % 2 !== 0) {
+    throw new Error(`${fieldName}: hex string must have even length (got ${clean.length} nibbles)`)
+  }
+  if (!/^[0-9a-fA-F]+$/.test(clean)) {
+    throw new Error(`${fieldName}: must contain only hex characters`)
+  }
+  const bytes = new Uint8Array(Buffer.from(clean, 'hex'))
+  if (bytes.byteLength !== ED25519_SECRET_BYTE_LENGTH) {
+    throw new Error(
+      `${fieldName}: expected ${ED25519_SECRET_BYTE_LENGTH} bytes after decode, got ${bytes.byteLength}`
+    )
+  }
+  return bytes
 }
+
+export function keypairFromHex(
+  privKeyHex: string,
+  fieldName = 'Ed25519 private key'
+): Ed25519Keypair {
+  return Ed25519Keypair.fromSecretKey(parseStrictHex32(fieldName, privKeyHex))
+}
+
 export function pubkeyBytesFromHex(pubkeyHex: string): Uint8Array {
-  const clean = pubkeyHex.startsWith('0x') ? pubkeyHex.slice(2) : pubkeyHex
-  return new Uint8Array(Buffer.from(clean, 'hex'))
+  return parseStrictHex32('GAS_SPONSOR_PUBKEY_3', pubkeyHex)
 }
 export function createMultisigSponsorSigner(
   priv1Hex: string,
@@ -67,8 +98,8 @@ export function createMultisigSponsorSigner(
   coldPubkey3Hex: string,
   threshold = 2
 ): MultisigSponsorSigner {
-  const kp1 = keypairFromHex(priv1Hex)
-  const kp2 = keypairFromHex(priv2Hex)
+  const kp1 = keypairFromHex(priv1Hex, 'GAS_SPONSOR_PRIV_1')
+  const kp2 = keypairFromHex(priv2Hex, 'GAS_SPONSOR_PRIV_2')
   const pk3Bytes = pubkeyBytesFromHex(coldPubkey3Hex)
   const pk3 = new Ed25519PublicKey(pk3Bytes)
   const multisigPubkey = MultiSigPublicKey.fromPublicKeys({
@@ -102,19 +133,11 @@ export function createSponsorSignerFromEnv(
     }
     return signer
   }
-  const legacyPriv = env.SURVEY_PASS_ISSUER_PRIV?.trim()
-  if (legacyPriv) {
-    const isProd = env.NODE_ENV === 'production'
-    if (isProd) {
-      throw new Error(
-        'Production requires GAS_SPONSOR_PRIV_1, GAS_SPONSOR_PRIV_2, and GAS_SPONSOR_PUBKEY_3'
-      )
-    }
-    console.warn(
-      '[SponsorSigner] Using SURVEY_PASS_ISSUER_PRIV as single-key sponsor (dev only). ' +
-        'Set GAS_SPONSOR_PRIV_1/2 + GAS_SPONSOR_PUBKEY_3 for multisig.'
+  if (env.SURVEY_PASS_ISSUER_PRIV?.trim()) {
+    throw new Error(
+      'SURVEY_PASS_ISSUER_PRIV must not be used as gas sponsor. ' +
+        'Configure GAS_SPONSOR_PRIV_1, GAS_SPONSOR_PRIV_2, and GAS_SPONSOR_PUBKEY_3.'
     )
-    return new Ed25519SignerBackend(keypairFromHex(legacyPriv))
   }
   return null
 }

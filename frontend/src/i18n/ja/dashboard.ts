@@ -44,7 +44,7 @@ const dashboard: DashboardDict = {
   purgeLabel: 'データ削除',
   purgeNoticeAt: (ts: string) => `回答と質問内容は ${ts} に永久削除され、復元できません。`,
   closeAndPurgeNotice: (days: number) =>
-    `終了後、未使用の SSR と Gas はウォレットに返金されます。破棄時、質問と回答は永久削除され、オンチェーンのストレージリベートは返金されます。終了から ${days} 日経過しても破棄されない場合、システムが自動破棄し、gas と 50% の手数料が差し引かれます。`,
+    `終了後、未使用の SSR と Gas はウォレットに返金されます。破棄時、質問と回答は永久削除され、オンチェーンのストレージリベートは返金されます。締め切りから ${days} 日経過しても破棄されない場合、システムが自動破棄し、gas と 50% の手数料を収受します。`,
   listPurgeReminder: (days: number) => `アンケート終了から ${days} 日後、すべての回答と質問内容は自動的に永久削除されます。期限までに結果をエクスポートしてください。`,
   vaultLabel: 'Vault ID',
   deadlineLabel: '締切日時',

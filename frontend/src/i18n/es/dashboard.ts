@@ -44,7 +44,7 @@ const dashboard: DashboardDict = {
   purgeLabel: 'Destrucción de datos',
   purgeNoticeAt: (ts: string) => `Las respuestas y preguntas se destruirán permanentemente el ${ts}. No se pueden recuperar.`,
   closeAndPurgeNotice: (days: number) =>
-    `Tras cerrar, el SSR y el gas no utilizados se reembolsan a tu billetera. Al destruir, las preguntas y respuestas se eliminan permanentemente y se devuelve el reembolso de almacenamiento en cadena. Si no se destruye en ${days} días tras el cierre, el sistema destruirá automáticamente, deduciendo gas y una comisión del 50%.`,
+    `Tras cerrar, el SSR y el gas no utilizados se reembolsan a tu billetera. Al destruir, las preguntas y respuestas se eliminan permanentemente y se devuelve el reembolso de almacenamiento en cadena. Si no se destruye en ${days} días tras la fecha límite, el sistema lo destruirá automáticamente y cobrará gas y una comisión del 50%.`,
   listPurgeReminder: (days: number) => `Cada encuesta finalizada destruirá automáticamente sus respuestas y preguntas de forma permanente transcurridos ${days} días. Exporta los resultados necesarios antes del plazo.`,
   vaultLabel: 'Vault ID',
   deadlineLabel: 'Fecha límite',

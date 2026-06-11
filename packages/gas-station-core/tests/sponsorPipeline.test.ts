@@ -67,4 +67,60 @@ describe('runSponsorPipeline', () => {
     if (!outcome.ok) expect(outcome.error).toBe('dry_run_failed')
     expect(store.isLocked('0x01')).toBe(false)
   })
+
+  it('keeps coin locked after successful sign', async () => {
+    const mockClient = {
+      getCoins: vi.fn().mockResolvedValue({
+        data: [
+          {
+            coinObjectId: '0x01',
+            version: '1',
+            digest: 'd1',
+            balance: '500000000',
+          },
+        ],
+        hasNextPage: false,
+      }),
+      dryRunTransactionBlock: vi.fn().mockResolvedValue({
+        effects: {
+          status: { status: 'success' },
+          gasUsed: {
+            computationCost: '1000',
+            storageCost: '100',
+            storageRebate: '0',
+          },
+        },
+      }),
+    }
+
+    const signer = {
+      getSponsorAddress: () => '0xsponsor',
+      signTransaction: vi.fn().mockResolvedValue({ signature: 'sig' }),
+      asTransactionSigner: () => ({
+        getPublicKey: () => ({ toSuiAddress: () => '0xsponsor' }),
+        signTransaction: vi.fn(),
+      }),
+    }
+
+    const store = new InMemoryCoinLockStore(30_000, 0)
+    const outcome = await runSponsorPipeline({
+      txBytes: Buffer.from('dGVzdA==').toString('base64'),
+      senderAddress: '0xsender',
+      suiClient: mockClient as any,
+      signer: signer as any,
+      sponsorAddress: '0xsponsor',
+      coinStore: store,
+      gasConfig: loadGasConfig({}),
+      context: {
+        isPassSponsor: false,
+        isPlatformSponsor: false,
+        claimGasCompensationAmount: null,
+        claimStorageCompensationAmount: null,
+        claimHasBlob: false,
+      },
+    })
+
+    expect(outcome.ok).toBe(true)
+    expect(store.isLocked('0x01')).toBe(true)
+  })
 })

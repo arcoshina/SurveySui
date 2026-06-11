@@ -24,6 +24,7 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_PACKAGE_ID': JSON.stringify(env.SUI_PACKAGE_ID || ''),
     'import.meta.env.VITE_AMM_POOL_ID': JSON.stringify(env.AMM_POOL_ID || ''),
+    'import.meta.env.VITE_PROTOCOL_CONFIG_ID': JSON.stringify(env.PROTOCOL_CONFIG_ID || ''),
     'import.meta.env.VITE_SSR_TREASURY_ID': JSON.stringify(env.SSR_TREASURY_ID || ''),
     'import.meta.env.VITE_SR_TREASURY_ID': JSON.stringify(env.SR_TREASURY_ID || ''),
     'import.meta.env.VITE_SURVEY_REGISTRY_ID': JSON.stringify(env.SURVEY_REGISTRY_ID || ''),
@@ -32,6 +33,10 @@ export default defineConfig({
       env.NULLIFIER_REGISTRY_ID || env.PASS_REGISTRY_ID || ''
     ),
     'import.meta.env.VITE_ISSUER_CONFIG_ID': JSON.stringify(env.ISSUER_CONFIG_ID || ''),
+    'import.meta.env.VITE_VOID_NFT_ID': JSON.stringify(env.VOID_NFT_ID || ''),
+    'import.meta.env.VITE_CLAIM_PASS_SENTINEL_ID': JSON.stringify(
+      env.CLAIM_PASS_SENTINEL_ID || ''
+    ),
     'import.meta.env.VITE_ADMIN_ADDRESS': JSON.stringify(env.SUI_ADMIN_ADDRESS || ''),
     'import.meta.env.VITE_TICKET_FEE_MIST': JSON.stringify(env.TICKET_FEE_MIST || '0'),
     'import.meta.env.VITE_WALRUS_PUBLISHER_URL': JSON.stringify(
@@ -56,6 +61,9 @@ export default defineConfig({
     ),
     'import.meta.env.VITE_ANSWER_SIZE_THRESHOLD_KB': JSON.stringify(
       env.VITE_ANSWER_SIZE_THRESHOLD_KB || env.MAX_INLINE_ANSWER_KB || '6'
+    ),
+    'import.meta.env.VITE_MAX_BLOB_ID_BYTES': JSON.stringify(
+      env.MAX_BLOB_ID_BYTES || env.VITE_MAX_BLOB_ID_BYTES || '256'
     ),
   },
   resolve: {

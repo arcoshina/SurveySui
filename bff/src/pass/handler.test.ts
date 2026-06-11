@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import { createMultisigSponsorSigner, keypairFromHex } from '@surveysui/gas-station-core'
 import { buildApp } from '../app.js'
 import { buildDeleteAuthMessage } from './handler.js'
 import { createStatsCache } from '../stats/cache.js'
@@ -8,12 +9,14 @@ const PKG = '0x' + 'ab'.repeat(32)
 const REGISTRY = '0x' + '11'.repeat(32)
 const CONFIG = '0x' + '22'.repeat(32)
 const PASS_ID = '0x' + '33'.repeat(32)
-// 32-byte 私鑰（sponsor / admin）
+// 32-byte 私鑰（ticket issuer + multisig K1）
 const SPONSOR_PRIV = '0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20'
+const SPONSOR_PRIV_2 = '0202020202020202020202020202020202020202020202020202020202020202'
+const SPONSOR_PRIV_3 = '0303030303030303030303030303030303030303030303030303030303030303'
 
 function sponsorAddress(): string {
-  const kp = Ed25519Keypair.fromSecretKey(new Uint8Array(Buffer.from(SPONSOR_PRIV, 'hex')))
-  return kp.getPublicKey().toSuiAddress()
+  const coldPub = Buffer.from(keypairFromHex(SPONSOR_PRIV_3).getPublicKey().toRawBytes()).toString('hex')
+  return createMultisigSponsorSigner(SPONSOR_PRIV, SPONSOR_PRIV_2, coldPub, 2).getSponsorAddress()
 }
 
 function makeSuiClientMock(passFields: { owner: string; deposit_payer: string }) {
@@ -47,6 +50,11 @@ describe('/api/pass/delete — 後端代執行刪除（代付 Pass）', () => {
     process.env.PASS_REGISTRY_ID = REGISTRY
     process.env.ISSUER_CONFIG_ID = CONFIG
     process.env.SURVEY_PASS_ISSUER_PRIV = SPONSOR_PRIV
+    process.env.GAS_SPONSOR_PRIV_1 = SPONSOR_PRIV
+    process.env.GAS_SPONSOR_PRIV_2 = SPONSOR_PRIV_2
+    process.env.GAS_SPONSOR_PUBKEY_3 = Buffer.from(
+      keypairFromHex(SPONSOR_PRIV_3).getPublicKey().toRawBytes()
+    ).toString('hex')
   })
 
   let ownerKp: Ed25519Keypair

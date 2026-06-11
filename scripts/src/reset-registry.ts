@@ -13,7 +13,7 @@
  *
  * 跑完會：
  *   1. 重新 publish package
- *   2. 重新 init_pool
+ *   2. 重新 create ProtocolConfig + bootstrap canonical pool
  *   3. set_issuer_pubkey（否則鏈上驗 ticket 簽章 abort 1）
  *   4. 把新 ID 寫進根目錄 `.env`
  *   4. 印出下一步（重啟 BFF / 重啟 vite dev server）
@@ -23,7 +23,7 @@ import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
 import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { requireEnv } from './env.js'
-import { deployPackage, initAmmPool, mergeRootEnv } from './init.js'
+import { deployPackage, initProtocolAndCanonicalPool, mergeRootEnv } from './init.js'
 
 async function main() {
   console.log('⚠️  reset-registry：將重發整個 Move package、清除 on-chain SurveyRegistry。')
@@ -45,9 +45,16 @@ async function main() {
     surveyRegistryId,
     nullifierRegistryId,
     issuerConfigId,
+    voidNftId,
+    claimPassSentinelId,
   } = await deployPackage(client, keypair, adminAddress)
 
-  const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
+  const { poolId, protocolConfigId } = await initProtocolAndCanonicalPool(
+    client,
+    keypair,
+    packageId,
+    adminAddress
+  )
 
   // Set Issuer Pubkey（私鑰來自根目錄 .env 的 SURVEY_PASS_ISSUER_PRIV，缺值則用 dev key）
   let issuerPrivHex = process.env.SURVEY_PASS_ISSUER_PRIV
@@ -81,9 +88,12 @@ async function main() {
     SR_TREASURY_ID: srTreasuryId,
     SSR_TREASURY_ID: ssrTreasuryId,
     AMM_POOL_ID: poolId,
+    PROTOCOL_CONFIG_ID: protocolConfigId,
     SURVEY_REGISTRY_ID: surveyRegistryId,
     PASS_REGISTRY_ID: nullifierRegistryId,
     ISSUER_CONFIG_ID: issuerConfigId,
+    VOID_NFT_ID: voidNftId,
+    CLAIM_PASS_SENTINEL_ID: claimPassSentinelId,
   })
 
 

@@ -64,6 +64,7 @@ const auth: AuthDict = {
   deleteSuccess: '¡El SurveyPass ha sido destruido con éxito de la cadena!',
   txFailed: 'Fallo en la ejecución de la transacción',
   authFailed: 'Fallo en la verificación o envío de la transacción',
+  mintSponsorUnavailable: 'El patrocinio de gas no está disponible temporalmente. Inténtalo de nuevo más tarde.',
   upgradeSuccess: '¡Credencial actualizada con éxito!',
   mintSuccess: '¡SurveyPass acuñado con éxito!',
   destroyFailed: 'Fallo al destruir',

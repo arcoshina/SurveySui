@@ -10,9 +10,9 @@ import {
   parseFullSurveyMarkdown,
   serializeFullSurveyToMarkdown,
 } from '../lib/frontmatter'
-import { estimateFundCostV2, PURGE_GRACE_MS } from '../lib/ptb'
+import { SSR_BASE_PER_UNIT, computeSsrOut, estimateFundCostV2, PURGE_GRACE_MS } from '../lib/ptb'
 import { getTicketFeeMist } from '../lib/ticketFee'
-import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
+import { formatSsr, formatSui, formatFullPrecision, formatSuiFullPrecision } from '../lib/format'
 import { useT } from '../i18n'
 import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
 
@@ -138,10 +138,15 @@ export default function CreatePage() {
     { enabled: !!account && !!packageId }
   )
 
-  const totalSuiInvested = useMemo<bigint>(() => {
-    if (poolData?.data?.content?.dataType !== 'moveObject') return 0n
+  const poolReserves = useMemo(() => {
+    if (poolData?.data?.content?.dataType !== 'moveObject') {
+      return { suiReserve: 0n, srReserve: 0n }
+    }
     const fields = (poolData.data.content as { fields: Record<string, string> }).fields
-    return BigInt(fields.total_sui_invested ?? '0')
+    return {
+      suiReserve: BigInt(fields.sui_reserve ?? '0'),
+      srReserve: BigInt(fields.sr_reserve ?? '0'),
+    }
   }, [poolData])
 
   const feeConfig = useMemo(() => {
@@ -190,12 +195,11 @@ export default function CreatePage() {
   }, [data.perResponse, data.maxResponses, data.repeatReward, data.repeatMaxTimes, ticketFeeMist, gasCompensationAmount])
 
   const currentRate = useMemo(() => {
-    const decay = 1_000_000_000_000n
-    const initialSsrPerSui = 1000n
-    const numer = Number(initialSsrPerSui * decay)
-    const denom = Number(decay + totalSuiInvested)
-    return numer / denom
-  }, [totalSuiInvested])
+    const { suiReserve, srReserve } = poolReserves
+    const oneSui = 1_000_000_000n
+    const ssrBase = computeSsrOut(oneSui, suiReserve, srReserve)
+    return Number(ssrBase) / Number(SSR_BASE_PER_UNIT)
+  }, [poolReserves])
 
   const totalSsrNum = useMemo(() => {
     const repeatMaxTimes = BigInt(data.repeatMaxTimes ?? 1)
@@ -245,7 +249,8 @@ export default function CreatePage() {
           repeatReward: BigInt(data.repeatReward),
           repeatMaxTimes: data.repeatMaxTimes,
           maxResponses: data.maxResponses,
-          totalSuiInvested,
+          suiReserve: poolReserves.suiReserve,
+          srReserve: poolReserves.srReserve,
           feeConfig,
           creatorSsrBalance,
         })
@@ -262,7 +267,7 @@ export default function CreatePage() {
     data.repeatReward,
     data.repeatMaxTimes,
     data.maxResponses,
-    totalSuiInvested,
+    poolReserves,
     feeConfig,
     creatorSsrBalance,
   ])
@@ -1084,7 +1089,7 @@ export default function CreatePage() {
                             </div>
                           </div>
                         </div>
-                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision(costBreakdown.suiToInvest)} SUI`}>
+                        <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatSuiFullPrecision(costBreakdown.suiToInvest)} SUI`}>
                           {formatSui(costBreakdown.suiToInvest)} SUI
                         </span>
                       </div>
@@ -1100,7 +1105,7 @@ export default function CreatePage() {
                               </div>
                             </div>
                           </div>
-                          <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatFullPrecision(requiredGas)} SUI`}>
+                          <span className="font-semibold text-slate-700 dark:text-neutral-300 shrink-0 font-mono text-right" title={`${formatSuiFullPrecision(requiredGas)} SUI`}>
                             {formatSui(requiredGas)} SUI
                           </span>
                         </div>
@@ -1110,7 +1115,7 @@ export default function CreatePage() {
                     {/* 最終總結組 */}
                     <div className="flex justify-between items-center gap-x-2 border-t border-slate-200 dark:border-neutral-800 pt-2.5 font-bold">
                       <span className="text-slate-800 dark:text-neutral-200 min-w-0 break-words">{t.totalSuiCostLabel}</span>
-                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono shrink-0 text-right" title={`${formatFullPrecision(costBreakdown.suiToInvest + requiredGas)} SUI`}>
+                      <span className="text-base text-blue-700 dark:text-blue-400 font-mono shrink-0 text-right" title={`${formatSuiFullPrecision(costBreakdown.suiToInvest + requiredGas)} SUI`}>
                         {formatSui(costBreakdown.suiToInvest + requiredGas)} SUI
                       </span>
                     </div>

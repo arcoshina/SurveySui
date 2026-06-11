@@ -3,9 +3,16 @@ export * from './gasConfig.js'
 export * from './types.js'
 export * from './inMemoryCoinLockStore.js'
 export * from './mergeCoins.js'
+export * from './splitCoins.js'
 export * from './sponsorPipeline.js'
 export * from './platformSponsorStore.js'
 export * from './walletRateLimitStore.js'
+export * from './txUtils.js'
+export * from './passTicketValidation.js'
+export * from './escapeClawback.js'
+export * from './passEscapeClawbackValidation.js'
+export * from './sponsorTxValidation.js'
+export * from './gasStationHmac.js'
 export {
   type SignerBackend,
   type SponsorSigner,
@@ -15,6 +22,7 @@ export {
   MultisigSponsorSigner,
   createMultisigSponsorSigner,
   createSponsorSignerFromEnv,
+  parseStrictHex32,
   keypairFromHex,
   pubkeyBytesFromHex,
   signAndExecuteWithSponsor,

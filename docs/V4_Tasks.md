@@ -23,24 +23,24 @@
 =====
 
 ## 待辦清單
-- [x] Gas 代付 2-of-3 multisig（Phase 2-lite；見 [安全指引.md](./安全指引.md) §10、[託管架構.md](./託管架構.md)）  
+- [x] Gas 代付 2-of-3 multisig ；見 /安全指引.md、/託管架構.md  
 - [ ] Ticket issuer 改 threshold multisig / KMS（Phase 3+）  
 - [x] 秘密及金鑰的輪換及管理準則 → [安全指引.md](./安全指引.md)  
+- [ ] 
 
 ## 收尾檢查
-- [ ] Env 集中在一個檔案，加註解（模板見 [安全指引.md](./安全指引.md) §11）
+- [ ] Env 集中在一個檔案，加註解（模板見 [安全指引.md](./安全指引.md) §11） 
 - [ ] 檢查前端說明文案：引導、防護、設計、代付及退回機制、儲存及銷毀機制
-- [ ] 檢查代幣經濟  
+- [x] 檢查代幣經濟已對齊 [TokenEconomics.md](system_design/TokenEconomics.md) 
 - [ ] 再次確認答卷上鏈的格式問題  
 - [ ] 應對私鑰洩漏問題：錢包持有者可以完全銷毀錢包內的 SurveyPass，認證資訊從一個地址中刪除後，能綁到另一個地址  
 - [ ] 確認 OAuth JWT 有驗簽
 - [ ] 檢查 Gas 補助的計算邏輯
 - [ ] 檢查防女巫抽乾補助池的機制: 刪除 Pass 及問卷時的押金處理
 - [ ] **上線前重設所有 Secrets**（清單見 [安全指引.md](./安全指引.md) §8）
-- [ ] 審計公司 CertiK 有 AI 審計服務，駭客松有免費額度
 - [ ] 確認佈署時的提示  
 - [ ] 文件完整說明運作方式，特別是安全措施及利用的 Sui 特性
-
+- [ ] 銷毀 Pass時的提示 message
 
 
 一、確定不做的事
@@ -52,14 +52,52 @@
 Mint 守衛預設開啟、REVOCATION_REGISTRY_BACKEND 收斂為 bff_db 或 bff_db+walrus
 Move／BFF 測試清單（#1 刪除回歸、細粒度註銷、拒簽、頻控、CLI 整合）
 前端提示、Gas 預檢標為可並行、非阻擋上線
-三、上線前要確認的事
-環境變數、管理員 API 權限、E2E 鏈上＋BFF 行為
-Walrus 輔助時的降級策略
-測試與 V4_Tasks 勾選方式
-已知取捨（填答靠鏈上、BFF 擋 Mint 等）
 
 
 ## 進度紀錄  
+
+### 2026/6/11
+- [ ] 修復 Pass &代付問題
+  - [x] BFF Gas 只有1包gas、Gas 序列問題_fable  
+  - [x] mint Pass 需要多次簽名_Composer_opus  
+  - [x] 額度用盡後自付，顯示代付失效中
+  - [x] 公開問卷顯示及跳轉問題
+  - [x] BFF 不自動關閉過期問卷，等過期未銷毀才動作
+  - [x] 韓文介面仍顯示：中文憑證驗證不符 本問卷需要以下其中一種未過期的憑證： 
+  - [x] 過期後從前端去填答，答卷者只會看到一個錯誤訊息(原始 EExpired MoveAbort 文字,非友善文案
+  - [x] 型別檢查 sponsoredTx.ts:101 的錯誤
+
+
+
+### 2026/6/10
+- [~] 修改審計報告中的漏洞
+  - [x] 建立AMM 及經濟模型文件初稿_Composer  
+  - [x] 修正到期不自動結束的問題_Composer  
+  - [x] 修正 Vault:問卷不是一對一的問題_Composer  
+  - [x] 修正註銷行為問題_Composer  
+  - [x] F14 RPC 歷史掃描上限 250
+  - [ ] F46
+- [ ] Claude code-review
+  - [x] S1 所有 claim 在建構 PTB 前即 throw_Fable
+  - [x] S2 revoke不再釋放 nullifier_Fable
+  - [x] 補充系統行為文件_Fable
+
+
+
+
+###　2026/6/9
+- [~] 修改審計報告中的漏洞_Composer  
+  - [x] 發現大量架構層面錯誤_Composer  
+  - [x] 修正 Claim 多入口 -> 單一入口_Composer  
+  - [x] 修正填答時 Pass 沒有驗簽_Composer  
+  - [x] 修正 google Oauth 驗證時 JWT 沒有驗簽_Composer  
+  - [x] 關閉錯誤行為：資金補注_Composer  
+  - [x] 修復大量漏洞至階段四_Composer  
+  - [x] 建立填答 ADR 文件_Composer  
+
+### 2026/6/8
+- [x] 準備 CertiK 審計：去除註解_Composer  
+- [~] 修改報告中的漏洞_Composer  
 
 ### 2026/6/7
 - [x] 確認項目方可不可追蹤填答者_Composer  
@@ -71,7 +109,7 @@ Walrus 輔助時的降級策略
 - [x] 自動銷毀時收到的押金，扣除 Gas 及 50% 手續費後轉帳給發起人_Composer  
 - [x] Walrus 儲存生命週期問題_Composer  
 - [x] Gas Station 分散式 Coin Queue（gas-station-core + Cloudflare DO）_Composer
-- [x] Dashboard 文案修改： 結束後未使用的 SSR 與 Gas 會退回您的錢包。銷毀時題目與答卷將被永久刪除，鏈上儲存押金將退回。若結束後超過 90 天仍未銷毀，系統將自動銷毀，扣除 gas 及 50% 手續費。
+- [x] Dashboard 文案修改： 結束後未使用的 SSR 與 Gas 會退回您的錢包。銷毀時題目與答卷將被永久刪除，鏈上儲存押金將退回。若結束後超過 90 天仍未銷毀，系統將自動銷毀，扣除 gas 及 50% 手續費。_Composer
 
 ### 2026/6/6
 - [x] 首頁的按鈕：`說明文件`、`新手教學`、`建立問卷`_Gemini  

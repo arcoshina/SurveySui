@@ -15,7 +15,15 @@ import { fetchActivePass, fetchPassCredentials, SurveyPassData, CredentialInfo }
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { useLanguage } from '../context/LanguageContext'
-import { executeTxWithFallback, executeSponsoredTx, USER_DECLINED_SELF_PAID, probeGasSponsorHealth } from '../lib/sponsoredTx'
+import {
+  executeTxWithFallback,
+  executeSponsoredTx,
+  finalizeSponsoredPassTx,
+  USER_DECLINED_SELF_PAID,
+  SPONSOR_TEMPORARILY_UNAVAILABLE,
+  probeGasSponsorHealth,
+  type FinalizedPassTicket,
+} from '../lib/sponsoredTx'
 import { ConnectButton } from '@mysten/dapp-kit'
 import { useOAuthResult } from '../lib/useOAuthResult'
 import { bcs } from '@mysten/sui/bcs'
@@ -141,20 +149,24 @@ export default function AuthPage() {
     }
   }
 
-  const fetchSponsorQuota = async () => {
+  type SponsorQuota = { count: number; maxLimit: number; remaining: number }
+
+  const fetchSponsorQuota = async (): Promise<SponsorQuota | null> => {
     if (!activeAddress) {
       setSponsorQuota(null)
-      return
+      return null
     }
     try {
       const res = await fetch(`/api/gas/sponsor-count?address=${activeAddress}`)
       if (res.ok) {
-        const data = await res.json()
+        const data = (await res.json()) as SponsorQuota
         setSponsorQuota(data)
+        return data
       }
     } catch (err) {
       console.error('Failed to fetch sponsor quota:', err)
     }
+    return null
   }
 
   useEffect(() => {
@@ -186,26 +198,36 @@ export default function AuthPage() {
 
   // ── 共用 mint/update handler ──────────────────────────────────────────────
 
-  async function executeAndBroadcast(tx: Transaction, owner: string, signer: ActiveSigner) {
+  async function executeAndBroadcast(
+    tx: Transaction,
+    owner: string,
+    signer: ActiveSigner,
+    isSponsored: boolean,
+    limitReachedHint: boolean
+  ) {
     const fallbackResult = await executeTxWithFallback({
       tx,
       senderAddress: owner,
       client: suiClient as any,
       signAndExecute: async (t) => signer.signAndExecute(t as Transaction),
+      // 代付鑄造/升級（deposit_payer=sponsor）不可自付回退：代付失敗即顯示「暫時不可用」，
+      // 避免把 deposit_payer=sponsor 的交易自付送出而雙重收費。自付路徑（deposit_payer=owner）維持回退。
+      allowSelfPaidFallback: !isSponsored,
       onSelfPaidFallback: (estMist, bffError) =>
         new Promise<boolean>((resolve) => {
           const estSui = (Number(estMist) / 1_000_000_000).toFixed(4)
-          const isLimitReached = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
+          const isLimitReached =
+            limitReachedHint || bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
           setSelfPaidConfirm({ estSui, resolve, isLimitReached })
         }),
     })
 
     let digest: string
     if (fallbackResult.mode === 'sponsored') {
+      // 唯一錢包彈窗:使用者簽交易本身,此簽章即代付同意憑證(後端 /execute 驗章後才扣額度並廣播)。
       const txBytes = fromBase64(fallbackResult.sponsoredTxBytes)
       const userSignature = await signer.signTxBytes(txBytes)
       const txResult = await executeSponsoredTx({
-        client: suiClient as any,
         sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
         userSignature,
         sponsorSignature: fallbackResult.sponsorSignature,
@@ -223,12 +245,24 @@ export default function AuthPage() {
     }
   }
 
+  function ticketFieldsFromFinalized(ticket: FinalizedPassTicket) {
+    return {
+      source: ticket.source,
+      nullifiers: ticket.nullifiers.map((hex) => hexToBytes(hex)),
+      commitment: new Uint8Array(0),
+      expiresAt: ticket.expires_at,
+      escapeClawbackMist: BigInt(ticket.escape_clawback_mist),
+      bffSig: hexToBytes(ticket.bff_sig),
+    }
+  }
+
   async function handleMintOrUpdateWithTickets(
     tickets: Array<{
       nullifiers: string[]
       bff_sig: string
       expires_at: string
       source: number
+      escape_clawback_mist?: string
     }>,
     owner: string,
     signer: ActiveSigner
@@ -242,73 +276,140 @@ export default function AuthPage() {
 
     try {
       const resolvedPass = activePass ?? (await fetchActivePass(suiClient, owner, registryId))
+      const health = await probeGasSponsorHealth({})
+      // 在 mint 當下重抓額度，避免用過期 state（例如銷毀 Pass 後 count 不會下降，
+      // 舊 state 仍顯示有額度而誤走代付路徑、被後端拒絕後撞死路）。前端與後端共用
+      // 同一鏈上快取，當下重抓即可讓 willSelfPay 與後端代付決策一致。拿不到才退回 state。
+      const quota = (await fetchSponsorQuota()) ?? sponsorQuota
+      const willSelfPay =
+        !health.available || !health.sponsorAddress || (quota != null && quota.remaining <= 0)
+      // 區分自付原因：health 可用且有代付地址、但額度歸零 → 屬「額度上限」；
+      // health 不可用 → 維持「代付失效中」。
+      const limitReachedLocal =
+        health.available && !!health.sponsorAddress && quota != null && quota.remaining <= 0
+
+      const draftTicketFields = (ticket: (typeof tickets)[number]) => ({
+        source: ticket.source,
+        nullifiers: ticket.nullifiers.map((hex) => hexToBytes(hex)),
+        commitment: new Uint8Array(0),
+        expiresAt: ticket.expires_at,
+        escapeClawbackMist: BigInt(ticket.escape_clawback_mist ?? 0),
+        bffSig: hexToBytes(ticket.bff_sig),
+      })
+
+      let tx: Transaction
+      let isSponsored = false
 
       if (resolvedPass) {
-        // 如果 Pass 存在，我們在同一個交易中連續寫入所有 Tickets
-        const tx = new Transaction()
-        const passObj = tx.object(resolvedPass.objectId)
-        for (const ticket of tickets) {
-          const nullifiers = ticket.nullifiers.map((hex) => hexToBytes(hex))
-          const commitment = new Uint8Array(0)
-          const bffSig = hexToBytes(ticket.bff_sig)
+        const ownerAddr = resolvedPass.owner?.toLowerCase()
+        const payerAddr = resolvedPass.depositPayer?.toLowerCase()
+        isSponsored = !!(payerAddr && ownerAddr && payerAddr !== ownerAddr && !willSelfPay)
 
-          tx.moveCall({
+        const txDraft = new Transaction()
+        const passObj = txDraft.object(resolvedPass.objectId)
+        for (const ticket of tickets) {
+          const fields = draftTicketFields(ticket)
+          txDraft.moveCall({
             target: `${packageId}::survey_pass::update_pass_credential`,
             arguments: [
               passObj,
-              tx.object(registryId),
-              tx.object(configId),
-              tx.pure.u8(ticket.source),
-              tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(nullifiers.map((n) => Array.from(n))).toBytes()),
-              tx.pure.vector('u8', Array.from(commitment)),
-              tx.pure.u64(BigInt(ticket.expires_at).toString()),
-              tx.pure.vector('u8', Array.from(bffSig)),
-              tx.object('0x6'), // Clock
+              txDraft.object(registryId),
+              txDraft.object(configId),
+              txDraft.pure.u8(fields.source),
+              txDraft.pure(
+                bcs.vector(bcs.vector(bcs.u8())).serialize(fields.nullifiers.map((n) => Array.from(n))).toBytes()
+              ),
+              txDraft.pure.vector('u8', Array.from(fields.commitment)),
+              txDraft.pure.u64(BigInt(fields.expiresAt).toString()),
+              txDraft.pure.u64(fields.escapeClawbackMist.toString()),
+              txDraft.pure.vector('u8', Array.from(fields.bffSig)),
+              txDraft.object('0x6'),
             ],
           })
         }
 
-        await executeAndBroadcast(tx, owner, signer)
+        if (isSponsored) {
+          const finalized = await finalizeSponsoredPassTx({
+            tx: txDraft,
+            senderAddress: owner,
+            client: suiClient as any,
+          })
+          const rebuilt = new Transaction()
+          const passObjFinal = rebuilt.object(resolvedPass.objectId)
+          finalized.forEach((ticket) => {
+            const fields = ticketFieldsFromFinalized(ticket)
+            rebuilt.moveCall({
+              target: `${packageId}::survey_pass::update_pass_credential`,
+              arguments: [
+                passObjFinal,
+                rebuilt.object(registryId),
+                rebuilt.object(configId),
+                rebuilt.pure.u8(fields.source),
+                rebuilt.pure(
+                  bcs.vector(bcs.vector(bcs.u8())).serialize(fields.nullifiers.map((n) => Array.from(n))).toBytes()
+                ),
+                rebuilt.pure.vector('u8', Array.from(fields.commitment)),
+                rebuilt.pure.u64(BigInt(fields.expiresAt).toString()),
+                rebuilt.pure.u64(fields.escapeClawbackMist.toString()),
+                rebuilt.pure.vector('u8', Array.from(fields.bffSig)),
+                rebuilt.object('0x6'),
+              ],
+            })
+          })
+          tx = rebuilt
+        } else {
+          tx = txDraft
+        }
       } else {
-        const firstTicket = tickets[0]
-        const nullifiers = firstTicket.nullifiers.map((hex) => hexToBytes(hex))
-        const commitment = new Uint8Array(0)
-        const bffSig = hexToBytes(firstTicket.bff_sig)
-
-        const health = await probeGasSponsorHealth({})
-        const willSelfPay =
-          !health.available || !health.sponsorAddress || (sponsorQuota != null && sponsorQuota.remaining <= 0)
         const depositPayer = willSelfPay ? owner : health.sponsorAddress!
+        isSponsored = depositPayer.toLowerCase() !== owner.toLowerCase()
 
+        const firstTicket = draftTicketFields(tickets[0])
         const mintBase = {
           packageId,
           registryId,
           configId,
           owner,
           depositPayer,
-          source: firstTicket.source,
-          nullifiers,
-          commitment,
-          expiresAt: firstTicket.expires_at,
-          bffSig,
+          ...firstTicket,
         }
 
-        const tx =
+        const txDraft =
           tickets.length > 1
             ? buildMintPassWithExtraCredentialsPtb({
                 ...mintBase,
-                extraTickets: tickets.slice(1).map((ticket) => ({
-                  source: ticket.source,
-                  nullifiers: ticket.nullifiers.map((hex) => hexToBytes(hex)),
-                  commitment: new Uint8Array(0),
-                  expiresAt: ticket.expires_at,
-                  bffSig: hexToBytes(ticket.bff_sig),
-                })),
+                extraTickets: tickets.slice(1).map((ticket) => draftTicketFields(ticket)),
               })
             : buildMintPassPtb(mintBase)
 
-        await executeAndBroadcast(tx, owner, signer)
+        if (isSponsored) {
+          const finalized = await finalizeSponsoredPassTx({
+            tx: txDraft,
+            senderAddress: owner,
+            client: suiClient as any,
+          })
+          const primary = ticketFieldsFromFinalized(finalized[0])
+          const rebuiltBase = {
+            packageId,
+            registryId,
+            configId,
+            owner,
+            depositPayer,
+            ...primary,
+          }
+          tx =
+            finalized.length > 1
+              ? buildMintPassWithExtraCredentialsPtb({
+                  ...rebuiltBase,
+                  extraTickets: finalized.slice(1).map((ticket) => ticketFieldsFromFinalized(ticket)),
+                })
+              : buildMintPassPtb(rebuiltBase)
+        } else {
+          tx = txDraft
+        }
       }
+
+      await executeAndBroadcast(tx, owner, signer, isSponsored, limitReachedLocal)
 
       setSuccessMsg(resolvedPass ? t.upgradeSuccess : t.mintSuccess)
 
@@ -324,6 +425,10 @@ export default function AuthPage() {
       }
     } catch (err: any) {
       if (err.message === USER_DECLINED_SELF_PAID) return
+      if (err.message === SPONSOR_TEMPORARILY_UNAVAILABLE) {
+        setErrorMsg(t.mintSponsorUnavailable)
+        return
+      }
       const friendly = translateMoveAbort(err.message)
       setErrorMsg(friendly || err.message || t.authFailed)
     } finally {
@@ -534,7 +639,9 @@ export default function AuthPage() {
   async function offerEscapeHatch() {
     if (!activePass || !activeSigner) return
     const credentialsCount = BigInt(activePass.credentialSources?.length ?? 1)
-    const dynamicFeeMist = REBATE_FEE_FLOOR_MIST * (1n + credentialsCount)
+    const floorFeeMist = REBATE_FEE_FLOOR_MIST * (1n + credentialsCount)
+    const clawbackMist = activePass.escapeClawbackMist ?? 0n
+    const dynamicFeeMist = clawbackMist > floorFeeMist ? clawbackMist : floorFeeMist
     const estSui = (Number(dynamicFeeMist) / 1_000_000_000).toFixed(4)
     const ok = window.confirm(t.deleteEscapeHatchPrompt(estSui))
     if (!ok) {

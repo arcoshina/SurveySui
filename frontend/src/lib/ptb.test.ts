@@ -1,14 +1,34 @@
 import { describe, expect, it } from 'vitest'
-import { estimateFundCostV2, SSR_BASE_PER_UNIT } from './ptb'
+import {
+  SSR_BASE_PER_UNIT,
+  computeSsrOut,
+  estimateFundCostV2,
+  invertSuiForMint,
+} from './ptb'
 
 const DEFAULT_FEE = { totalFeeBps: 2000n, discountBps: 5000n }
+
+describe('computeSsrOut / invertSuiForMint', () => {
+  it('bootstrap: 1 SUI mints 1000 SSR', () => {
+    const oneSui = 1_000_000_000n
+    const out = computeSsrOut(oneSui, 0n, 0n)
+    expect(out).toBe(1_000n * SSR_BASE_PER_UNIT)
+    expect(invertSuiForMint(out, 0n, 0n)).toBe(oneSui)
+  })
+
+  it('ratio mint matches spec example', () => {
+    const out = computeSsrOut(1_000_000_000n, 10_000_000_000n, 5_000_000_000n)
+    expect(out).toBe(500n * SSR_BASE_PER_UNIT)
+  })
+})
 
 describe('estimateFundCostV2 (additive royalty on reward budget)', () => {
   it('charges 10% on net budget and gross = net + fee', () => {
     const est = estimateFundCostV2({
       perResponse: 10n,
       maxResponses: 100,
-      totalSuiInvested: 0n,
+      suiReserve: 0n,
+      srReserve: 0n,
       feeConfig: DEFAULT_FEE,
       creatorSsrBalance: 0n,
     })
@@ -21,6 +41,9 @@ describe('estimateFundCostV2 (additive royalty on reward budget)', () => {
     expect(est.grossSsrBase).toBe(net + fee)
     expect(est.offsetIn).toBe(0n)
     expect(est.minted).toBe(net + fee)
+    expect(est.suiToInvest).toBe(
+      invertSuiForMint(net + fee, 0n, 0n),
+    )
   })
 
   it('includes repeat rewards in net and fee base', () => {
@@ -29,7 +52,8 @@ describe('estimateFundCostV2 (additive royalty on reward budget)', () => {
       repeatReward: 2n,
       repeatMaxTimes: 3,
       maxResponses: 10,
-      totalSuiInvested: 0n,
+      suiReserve: 0n,
+      srReserve: 0n,
       feeConfig: DEFAULT_FEE,
       creatorSsrBalance: 0n,
     })
@@ -45,7 +69,8 @@ describe('estimateFundCostV2 (additive royalty on reward budget)', () => {
     const est = estimateFundCostV2({
       perResponse: 1n,
       maxResponses: 10,
-      totalSuiInvested: 0n,
+      suiReserve: 0n,
+      srReserve: 0n,
       feeConfig: DEFAULT_FEE,
       creatorSsrBalance: 20n * SSR_BASE_PER_UNIT,
     })
@@ -59,7 +84,8 @@ describe('estimateFundCostV2 (additive royalty on reward budget)', () => {
     const est = estimateFundCostV2({
       perResponse: 100n,
       maxResponses: 1,
-      totalSuiInvested: 0n,
+      suiReserve: 0n,
+      srReserve: 0n,
       feeConfig: { totalFeeBps: 500n, discountBps: 8000n },
       creatorSsrBalance: 0n,
     })
@@ -68,5 +94,22 @@ describe('estimateFundCostV2 (additive royalty on reward budget)', () => {
     expect(est.effectiveFeeBps).toBe(400n)
     expect(est.feeBase).toBe((net * 400n) / 10000n)
     expect(est.grossSsrBase).toBe(net + est.feeBase)
+  })
+
+  it('inverts mint cost from pool reserves', () => {
+    const minted = 500n * SSR_BASE_PER_UNIT
+    const suiReserve = 10_000_000_000n
+    const srReserve = 5_000_000_000n
+    const est = estimateFundCostV2({
+      perResponse: 500n,
+      maxResponses: 1,
+      suiReserve,
+      srReserve,
+      feeConfig: { totalFeeBps: 0n, discountBps: 0n },
+      creatorSsrBalance: 0n,
+    })
+    expect(est.minted).toBe(minted)
+    expect(est.suiToInvest).toBe(invertSuiForMint(minted, suiReserve, srReserve))
+    expect(computeSsrOut(est.suiToInvest, suiReserve, srReserve)).toBeGreaterThanOrEqual(minted)
   })
 })

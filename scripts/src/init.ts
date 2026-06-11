@@ -32,6 +32,14 @@ try {
   console.warn('Failed to load root .env file:', e)
 }
 
+function parseEnvU64(name: string, fallback: bigint): bigint {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  const cleaned = raw.replace(/_/g, '').replace(/,/g, '').trim()
+  if (!/^\d+$/.test(cleaned)) return fallback
+  return BigInt(cleaned)
+}
+
 // ── types ─────────────────────────────────────────────────────────────────────
 
 /** Fully-resolved object reference for `tx.receivingRef`. */
@@ -48,6 +56,8 @@ export interface DeployResult {
   surveyRegistryId: string
   nullifierRegistryId: string
   issuerConfigId: string
+  voidNftId: string
+  claimPassSentinelId: string
   srCurrency: ObjectRef
   ssrCurrency: ObjectRef
 }
@@ -212,6 +222,8 @@ export async function deployPackage(
   let surveyRegistryId = ''
   let nullifierRegistryId = ''
   let issuerConfigId = ''
+  let voidNftId = ''
+  let claimPassSentinelId = ''
 
   for (const change of result.objectChanges ?? []) {
     if (change.type === 'published') {
@@ -227,6 +239,10 @@ export async function deployPackage(
         nullifierRegistryId = change.objectId
       if (change.objectType.includes('::survey_pass::IssuerConfig'))
         issuerConfigId = change.objectId
+      if (change.objectType.endsWith('::claim_sentinel::VoidNft')) voidNftId = change.objectId
+      // publish 交易中唯一的 SurveyPass 就是 survey_pass::init 的 padding sentinel
+      if (change.objectType.endsWith('::survey_pass::SurveyPass'))
+        claimPassSentinelId = change.objectId
     }
   }
 
@@ -244,6 +260,8 @@ export async function deployPackage(
     !surveyRegistryId ||
     !nullifierRegistryId ||
     !issuerConfigId ||
+    !voidNftId ||
+    !claimPassSentinelId ||
     !srCurrency ||
     !ssrCurrency
   ) {
@@ -251,6 +269,7 @@ export async function deployPackage(
       `Deploy incomplete. packageId="${packageId}" srTreasuryId="${srTreasuryId}" ` +
         `ssrTreasuryId="${ssrTreasuryId}" surveyRegistryId="${surveyRegistryId}" ` +
         `nullifierRegistryId="${nullifierRegistryId}" issuerConfigId="${issuerConfigId}" ` +
+        `voidNftId="${voidNftId}" claimPassSentinelId="${claimPassSentinelId}" ` +
         `srCurrency=${srCurrency?.objectId ?? 'missing'} ssrCurrency=${ssrCurrency?.objectId ?? 'missing'}`
     )
   }
@@ -264,6 +283,8 @@ export async function deployPackage(
   console.log(`  surveyRegistryId:     ${surveyRegistryId}`)
   console.log(`  nullifierRegistryId:  ${nullifierRegistryId}`)
   console.log(`  issuerConfigId:       ${issuerConfigId}`)
+  console.log(`  voidNftId:            ${voidNftId}`)
+  console.log(`  claimPassSentinelId:  ${claimPassSentinelId}`)
   console.log(`  srCurrencyId:         ${srCurrency.objectId}`)
   console.log(`  ssrCurrencyId:        ${ssrCurrency.objectId}`)
   return {
@@ -273,43 +294,110 @@ export async function deployPackage(
     surveyRegistryId,
     nullifierRegistryId,
     issuerConfigId,
+    voidNftId,
+    claimPassSentinelId,
     srCurrency,
     ssrCurrency,
   }
 }
 
+export interface ProtocolPoolInitResult {
+  poolId: string
+  protocolConfigId: string
+}
+
 /**
- * Call `amm_pool::init_pool(admin)` to create and share the bonding-curve pool.
- * The pool starts empty — no initial liquidity required.
- * Returns the created Pool object ID.
+ * Create shared `ProtocolConfig` and bootstrap the canonical bonding-curve pool.
+ * Replaces deprecated `amm_pool::init_pool`.
  */
+export async function initProtocolAndCanonicalPool(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  packageId: string,
+  adminAddress: string
+): Promise<ProtocolPoolInitResult> {
+  console.log('Creating ProtocolConfig…')
+  const configTx = new Transaction()
+  configTx.moveCall({
+    target: `${packageId}::amm_pool::create_protocol_config`,
+    arguments: [],
+  })
+  const configResult = await client.signAndExecuteTransaction({
+    transaction: configTx,
+    signer: keypair,
+    options: { showObjectChanges: true, showEffects: true },
+  })
+  await client.waitForTransaction({ digest: configResult.digest, timeout: 120_000 })
+
+  let protocolConfigId: string | null = null
+  for (const change of configResult.objectChanges ?? []) {
+    if (change.type === 'created' && change.objectType.includes('amm_pool::ProtocolConfig')) {
+      protocolConfigId = change.objectId
+      break
+    }
+  }
+  if (!protocolConfigId) {
+    throw new Error('ProtocolConfig object not found in transaction result')
+  }
+  console.log(`  protocolConfigId: ${protocolConfigId}`)
+
+  const minGasComp = parseEnvU64('MIN_GAS_COMPENSATION_AMOUNT', 100_000_000n)
+  const purgeBatch = parseEnvU64('PURGE_ANSWERS_BATCH', 100n)
+  console.log(
+    `Configuring protocol limits (min_gas_compensation=${minGasComp}, purge_batch=${purgeBatch})…`
+  )
+  const limitsTx = new Transaction()
+  limitsTx.moveCall({
+    target: `${packageId}::amm_pool::configure_protocol_limits`,
+    arguments: [
+      limitsTx.object(protocolConfigId),
+      limitsTx.pure.u64(minGasComp.toString()),
+      limitsTx.pure.u64(purgeBatch.toString()),
+    ],
+  })
+  const limitsResult = await client.signAndExecuteTransaction({
+    transaction: limitsTx,
+    signer: keypair,
+    options: { showEffects: true },
+  })
+  await client.waitForTransaction({ digest: limitsResult.digest, timeout: 120_000 })
+
+  console.log('Bootstrapping canonical AMM pool…')
+  const poolTx = new Transaction()
+  poolTx.moveCall({
+    target: `${packageId}::amm_pool::bootstrap_canonical_pool`,
+    arguments: [poolTx.object(protocolConfigId), poolTx.pure.address(adminAddress)],
+  })
+  const poolResult = await client.signAndExecuteTransaction({
+    transaction: poolTx,
+    signer: keypair,
+    options: { showObjectChanges: true, showEffects: true },
+  })
+  await client.waitForTransaction({ digest: poolResult.digest, timeout: 120_000 })
+
+  let poolId: string | null = null
+  for (const change of poolResult.objectChanges ?? []) {
+    if (change.type === 'created' && change.objectType.includes('amm_pool::Pool')) {
+      poolId = change.objectId
+      break
+    }
+  }
+  if (!poolId) {
+    throw new Error('AMM Pool object not found in bootstrap transaction result')
+  }
+  console.log(`  poolId: ${poolId}`)
+  return { poolId, protocolConfigId }
+}
+
+/** @deprecated Use `initProtocolAndCanonicalPool`. Kept for tests importing pool id only. */
 export async function initAmmPool(
   client: SuiClient,
   keypair: Ed25519Keypair,
   packageId: string,
   adminAddress: string
 ): Promise<string> {
-  console.log('Initialising AMM bonding-curve pool…')
-  const tx = new Transaction()
-  tx.moveCall({
-    target: `${packageId}::amm_pool::init_pool`,
-    arguments: [tx.pure.address(adminAddress)],
-  })
-
-  const result = await client.signAndExecuteTransaction({
-    transaction: tx,
-    signer: keypair,
-    options: { showObjectChanges: true, showEffects: true },
-  })
-  await client.waitForTransaction({ digest: result.digest, timeout: 120_000 })
-
-  for (const change of result.objectChanges ?? []) {
-    if (change.type === 'created' && change.objectType.includes('amm_pool::Pool')) {
-      console.log(`  poolId: ${change.objectId}`)
-      return change.objectId
-    }
-  }
-  throw new Error('AMM Pool object not found in transaction result')
+  const { poolId } = await initProtocolAndCanonicalPool(client, keypair, packageId, adminAddress)
+  return poolId
 }
 
 /**
@@ -318,7 +406,7 @@ export async function initAmmPool(
 export async function queryPoolState(
   client: SuiClient,
   poolId: string
-): Promise<{ suiReserve: bigint; srReserve: bigint; totalSuiInvested: bigint }> {
+): Promise<{ suiReserve: bigint; srReserve: bigint; spotMistPerSsrBase: number }> {
   const obj = await client.getObject({ id: poolId, options: { showContent: true } })
   if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') {
     throw new Error(`Pool object ${poolId} not found or not a Move object`)
@@ -326,8 +414,11 @@ export async function queryPoolState(
   const f = obj.data.content.fields as Record<string, unknown>
   const suiReserve = BigInt(f.sui_reserve as string | number)
   const srReserve = BigInt(f.sr_reserve as string | number)
-  const totalSuiInvested = BigInt(f.total_sui_invested as string)
-  return { suiReserve, srReserve, totalSuiInvested }
+  const spotMistPerSsrBase =
+    suiReserve === 0n || srReserve === 0n
+      ? 1
+      : Number(suiReserve) / Number(srReserve)
+  return { suiReserve, srReserve, spotMistPerSsrBase }
 }
 
 /**
@@ -362,6 +453,8 @@ async function main() {
     surveyRegistryId,
     nullifierRegistryId,
     issuerConfigId,
+    voidNftId,
+    claimPassSentinelId,
     srCurrency,
     ssrCurrency,
   } = await deployPackage(client, keypair, adminAddress)
@@ -369,8 +462,13 @@ async function main() {
   // 2. Promote OTW Currency objects into CoinRegistry (wallet metadata discoverability)
   await finalizeCurrencyRegistration(client, keypair, packageId, srCurrency, ssrCurrency)
 
-  // 3. Init AMM pool (empty bonding-curve pool; no initial liquidity required)
-  const poolId = await initAmmPool(client, keypair, packageId, adminAddress)
+  // 3. ProtocolConfig + canonical AMM pool (empty at start; no initial liquidity required)
+  const { poolId, protocolConfigId } = await initProtocolAndCanonicalPool(
+    client,
+    keypair,
+    packageId,
+    adminAddress
+  )
 
   // 4. Set Issuer Pubkey in IssuerConfig
   let issuerPrivHex = process.env.SURVEY_PASS_ISSUER_PRIV
@@ -404,9 +502,12 @@ async function main() {
     SR_TREASURY_ID: srTreasuryId,
     SSR_TREASURY_ID: ssrTreasuryId,
     AMM_POOL_ID: poolId,
+    PROTOCOL_CONFIG_ID: protocolConfigId,
     SURVEY_REGISTRY_ID: surveyRegistryId,
     PASS_REGISTRY_ID: nullifierRegistryId,
     ISSUER_CONFIG_ID: issuerConfigId,
+    VOID_NFT_ID: voidNftId,
+    CLAIM_PASS_SENTINEL_ID: claimPassSentinelId,
   })
 
 
@@ -414,9 +515,9 @@ async function main() {
   // 6. Verify pool is live
   const state = await queryPoolState(client, poolId)
   console.log(`\nPool verified (empty at start):`)
-  console.log(`  sui_reserve:        ${state.suiReserve}`)
-  console.log(`  sr_reserve:         ${state.srReserve}`)
-  console.log(`  total_sui_invested: ${state.totalSuiInvested}`)
+  console.log(`  sui_reserve:          ${state.suiReserve}`)
+  console.log(`  sr_reserve:           ${state.srReserve}`)
+  console.log(`  spot_MIST/SSR_base:   ${state.spotMistPerSsrBase}`)
   console.log('\nDeployment complete!')
 }
 

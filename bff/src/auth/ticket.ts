@@ -8,6 +8,7 @@ export const TicketPayload = bcs.struct('TicketPayload', {
   nullifiers: bcs.vector(bcs.vector(bcs.u8())),
   commitment: bcs.vector(bcs.u8()),
   expires_at: bcs.u64(),
+  escape_clawback_mist: bcs.u64(),
 })
 const SRC_EMAIL = 2
 const SRC_SOCIAL = 3
@@ -63,8 +64,9 @@ export async function signTicket(
   source: number,
   nullifiers: Uint8Array[],
   commitment: Uint8Array,
-  expiresAtMs: number
-): Promise<{ bff_sig: string; expires_at: string; nullifiers: string[] }> {
+  expiresAtMs: number,
+  escapeClawbackMist: bigint = 0n
+): Promise<{ bff_sig: string; expires_at: string; nullifiers: string[]; escape_clawback_mist: string }> {
   const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
   if (!privKeyHex) {
     throw new Error('SURVEY_PASS_ISSUER_PRIV is not set')
@@ -74,17 +76,20 @@ export async function signTicket(
   const keypairBytes = privateKeyBytes.slice(0, 32)
   const keypair = Ed25519Keypair.fromSecretKey(keypairBytes)
   const expires_at = BigInt(expiresAtMs).toString()
+  const escape_clawback_mist = escapeClawbackMist.toString()
   const payloadBytes = TicketPayload.serialize({
     owner,
     source,
     nullifiers: nullifiers.map((n) => Array.from(n)),
     commitment: Array.from(commitment),
     expires_at,
+    escape_clawback_mist,
   }).toBytes()
   const signatureBytes = await keypair.sign(payloadBytes)
   return {
     bff_sig: Buffer.from(signatureBytes).toString('hex'),
     expires_at,
     nullifiers: nullifiers.map((n) => Buffer.from(n).toString('hex')),
+    escape_clawback_mist,
   }
 }

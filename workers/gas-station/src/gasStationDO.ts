@@ -1,9 +1,13 @@
 import { SuiClient } from '@mysten/sui/client'
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import {
   checkAndMergeCoins,
   createSponsorSignerFromEnv,
+  keypairFromHex,
   loadGasConfig,
   runSponsorPipeline,
+  validateSponsorTransaction,
+  verifyGasStationSignature,
   type SponsorPipelineContext,
   type SponsorSigner,
 } from '@surveysui/gas-station-core'
@@ -15,7 +19,8 @@ export interface SponsorRequestBody {
   txBytes: string
   senderAddress: string
   requestId?: string
-  pipelineContext: SponsorPipelineContext
+  /** Ignored — DO re-derives from txBytes via validateSponsorTransaction. */
+  pipelineContext?: SponsorPipelineContext
 }
 
 type DoMetrics = {
@@ -67,12 +72,40 @@ export class GasStationDO implements DurableObject {
       return new Response('Not found', { status: 404 })
     }
 
-    const body = (await request.json()) as SponsorRequestBody
+    const rawBody = await request.text()
+    const authError = this.verifyRequestAuth(request, rawBody)
+    if (authError) {
+      return Response.json({ error: 'unauthorized', message: authError }, { status: 401 })
+    }
+
+    let body: SponsorRequestBody
+    try {
+      body = JSON.parse(rawBody) as SponsorRequestBody
+    } catch {
+      return Response.json({ error: 'invalid_json', message: 'Malformed JSON body' }, { status: 400 })
+    }
+
     return new Promise<Response>((resolve) => {
       this.pending.push({ body, resolve })
       this.metrics.queueDepth = this.pending.length
       void this.drainQueue()
     })
+  }
+
+  private verifyRequestAuth(request: Request, rawBody: string): string | null {
+    const secret = this.env.GAS_STATION_SHARED_SECRET?.trim()
+    if (!secret) {
+      return 'GAS_STATION_SHARED_SECRET is not configured'
+    }
+    const timestamp = request.headers.get('x-gas-station-timestamp')
+    const signature = request.headers.get('x-gas-station-signature')
+    if (!timestamp || !signature) {
+      return 'Missing HMAC headers'
+    }
+    if (!verifyGasStationSignature(secret, timestamp, rawBody, signature)) {
+      return 'Invalid or expired HMAC signature'
+    }
+    return null
   }
 
   async alarm(): Promise<void> {
@@ -95,6 +128,12 @@ export class GasStationDO implements DurableObject {
 
   private loadSponsorSigner(): SponsorSigner | null {
     return createSponsorSignerFromEnv(toSponsorSignerEnv(this.env))
+  }
+
+  private loadTicketIssuerKeypair(): Ed25519Keypair | null {
+    const privKeyHex = this.env.SURVEY_PASS_ISSUER_PRIV?.trim()
+    if (!privKeyHex) return null
+    return keypairFromHex(privKeyHex)
   }
 
   private async drainQueue(): Promise<void> {
@@ -124,9 +163,45 @@ export class GasStationDO implements DurableObject {
       return Response.json({ error: 'no_key', message: 'Sponsor key not configured' }, { status: 503 })
     }
 
+    const packageId = this.env.SUI_PACKAGE_ID?.trim()
+    if (!packageId) {
+      return Response.json(
+        { error: 'misconfigured', message: 'SUI_PACKAGE_ID is not configured' },
+        { status: 503 }
+      )
+    }
+
+    const ticketIssuerKeypair = this.loadTicketIssuerKeypair()
+    if (!ticketIssuerKeypair) {
+      return Response.json(
+        { error: 'misconfigured', message: 'SURVEY_PASS_ISSUER_PRIV is not configured' },
+        { status: 503 }
+      )
+    }
+
     const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
     const sponsorAddress = signer.getSponsorAddress()
     const suiClient = new SuiClient({ url: this.env.SUI_RPC_URL })
+
+    const validation = await validateSponsorTransaction({
+      txBytes: body.txBytes,
+      senderAddress: body.senderAddress,
+      packageId,
+      sponsorAddress,
+      suiClient,
+      ticketIssuerKeypair,
+      options: {
+        enforcePassLimit: false,
+        enforcePlatformQuota: false,
+        enforcePlatformTier: false,
+      },
+    })
+    if (!validation.ok) {
+      return Response.json(
+        { error: validation.error, message: validation.message },
+        { status: validation.status }
+      )
+    }
 
     const outcome = await runSponsorPipeline({
       txBytes: body.txBytes,
@@ -136,7 +211,7 @@ export class GasStationDO implements DurableObject {
       sponsorAddress,
       coinStore: this.coinStore,
       gasConfig,
-      context: body.pipelineContext,
+      context: validation.pipelineContext,
       requestId: body.requestId,
     })
 

@@ -11,13 +11,15 @@ import {
 import { parseFrontmatter, parseFullSurveyMarkdown, serializeFullSurveyToMarkdown, type QuestionType } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import {
+  SSR_BASE_PER_UNIT,
   buildCreateSurveyPtb,
+  computeSsrOut,
   estimateFundCostV2,
   extractSurveyIdFromEffects,
   extractVaultIdFromEffects,
 } from '../lib/ptb'
 import { getTicketFeeMist } from '../lib/ticketFee'
-import { formatSsr, formatSui, formatFullPrecision } from '../lib/format'
+import { formatSsr, formatSui, formatFullPrecision, formatSuiFullPrecision } from '../lib/format'
 import {
   KEY_DERIVE_MSG,
   buildCreatorPubKey,
@@ -34,6 +36,7 @@ import { uploadToDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 const POOL_ID = import.meta.env.VITE_AMM_POOL_ID ?? ''
+const PROTOCOL_CONFIG_ID = import.meta.env.VITE_PROTOCOL_CONFIG_ID ?? ''
 const SR_TREASURY_ID = import.meta.env.VITE_SR_TREASURY_ID ?? ''
 const SSR_TREASURY_ID = import.meta.env.VITE_SSR_TREASURY_ID ?? ''
 const SURVEY_REGISTRY_ID = import.meta.env.VITE_SURVEY_REGISTRY_ID ?? ''
@@ -42,7 +45,7 @@ const ADMIN_TREASURY = import.meta.env.VITE_ADMIN_ADDRESS ?? ''
 const DRAFT_KEY_PREFIX = 'surveysui:draft:'
 const SURVEY_KEY_PREFIX = 'surveysui:survey:'
 
-/** Slippage buffer: invest 1% more SUI than the curve says, in case `total_sui_invested` shifts. */
+/** Slippage buffer: invest 1% more SUI than estimated, in case pool reserves shift. */
 const SLIPPAGE_NUMER = 101n
 const SLIPPAGE_DENOM = 100n
 
@@ -121,19 +124,23 @@ export default function FundPage() {
     return ssrCoins.reduce((sum, c) => sum + BigInt(c.balance), 0n)
   }, [ssrCoins])
 
-  const totalSuiInvested = useMemo<bigint>(() => {
-    if (poolData?.data?.content?.dataType !== 'moveObject') return 0n
+  const poolReserves = useMemo(() => {
+    if (poolData?.data?.content?.dataType !== 'moveObject') {
+      return { suiReserve: 0n, srReserve: 0n }
+    }
     const fields = (poolData.data.content as { fields: Record<string, string> }).fields
-    return BigInt(fields.total_sui_invested ?? '0')
+    return {
+      suiReserve: BigInt(fields.sui_reserve ?? '0'),
+      srReserve: BigInt(fields.sr_reserve ?? '0'),
+    }
   }, [poolData])
 
   const currentRate = useMemo(() => {
-    const decay = 1_000_000_000_000n
-    const initialSsrPerSui = 1000n
-    const numer = Number(initialSsrPerSui * decay)
-    const denom = Number(decay + totalSuiInvested)
-    return numer / denom
-  }, [totalSuiInvested])
+    const { suiReserve, srReserve } = poolReserves
+    const oneSui = 1_000_000_000n
+    const ssrBase = computeSsrOut(oneSui, suiReserve, srReserve)
+    return Number(ssrBase) / Number(SSR_BASE_PER_UNIT)
+  }, [poolReserves])
 
   const feeConfig = useMemo(() => {
     if (poolData?.data?.content?.dataType !== 'moveObject') {
@@ -157,11 +164,12 @@ export default function FundPage() {
       repeatReward: BigInt(frontmatter.data.repeatReward),
       repeatMaxTimes: frontmatter.data.repeatMaxTimes,
       maxResponses: frontmatter.data.maxResponses,
-      totalSuiInvested,
+      suiReserve: poolReserves.suiReserve,
+      srReserve: poolReserves.srReserve,
       feeConfig,
       creatorSsrBalance,
     })
-  }, [frontmatter, totalSuiInvested, feeConfig, creatorSsrBalance])
+  }, [frontmatter, poolReserves, feeConfig, creatorSsrBalance])
 
   const suiToSpend = cost ? (cost.suiToInvest * SLIPPAGE_NUMER) / SLIPPAGE_DENOM : null
 
@@ -394,6 +402,7 @@ export default function FundPage() {
       return buildCreateSurveyPtb({
         packageId: PACKAGE_ID,
         poolId: POOL_ID,
+        protocolConfigId: PROTOCOL_CONFIG_ID,
         srTreasuryId: SR_TREASURY_ID,
         ssrTreasuryId: SSR_TREASURY_ID,
         registryId: SURVEY_REGISTRY_ID,
@@ -405,6 +414,7 @@ export default function FundPage() {
         deadlineMs: BigInt(params.deadlineMs),
         encryptedContent: surveyBlobId ? new Uint8Array(0) : encryptedBlob,
         suiToSpend,
+        minSsrOut: cost.minted > 0n ? (cost.minted * 99n) / 100n : 1n,
         contentHash,
         schemaHash,
         creatorPubKey: creatorPubKeyForChain,
@@ -819,7 +829,7 @@ export default function FundPage() {
                       </div>
                     </div>
                   </div>
-                  <span className="font-semibold text-slate-700 dark:text-neutral-300" title={suiToSpend !== null ? `${formatFullPrecision(suiToSpend)} SUI` : undefined}>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300" title={suiToSpend !== null ? `${formatSuiFullPrecision(suiToSpend)} SUI` : undefined}>
                     {suiToSpend !== null ? `${sui(suiToSpend)} SUI` : t.calculating}
                   </span>
                 </div>
@@ -836,7 +846,7 @@ export default function FundPage() {
                         </div>
                       </div>
                     </div>
-                    <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatFullPrecision(requiredGas)} SUI`}>
+                    <span className="font-semibold text-slate-700 dark:text-neutral-300" title={`${formatSuiFullPrecision(requiredGas)} SUI`}>
                       {sui(requiredGas)} SUI
                     </span>
                   </div>
@@ -861,7 +871,7 @@ export default function FundPage() {
                 fullValue = `${formatFullPrecision(cost!.offsetIn)} SSR`
               } else {
                 mainValue = `${sui(totalSuiToSpend)} SUI`
-                fullValue = `${formatFullPrecision(totalSuiToSpend)} SUI`
+                fullValue = `${formatSuiFullPrecision(totalSuiToSpend)} SUI`
               }
               return (
                 <div className={cardClass}>

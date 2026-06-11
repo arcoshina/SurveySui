@@ -4,17 +4,12 @@ import type { SuiClient } from '@mysten/sui/client'
 export interface BuildPurgePtbParams {
   packageId: string
   registryId: string
+  protocolConfigId: string
   surveyId: string
   vaultId: string
   /** When set with transferAmount, rebate is split from gas and sent to creator. */
   creator?: string
   transferAmount?: bigint
-}
-
-export function normalizeAddress(addr: string): string {
-  let clean = addr.toLowerCase()
-  if (clean.startsWith('0x')) clean = clean.slice(2)
-  return '0x' + clean.padStart(64, '0')
 }
 
 export function appendPurgeMoveCall(tx: Transaction, p: BuildPurgePtbParams): void {
@@ -24,6 +19,7 @@ export function appendPurgeMoveCall(tx: Transaction, p: BuildPurgePtbParams): vo
       tx.object(p.registryId),
       tx.object(p.surveyId),
       tx.object(p.vaultId),
+      tx.object(p.protocolConfigId),
       tx.object('0x6'),
     ],
   })

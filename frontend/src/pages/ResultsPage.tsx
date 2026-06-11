@@ -12,6 +12,7 @@ import {
   type DecryptedResponse,
 } from '../lib/dashboardDecrypt'
 import { parseFullSurveyMarkdown, type Question, type FullSurveyData, sanitizeQuestionIds } from '../lib/frontmatter'
+import { parseContentBlob } from '../lib/crypto'
 import { normalizeBytes, bytesToHex } from '../lib/answerCodec'
 import { useT } from '../i18n'
 import { downloadFromDecentralizedStorage } from '../lib/storage'
@@ -216,9 +217,10 @@ export default function ResultsPage() {
           rawContent = encryptedContentBytes
         }
 
-        if (rawContent.length >= 32) {
-          const md = new TextDecoder().decode(rawContent.slice(32))
-          const parsed = parseFullSurveyMarkdown(md)
+        const parsedBlob = parseContentBlob(rawContent)
+        if (parsedBlob.version === 0x00) {
+          // 公開問卷 (明文)：與 SurveyPage 走同一條解析路徑
+          const parsed = parseFullSurveyMarkdown(parsedBlob.markdown || '')
           if (parsed.ok) {
             setQuestions(sanitizeQuestionIds(parsed.data.questions))
             applyMeta(parsed.data)
@@ -226,6 +228,17 @@ export default function ResultsPage() {
               setSurveyTitle(parsed.data.title)
             }
           }
+        } else {
+          // 加密／legacy：結果頁只服務公開問卷，標記為加密以顯示警告畫面、不抓事件
+          setSurveyMeta({
+            allowedSources: [],
+            allowedNftType: null,
+            repeatReward: 0,
+            repeatMaxTimes: 0,
+            perResponse: 0,
+            deadlineMs: 0,
+            encryptAnswers: true,
+          })
         }
       } catch (err) {
         console.error('[ResultsPage] Failed to parse survey questions:', err)

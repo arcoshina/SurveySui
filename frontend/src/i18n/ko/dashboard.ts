@@ -44,7 +44,7 @@ const dashboard: DashboardDict = {
   purgeLabel: '데이터 삭제',
   purgeNoticeAt: (ts: string) => `답변 데이터와 문항은 ${ts}에 영구 삭제되며 복구할 수 없습니다.`,
   closeAndPurgeNotice: (days: number) =>
-    `종료 후 미사용 SSR과 Gas는 지갑으로 환불됩니다. 삭제 시 문항과 답변이 영구 삭제되며, 온체인 스토리지 리베이트가 환불됩니다. 종료 후 ${days}일이 지나도 삭제하지 않으면 시스템이 자동 삭제하며, gas와 50% 수수료가 차감됩니다.`,
+    `종료 후 미사용 SSR과 Gas는 지갑으로 환불됩니다. 삭제 시 문항과 답변이 영구 삭제되며, 온체인 스토리지 리베이트가 환불됩니다. 마감 시간 이후 ${days}일이 지나도 삭제하지 않으면 시스템이 자동 삭제하며, gas와 50% 수수료를 부과합니다.`,
   listPurgeReminder: (days: number) => `설문 종료 ${days}일 후 모든 답변 및 질문은 자동으로 영구 삭제됩니다. 기한 전에 필요한 결과를 내보내기 해주세요.`,
   vaultLabel: 'Vault ID',
   deadlineLabel: '마감 시간',

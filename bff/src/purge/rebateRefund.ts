@@ -1,6 +1,7 @@
 import { Transaction } from '@mysten/sui/transactions'
 import type { SuiClient } from '@mysten/sui/client'
 import type { SponsorSigner } from '@surveysui/gas-station-core'
+import { normalizeAddress } from '@surveysui/gas-station-core'
 import {
   applyCreatorRebateShare,
   computeRebateSurplus,
@@ -11,7 +12,6 @@ import {
 import {
   buildPurgePtb,
   DEFAULT_GAS_BUDGET_CAP_MIST,
-  normalizeAddress,
   prepareGasPayment,
   type BuildPurgePtbParams,
 } from './buildPurgePtb.js'
@@ -31,6 +31,7 @@ export interface PurgeWithRebateResult {
 export interface PurgePtbIds {
   packageId: string
   registryId: string
+  protocolConfigId: string
   surveyId: string
   vaultId: string
 }

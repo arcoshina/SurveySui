@@ -64,6 +64,7 @@ const auth: AuthDict = {
   deleteSuccess: 'SurveyPass shredded from chain. All PII has been removed!',
   txFailed: 'Transaction failed',
   authFailed: 'Verification or transaction send failed',
+  mintSponsorUnavailable: 'Gas sponsorship is temporarily unavailable. Please try again later.',
   upgradeSuccess: 'SurveyPass updated successfully!',
   mintSuccess: 'SurveyPass minted successfully!',
   destroyFailed: 'Failed to shred SurveyPass',

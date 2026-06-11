@@ -10,6 +10,7 @@ export interface SurveyPassData {
   expiresAt: number
   credentialSources: number[]
   createdAt: number
+  escapeClawbackMist: bigint
 }
 
 // 證件夾內單一憑證（鏈上 CredentialSlot dynamic field）的展示用資料。
@@ -42,7 +43,7 @@ export function getSourceTier(source: number): number {
       return 2
     case 5: // SRC_WORLD_ID
       return 2
-    case 8: // SRC_ATTRIBUTES — no tier; audience via claim_v2
+    case 8: // SRC_ATTRIBUTES — no tier; audience via unified claim + eligibility
       return 0
     default:
       return 0
@@ -204,6 +205,7 @@ export async function fetchActivePass(
             expiresAt: 0,
             credentialSources: fields.credential_sources || [],
             createdAt: Number(fields.created_at ?? 0),
+            escapeClawbackMist: BigInt(fields.escape_clawback_mist ?? 0),
           }
           console.log('[fetchActivePass] step4 ok — returning pass', result)
           return result
