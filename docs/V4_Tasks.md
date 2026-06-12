@@ -50,7 +50,10 @@
 - [x] 修正在代付 Pass 中不能掛自付 credencial 的限制_opus  
 - [x] 準備上線步驟文件_gemini  
 - [x] 處理部屬合約時的無引用參數警告3、4_opus  
-- [ ] 
+- [x] 修正 Pass 中 nulifier slot 的邏輯錯誤_opus  
+- [x] 清理測試遺留雜碼_opus  
+- [x] 首頁說明文件架構重構
+- [ ] 補足說明文件
 
 
 ### 2026/6/11
