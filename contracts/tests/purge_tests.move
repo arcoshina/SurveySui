@@ -308,7 +308,7 @@ fun register_survey_non_creator_aborts() {
 
     ts::next_tx(&mut sc, CREATOR);
     let clk = clock::create_for_testing(ts::ctx(&mut sc));
-    let mut registry = ts::take_shared<SurveyRegistry>(&sc);
+    let registry = ts::take_shared<SurveyRegistry>(&sc);
     let config = ts::take_shared<ProtocolConfig>(&sc);
     let gas = coin::zero<SUI>(ts::ctx(&mut sc));
     let vault = survey_vault::create_empty(

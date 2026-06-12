@@ -819,17 +819,6 @@ public fun update_credential_for_testing(
     apply_credential_slot(pass, source, nullifiers, expires_at, clock);
 }
 #[test_only]
-fun test_nullifier_byte(seed: u8): vector<u8> {
-    let mut v = vector<u8>[];
-    let mut i = 0u8;
-    while (i < 32) {
-        vector::push_back(&mut v, seed + i);
-        i = i + 1;
-    };
-    v
-}
-
-#[test_only]
 public fun create_for_testing(
     owner: address,
     expires_at: u64,
