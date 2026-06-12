@@ -85,6 +85,7 @@ function moveCallCreateEmptyVault(
       tx.pure.u64(0),
       tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(opts.allowedNftType).toBytes()),
       tx.object(opts.protocolConfigId),
+      tx.object('0x6'),
     ],
   })
 }

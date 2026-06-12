@@ -12,7 +12,9 @@ use surveysui::survey_registry::{Self, SurveyRegistry, Survey, Question};
 
 const CREATOR: address = @0xCAFE;
 const NON_CREATOR: address = @0xBEEF;
+const SPONSOR: address = @0x5905;
 const GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000; // == MIN_PURGE_GRACE_MS
+const FALLBACK_MS: u64 = 365 * 24 * 60 * 60 * 1000; // == PURGE_FALLBACK_GRACE_MS
 
 fun init_protocol(sc: &mut ts::Scenario) {
     ts::next_tx(sc, CREATOR);
@@ -41,6 +43,7 @@ fun setup(sc: &mut ts::Scenario, clk: &clock::Clock, config: &ProtocolConfig): I
         0,
         option::none(),
         config,
+        clk,
         ts::ctx(sc),
     );
     survey_vault::set_purge_grace_ms(&mut vault, GRACE_MS, ts::ctx(sc));
@@ -147,8 +150,11 @@ fun purge_before_grace_aborts() {
     ts::end(sc);
 }
 
+// Non-creator/non-sponsor at the normal grace (but before the long fallback)
+// is no longer allowed to purge — only the creator and authorised sponsors are.
 #[test]
-fun purge_noncreator_after_grace_ok() {
+#[expected_failure(abort_code = surveysui::survey_vault::EPurgeTooEarly)]
+fun purge_noncreator_at_grace_before_fallback_aborts() {
     let mut sc = ts::begin(CREATOR);
     {
         let ctx = ts::ctx(&mut sc);
@@ -171,11 +177,145 @@ fun purge_noncreator_after_grace_ok() {
         let survey = ts::take_shared<Survey>(&sc);
         let vault = ts::take_shared<SurveyVault>(&sc);
         survey_vault::purge(&mut registry, survey, vault, &config, &clk, ts::ctx(&mut sc));
+        ts::return_shared(config);
+        ts::return_shared(registry);
+    };
+
+    clock::destroy_for_testing(clk);
+    ts::end(sc);
+}
+
+// Liveness fallback: anyone may purge once past anchor + PURGE_FALLBACK_GRACE_MS.
+#[test]
+fun purge_noncreator_after_fallback_ok() {
+    let mut sc = ts::begin(CREATOR);
+    {
+        let ctx = ts::ctx(&mut sc);
+        survey_registry::test_init(ctx);
+    };
+    init_protocol(&mut sc);
+
+    ts::next_tx(&mut sc, CREATOR);
+    let mut clk = clock::create_for_testing(ts::ctx(&mut sc));
+    let config = ts::take_shared<ProtocolConfig>(&sc);
+    let _vault_id = setup(&mut sc, &clk, &config);
+    ts::return_shared(config);
+
+    clock::increment_for_testing(&mut clk, FALLBACK_MS + 1);
+
+    ts::next_tx(&mut sc, NON_CREATOR);
+    {
+        let config = ts::take_shared<ProtocolConfig>(&sc);
+        let mut registry = ts::take_shared<SurveyRegistry>(&sc);
+        let survey = ts::take_shared<Survey>(&sc);
+        let vault = ts::take_shared<SurveyVault>(&sc);
+        survey_vault::purge(&mut registry, survey, vault, &config, &clk, ts::ctx(&mut sc));
         assert!(survey_registry::total_count(&registry) == 0, 300);
         ts::return_shared(config);
         ts::return_shared(registry);
     };
 
+    clock::destroy_for_testing(clk);
+    ts::end(sc);
+}
+
+// An authorised purge sponsor may purge at the normal grace (no fallback wait).
+#[test]
+fun purge_sponsor_at_grace_ok() {
+    let mut sc = ts::begin(CREATOR);
+    {
+        let ctx = ts::ctx(&mut sc);
+        survey_registry::test_init(ctx);
+    };
+    init_protocol(&mut sc);
+
+    ts::next_tx(&mut sc, CREATOR);
+    let mut clk = clock::create_for_testing(ts::ctx(&mut sc));
+    let config = ts::take_shared<ProtocolConfig>(&sc);
+    let _vault_id = setup(&mut sc, &clk, &config);
+    ts::return_shared(config);
+
+    // admin (== CREATOR here) authorises SPONSOR as a purge sponsor.
+    ts::next_tx(&mut sc, CREATOR);
+    {
+        let mut config = ts::take_shared<ProtocolConfig>(&sc);
+        amm_pool::set_purge_sponsors(&mut config, vector[SPONSOR], ts::ctx(&mut sc));
+        ts::return_shared(config);
+    };
+
+    clock::increment_for_testing(&mut clk, GRACE_MS + 1);
+
+    ts::next_tx(&mut sc, SPONSOR);
+    {
+        let config = ts::take_shared<ProtocolConfig>(&sc);
+        let mut registry = ts::take_shared<SurveyRegistry>(&sc);
+        let survey = ts::take_shared<Survey>(&sc);
+        let vault = ts::take_shared<SurveyVault>(&sc);
+        survey_vault::purge(&mut registry, survey, vault, &config, &clk, ts::ctx(&mut sc));
+        assert!(survey_registry::total_count(&registry) == 0, 300);
+        ts::return_shared(config);
+        ts::return_shared(registry);
+    };
+
+    clock::destroy_for_testing(clk);
+    ts::end(sc);
+}
+
+// set_purge_sponsors rejects lists longer than MAX_PURGE_SPONSORS (3).
+#[test]
+#[expected_failure(abort_code = surveysui::amm_pool::ETooManySponsors)]
+fun set_purge_sponsors_too_many_aborts() {
+    let mut sc = ts::begin(CREATOR);
+    init_protocol(&mut sc);
+
+    ts::next_tx(&mut sc, CREATOR);
+    {
+        let mut config = ts::take_shared<ProtocolConfig>(&sc);
+        amm_pool::set_purge_sponsors(
+            &mut config,
+            vector[@0x1, @0x2, @0x3, @0x4],
+            ts::ctx(&mut sc),
+        );
+        ts::return_shared(config);
+    };
+
+    ts::end(sc);
+}
+
+// create_empty rejects a deadline more than MAX_SURVEY_DURATION_MS (92d) ahead.
+#[test]
+#[expected_failure(abort_code = surveysui::survey_vault::EDeadlineTooFar)]
+fun create_deadline_beyond_max_aborts() {
+    let mut sc = ts::begin(CREATOR);
+    {
+        let ctx = ts::ctx(&mut sc);
+        survey_registry::test_init(ctx);
+    };
+    init_protocol(&mut sc);
+
+    ts::next_tx(&mut sc, CREATOR);
+    let clk = clock::create_for_testing(ts::ctx(&mut sc));
+    let config = ts::take_shared<ProtocolConfig>(&sc);
+    let gas = coin::zero<SUI>(ts::ctx(&mut sc));
+    let vault = survey_vault::create_empty(
+        1,
+        0,
+        1,
+        10,
+        92 * 24 * 60 * 60 * 1000 + 1, // > now(0) + 92d
+        CREATOR,
+        gas,
+        @0x0,
+        0,
+        0,
+        0,
+        option::none(),
+        &config,
+        &clk,
+        ts::ctx(&mut sc),
+    );
+    survey_vault::share_vault_for_testing(vault);
+    ts::return_shared(config);
     clock::destroy_for_testing(clk);
     ts::end(sc);
 }
@@ -217,6 +357,7 @@ fun purge_batched_requires_multiple_txs() {
             0,
             option::none(),
             &config,
+            &clk,
             ts::ctx(&mut sc),
         );
         survey_vault::set_purge_grace_ms(&mut vault, GRACE_MS, ts::ctx(&mut sc));
@@ -325,6 +466,7 @@ fun register_survey_non_creator_aborts() {
         0,
         option::none(),
         &config,
+        &clk,
         ts::ctx(&mut sc),
     );
     survey_vault::share_vault_for_testing(vault);
@@ -391,6 +533,7 @@ fun register_empty_prompt_does_not_squat_content_hash() {
         0,
         option::none(),
         &config,
+        &clk,
         ts::ctx(&mut sc),
     );
     let content_hash = b"f63-hash-squat";
@@ -465,6 +608,7 @@ fun register_same_content_hash_after_prepare_abort_succeeds() {
         0,
         option::none(),
         &config,
+        &clk,
         ts::ctx(&mut sc),
     );
     let content_hash = b"f63-hash-retry";
@@ -547,6 +691,7 @@ fun register_survey_twice_same_vault_aborts() {
         0,
         option::none(),
         &config,
+        &clk,
         ts::ctx(&mut sc),
     );
     survey_vault::register_survey(

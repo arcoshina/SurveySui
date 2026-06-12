@@ -45,20 +45,20 @@ export function spotSsrBasePerMist(suiReserve: bigint, srReserve: bigint): numbe
 /**
  * Auto-destroy grace period (ms) after a survey closes (or expires), before its
  * data may be purged. Env-tunable via `VITE_PURGE_GRACE_MS`; falls back to the
- * contract default (90 days). The create PTB writes this onto the vault.
+ * contract default (92 days). The create PTB writes this onto the vault.
  */
 const getPurgeGraceMs = (): number => {
   try {
     if (typeof import.meta !== 'undefined' && import.meta.env) {
-      return Number(import.meta.env.VITE_PURGE_GRACE_MS ?? 90 * 24 * 60 * 60 * 1000)
+      return Number(import.meta.env.VITE_PURGE_GRACE_MS ?? 92 * 24 * 60 * 60 * 1000)
     }
   } catch {}
   try {
     if (typeof process !== 'undefined' && process.env) {
-      return Number(process.env.VITE_PURGE_GRACE_MS ?? 90 * 24 * 60 * 60 * 1000)
+      return Number(process.env.VITE_PURGE_GRACE_MS ?? 92 * 24 * 60 * 60 * 1000)
     }
   } catch {}
-  return 90 * 24 * 60 * 60 * 1000
+  return 92 * 24 * 60 * 60 * 1000
 }
 
 export const PURGE_GRACE_MS = BigInt(getPurgeGraceMs())
@@ -324,6 +324,7 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.u64(ticketFee.toString()),
       allowedNftTypeArg,
       tx.object(p.protocolConfigId),
+      tx.object('0x6'),
     ],
   })
 

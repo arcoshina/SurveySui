@@ -21,7 +21,11 @@ use std::ascii;
 const STATUS_OPEN: u8   = 0;
 const STATUS_CLOSED: u8 = 1;
 const MIN_PURGE_GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
-const DEFAULT_PURGE_GRACE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
+const DEFAULT_PURGE_GRACE_MS: u64 = 92 * 24 * 60 * 60 * 1000;
+/// Hard cap on a survey's active lifetime at creation (nominal 90d, relaxed to 92d).
+const MAX_SURVEY_DURATION_MS: u64 = 92 * 24 * 60 * 60 * 1000;
+/// Liveness fallback: anyone may purge this long after the terminal anchor.
+const PURGE_FALLBACK_GRACE_MS: u64 = 365 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_INLINE_ANSWER_BYTES: u64 = 6144;
 const MIN_MAX_INLINE_ANSWER_BYTES: u64 = 1024;
 const MAX_MAX_INLINE_ANSWER_BYTES: u64 = 32768;
@@ -60,6 +64,7 @@ const EBlobIdTooLarge: u64 = 29;
 const EMaxBlobIdOutOfRange: u64 = 30;
 const EGasCompTooLow: u64 = 31;
 const EVaultAlreadyHasSurvey: u64 = 32;
+const EDeadlineTooFar: u64 = 33;
 const AUTH_PASS: u8 = 0;
 const AUTH_TICKET: u8 = 1;
 const CLAIM_MODE_PASS_AUDIENCE: u8 = 0;
@@ -745,7 +750,16 @@ public fun purge(
             assert!(now > vault.deadline_ms, EPurgeTooEarly);
             vault.deadline_ms
         };
-        assert!(now >= anchor + vault.purge_grace_ms, EPurgeTooEarly);
+        let sender = ctx.sender();
+        let is_authorized = sender == amm_pool::config_admin(config)
+            || amm_pool::is_purge_sponsor(config, sender);
+        if (is_authorized) {
+            // admin / BFF sponsor: normal grace window.
+            assert!(now >= anchor + vault.purge_grace_ms, EPurgeTooEarly);
+        } else {
+            // anyone else: liveness fallback only, far past the anchor.
+            assert!(now >= anchor + PURGE_FALLBACK_GRACE_MS, EPurgeTooEarly);
+        };
     };
     let survey_id = object::id(&survey);
     let batch = amm_pool::purge_answers_batch(config);
@@ -846,6 +860,7 @@ public fun create_empty(
     ticket_fee: u64,
     allowed_nft_type: Option<vector<u8>>,
     config: &ProtocolConfig,
+    clock: &Clock,
     ctx: &mut TxContext,
 ): SurveyVault {
     assert!(per_response >= 1, EInvalidRewardConfig);
@@ -853,6 +868,10 @@ public fun create_empty(
     assert!(
         gas_compensation_amount >= amm_pool::min_gas_compensation_mist(config),
         EGasCompTooLow,
+    );
+    assert!(
+        deadline_ms <= clock::timestamp_ms(clock) + MAX_SURVEY_DURATION_MS,
+        EDeadlineTooFar,
     );
     let per_response_sui = gas_compensation_amount + storage_compensation_amount;
     let required_gas = if (repeat_reward > 0) {

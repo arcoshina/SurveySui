@@ -186,6 +186,7 @@ fun test_deposit_gas_success() {
         let config = test_scenario::take_shared<ProtocolConfig>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
         let gas_coin = coin::mint_for_testing<SUI>(500_000_000, ctx);
+        let clock = clock::create_for_testing(ctx);
         let mut vault = survey_vault::create_empty(
             10,
             0,
@@ -200,8 +201,10 @@ fun test_deposit_gas_success() {
             0,
             option::none(),
             &config,
+            &clock,
             ctx,
         );
+        clock::destroy_for_testing(clock);
         let deposit_coin = coin::mint_for_testing<SUI>(100_000_000, ctx);
         survey_vault::deposit_gas(&mut vault, deposit_coin);
         assert!(survey_vault::gas_balance_value(&vault) == 600_000_000, 0);
@@ -1470,6 +1473,7 @@ fun test_split_fee_on_reward_budget() {
         let gross = budget + fee;
 
         let gas = coin::zero<SUI>(ctx);
+        let clock = clock::create_for_testing(ctx);
         let mut vault = survey_vault::create_empty(
             per_response,
             0,
@@ -1484,8 +1488,10 @@ fun test_split_fee_on_reward_budget() {
             0,
             option::none(),
             &config,
+            &clock,
             ctx,
         );
+        clock::destroy_for_testing(clock);
 
         let ssr = coin::mint_for_testing<STACKED_SURVEY_REWARD>(gross, ctx);
         survey_vault::deposit_existing_ssr(&mut vault, ssr);
@@ -1539,6 +1545,7 @@ fun test_merge_balances_rejects_underfunded_gross() {
         let budget = per_response * max_responses;
 
         let gas = coin::zero<SUI>(ctx);
+        let clock = clock::create_for_testing(ctx);
         let mut vault = survey_vault::create_empty(
             per_response,
             0,
@@ -1553,8 +1560,10 @@ fun test_merge_balances_rejects_underfunded_gross() {
             0,
             option::none(),
             &config,
+            &clock,
             ctx,
         );
+        clock::destroy_for_testing(clock);
 
         let ssr = coin::mint_for_testing<STACKED_SURVEY_REWARD>(budget, ctx);
         survey_vault::deposit_existing_ssr(&mut vault, ssr);
@@ -1593,6 +1602,7 @@ fun test_merge_balances_rejects_non_canonical_pool() {
         let ctx = test_scenario::ctx(&mut scenario);
 
         let gas = coin::zero<SUI>(ctx);
+        let clock = clock::create_for_testing(ctx);
         let mut vault = survey_vault::create_empty(
             1_000_000,
             0,
@@ -1607,8 +1617,10 @@ fun test_merge_balances_rejects_non_canonical_pool() {
             0,
             option::none(),
             &config,
+            &clock,
             ctx,
         );
+        clock::destroy_for_testing(clock);
         let ssr = coin::mint_for_testing<STACKED_SURVEY_REWARD>(20_000_000_000, ctx);
         survey_vault::deposit_existing_ssr(&mut vault, ssr);
         let zero_ssr = coin::zero<STACKED_SURVEY_REWARD>(ctx);
@@ -1637,6 +1649,7 @@ fun test_share_vault_requires_fee_paid() {
     let config = test_scenario::take_shared<ProtocolConfig>(&scenario);
     let ctx = test_scenario::ctx(&mut scenario);
     let gas = coin::zero<SUI>(ctx);
+    let clock = clock::create_for_testing(ctx);
     let vault = survey_vault::create_empty(
         1_000_000,
         0,
@@ -1651,8 +1664,10 @@ fun test_share_vault_requires_fee_paid() {
         0,
         option::none(),
         &config,
+        &clock,
         ctx,
     );
+    clock::destroy_for_testing(clock);
     test_scenario::return_shared(config);
     survey_vault::share_vault(vault);
     test_scenario::end(scenario);
@@ -1766,6 +1781,7 @@ fun test_post_share_merge_balances_aborts() {
         let gross = budget + fee;
 
         let gas = coin::zero<SUI>(ctx);
+        let clock = clock::create_for_testing(ctx);
         let mut vault = survey_vault::create_empty(
             per_response,
             0,
@@ -1780,8 +1796,10 @@ fun test_post_share_merge_balances_aborts() {
             0,
             option::none(),
             &config,
+            &clock,
             ctx,
         );
+        clock::destroy_for_testing(clock);
         let ssr = coin::mint_for_testing<STACKED_SURVEY_REWARD>(gross, ctx);
         survey_vault::deposit_existing_ssr(&mut vault, ssr);
         let zero_ssr = coin::zero<STACKED_SURVEY_REWARD>(ctx);
