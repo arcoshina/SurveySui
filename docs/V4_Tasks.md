@@ -47,8 +47,9 @@
 ## 進度紀錄  
 
 ### 2026/6/12
-- [ ] 修正在代付 Pass 中不能掛自付 credencial 的限制_opus  
-- [ ] 準備上線文件
+- [x] 修正在代付 Pass 中不能掛自付 credencial 的限制_opus  
+- [x] 準備上線步驟文件_gemini  
+- [x] 處理部屬合約時的無引用參數警告3、4_opus  
 - [ ] 
 
 
@@ -63,10 +64,6 @@
   - [x] 過期後前端去填答文案_opus  
   - [x] 型別檢查 sponsoredTx.ts:101 的錯誤_opus  
   - [x] 完成 certik 審計 + Claude code-review 內容修補
-  - [ ] 
-  - [ ] 
-
-
 
 ### 2026/6/10
 - [x] 修改審計報告中的漏洞
@@ -79,9 +76,6 @@
   - [x] S1 所有 claim 在建構 PTB 前即 throw_Fable
   - [x] S2 revoke不再釋放 nullifier_Fable
   - [x] 補充系統行為文件_Fable
-
-
-
 
 ###　2026/6/9
 - [~] 修改審計報告中的漏洞_Composer  

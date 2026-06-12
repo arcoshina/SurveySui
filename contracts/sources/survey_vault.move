@@ -348,8 +348,7 @@ fun step1a_identity_ok<Nft: key>(
     use_pass: bool,
     pass: &SurveyPass,
     use_nft: bool,
-    nft: &Nft,
-    attribute_nullifiers: &vector<vector<u8>>,
+    _nft: &Nft,
     clock: &Clock,
     ctx: &TxContext,
 ): bool {
@@ -474,7 +473,6 @@ public fun claim<Nft: key>(
             pass,
             use_nft,
             nft,
-            &attribute_nullifiers,
             clock,
             ctx,
         ),
