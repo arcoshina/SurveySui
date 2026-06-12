@@ -87,7 +87,9 @@ TTL 可由 `BFF_PASS_TTL_MS_EMAIL` / `_SOCIAL` / `_WORLDID`、全域 `BFF_PASS_T
 |------|--------------|
 | 自付 mint/update（`deposit_payer == owner`） | `escape_clawback_mist` 必須 = 0（`EInvalidEscapeClawback`） |
 | 代付 mint（`deposit_payer != owner`） | ticket 內 `escape_clawback_mist` 必須 > 0，寫入 Pass |
-| 代付 update | 必須 > 0，**累加** 到 `pass.escape_clawback_mist` |
+| 代付 update | `> 0` **累加** 到 `pass.escape_clawback_mist`；**`= 0` 亦允許（代付 Pass 收「自付加綁」的 slot，不計入贊助債務）** |
+
+**安全不變式**：「代付（sponsor 付 gas）的更新必須記足額 clawback」由 **BFF 代簽閘門**保證——`validatePassEscapeClawbackAfterDryRun` 對每筆 `update_pass_credential` 代簽都拒 `clawback=0`，而該閘門在所有 pass 代簽路徑必經（`isPassSponsor = hasPass`）。故 `clawback=0` 的更新 sponsor 永不代付 → 只可能是 owner 自付，不開 rebate 抽乾後門。合約不再以 per-pass 旗標強制 `clawback>0`（那是錯誤的 per-tx proxy，會把「代付鑄造後想自付擴充」一併擋死）。
 
 BFF 端（[`passEscapeClawbackValidation.ts`](../../packages/gas-station-core/src/passEscapeClawbackValidation.ts)）在代簽前 dry-run 驗證：代付 mint/update 的首張 ticket `escape_clawback_mist ≥ ceil(netGas × 110%)`（`ESCAPE_CLAWBACK_BPS = 11_000`）；且代付 mint 的 `deposit_payer` 必須等於 sponsor 地址。
 
@@ -110,13 +112,15 @@ BFF 端（[`passEscapeClawbackValidation.ts`](../../packages/gas-station-core/sr
 | 入口 | gating | 費用 | rebate 流向 |
 |------|--------|------|--------------|
 | `delete_pass` | `sender == deposit_payer` | 無 | gas owner（= deposit_payer 自己） |
-| `self_delete_sponsored_pass` | 代付 Pass（`deposit_payer != owner`）且 `sender == owner` | `fee ≥ required_self_delete_fee`，付給 `deposit_payer`，溢繳退回 | gas owner（owner 自付 gas，逃生門） |
+| `self_delete_sponsored_pass` | 代付 Pass（`deposit_payer != owner`）且 `sender == owner` | `fee == required_self_delete_fee`（精確金額，整顆轉付 `deposit_payer`，不找零；金額不符 → `EFeeMismatch`） | gas owner（owner 自付 gas，逃生門） |
 | BFF 代刪 `/api/pass/delete` | owner 以 personal-message 簽名授權（`surveysui:delete-pass:{passId}:{ts}`，5 分鐘 TTL） | 使用者免 gas | sponsor 為 gas owner → rebate 回到項目方 |
 
 ```
-required_self_delete_fee = max(REBATE_FEE_FLOOR × (1 + credential_sources 數), pass.escape_clawback_mist)
-REBATE_FEE_FLOOR = 10_000_000 MIST = 0.01 SUI
+required_self_delete_fee = max(pass.escape_clawback_mist, REBATE_FEE_FLOOR)   # flat floor，不隨憑證數放大
+REBATE_FEE_FLOOR = 25_000_000 MIST = 0.025 SUI
 ```
+
+> floor 改 flat 的依據：`escape_clawback_mist` 已精準累加 sponsor 每筆代付的實際淨 gas（≥ owner 自刪時可回收的 storage rebate），本身即足額反女巫；原 `(1 + 憑證數)` 倍率經 devnet 實測超收約 2 倍，且會把「自付加綁的 slot」一併計費，故移除。
 
 `do_delete` 行為：自 `registry.passes` 移除登記；逐槽移除 dynamic field——**僅當 Pass ACTIVE 且槽 ACTIVE** 才釋放 `registry.used` 中屬於該 owner 的 nullifier（REVOKED 一律保留＝黑名單持續生效）；最後銷毀物件。
 
@@ -127,3 +131,4 @@ REBATE_FEE_FLOOR = 10_000_000 MIST = 0.01 SUI
 | 日期 | 說明 |
 |------|------|
 | 2026-06-11 | 初版：自 `survey_pass.move`、BFF pass/auth 模組現狀萃取；取代 History/專案 SurveyPass 方案.md 與 History/專案 Pass註銷.md 之規格地位 |
+| 2026-06-12 | 放寬代付 Pass 的 update 接受 `clawback=0`（自付加綁，解開「代付後只能代付更新」鎖死）；自刪 floor 改 flat `max(clawback, 0.025 SUI)`（取消憑證數倍率，依 devnet 實測超收約 2 倍）；`self_delete_sponsored_pass` 改精確金額 `==`、整顆轉付、不找零（消 lint W99001），error `EFeeTooLow`→`EFeeMismatch` |

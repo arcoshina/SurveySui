@@ -749,7 +749,8 @@ export interface BuildSelfDeleteSponsoredPassPtbParams {
   packageId: string
   registryId: string
   passId: string
-  // 須 >= 合約 REBATE_FEE_FLOOR（MIST），用於抵銷使用者自付刪除時拿到的儲存返還
+  // 須「精確等於」合約 required_self_delete_fee = max(escape_clawback_mist, REBATE_FEE_FLOOR)（MIST）；
+  // 合約以 == 檢核並整顆轉付，不找零。用於抵銷使用者自付刪除時拿到的儲存返還。
   feeMist: bigint | string
 }
 

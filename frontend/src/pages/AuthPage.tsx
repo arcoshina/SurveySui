@@ -48,8 +48,8 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes
 }
 
-// 須與合約 survey_pass::REBATE_FEE_FLOOR 一致（MIST）。自付逃生門時附給項目方的費用下限。
-const REBATE_FEE_FLOOR_MIST = 10_000_000n
+// 須與合約 survey_pass::REBATE_FEE_FLOOR 一致（MIST）。自付逃生門時附給項目方的費用下限（flat floor）。
+const REBATE_FEE_FLOOR_MIST = 25_000_000n
 
 // 與後端 buildDeleteAuthMessage 完全一致的授權訊息格式（用 passId 原字串，不正規化）
 function buildDeleteAuthMessage(passId: string, signedTimestamp: number): string {
@@ -638,8 +638,8 @@ export default function AuthPage() {
   // 自付逃生門：使用者自付刪除代付 Pass，附 REBATE_FEE_FLOOR 費用回項目方
   async function offerEscapeHatch() {
     if (!activePass || !activeSigner) return
-    const credentialsCount = BigInt(activePass.credentialSources?.length ?? 1)
-    const floorFeeMist = REBATE_FEE_FLOOR_MIST * (1n + credentialsCount)
+    // flat floor：與合約 required_self_delete_fee 一致 = max(escape_clawback_mist, REBATE_FEE_FLOOR)
+    const floorFeeMist = REBATE_FEE_FLOOR_MIST
     const clawbackMist = activePass.escapeClawbackMist ?? 0n
     const dynamicFeeMist = clawbackMist > floorFeeMist ? clawbackMist : floorFeeMist
     const estSui = (Number(dynamicFeeMist) / 1_000_000_000).toFixed(4)

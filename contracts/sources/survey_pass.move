@@ -27,14 +27,14 @@ const ETicketExpired: u64 = 3;
 const ENotAdmin: u64 = 4;
 const ENotActive: u64 = 5;
 const EPassRevoked: u64 = 6;
-const EFeeTooLow: u64 = 7;
+const EFeeMismatch: u64 = 7;
 const EPassAlreadyExists: u64 = 8;
 const EExtraTicketsMismatch: u64 = 9;
 const EDuplicateSource: u64 = 10;
 const EEmptyNullifier: u64 = 11;
 const ECredentialRevoked: u64 = 12;
 const EInvalidEscapeClawback: u64 = 13;
-const REBATE_FEE_FLOOR: u64 = 10_000_000;
+const REBATE_FEE_FLOOR: u64 = 25_000_000;
 public struct NullifierRegistry has key {
     id: UID,
     used: Table<vector<u8>, address>,
@@ -125,7 +125,9 @@ fun apply_mint_escape_clawback(
 
 fun apply_update_escape_clawback(pass: &mut SurveyPass, escape_clawback_mist: u64) {
     if (is_sponsored_pass(pass)) {
-        assert!(escape_clawback_mist > 0, EInvalidEscapeClawback);
+        // 允許 0：代付 Pass 仍可收「自付加綁」的 update（不計入贊助債務）。
+        // >0 為代付 update，累加。Sponsor 永不代付 clawback=0 的更新由 BFF 代簽閘門保證
+        // （passEscapeClawbackValidation 拒 clawback=0），故 0 只可能是 owner 自付。
         pass.escape_clawback_mist = pass.escape_clawback_mist + escape_clawback_mist;
     } else {
         assert!(escape_clawback_mist == 0, EInvalidEscapeClawback);
@@ -133,12 +135,12 @@ fun apply_update_escape_clawback(pass: &mut SurveyPass, escape_clawback_mist: u6
 }
 
 fun required_self_delete_fee(pass: &SurveyPass): u64 {
-    let credentials_count = vector::length(&pass.credential_sources);
-    let floor = REBATE_FEE_FLOOR * (1 + credentials_count);
-    if (pass.escape_clawback_mist > floor) {
+    // flat floor：clawback 已精準累加 sponsor 實付淨 gas（≥ 可回收 storage rebate），
+    // 故以 max(clawback, REBATE_FEE_FLOOR) 即足額反女巫，不再隨憑證數放大。
+    if (pass.escape_clawback_mist > REBATE_FEE_FLOOR) {
         pass.escape_clawback_mist
     } else {
-        floor
+        REBATE_FEE_FLOOR
     }
 }
 fun credential_digest(
@@ -477,20 +479,16 @@ public fun delete_pass(
 public fun self_delete_sponsored_pass(
     registry: &mut NullifierRegistry,
     pass: SurveyPass,
-    mut fee: Coin<SUI>,
+    fee: Coin<SUI>,
     ctx: &mut TxContext,
 ) {
     assert!(pass.deposit_payer != pass.owner, EOwnerMismatch);
     assert!(ctx.sender() == pass.owner, EOwnerMismatch);
     let required_fee = required_self_delete_fee(&pass);
-    assert!(coin::value(&fee) >= required_fee, EFeeTooLow);
-    let payment = coin::split(&mut fee, required_fee, ctx);
-    transfer::public_transfer(payment, pass.deposit_payer);
-    if (coin::value(&fee) > 0) {
-        transfer::public_transfer(fee, ctx.sender());
-    } else {
-        coin::destroy_zero(fee);
-    };
+    // 精確金額：owner 須付恰好 required_fee，整顆轉付給 deposit_payer，不找零。
+    // 前端以 splitCoins 切出精確金額；金額不符（多付或少付）一律 abort，不靜默吞錢。
+    assert!(coin::value(&fee) == required_fee, EFeeMismatch);
+    transfer::public_transfer(fee, pass.deposit_payer);
     do_delete(registry, pass, ctx);
 }
 fun do_delete(
@@ -751,6 +749,26 @@ public fun mint_pass_for_testing_with_payer_and_clawback(
     table::add(&mut registry.passes, owner, object::id(&pass));
     apply_credential_slot(&mut pass, source, nullifiers, commitment, expires_at, clock);
     transfer::share_object(pass);
+}
+/// 鏡像 `update_pass_credential` 的 clawback + slot 邏輯（略過 ticket 驗簽），
+/// 供測試驗證「代付 Pass 收自付/代付 update」的 escape_clawback 行為。
+#[test_only]
+public fun update_credential_for_testing(
+    pass: &mut SurveyPass,
+    registry: &mut NullifierRegistry,
+    source: u8,
+    nullifiers: vector<vector<u8>>,
+    commitment: vector<u8>,
+    expires_at: u64,
+    escape_clawback_mist: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(pass.status == STATUS_ACTIVE, EPassRevoked);
+    assert!(ctx.sender() == pass.owner, EOwnerMismatch);
+    register_all_nullifiers(registry, &nullifiers, pass.owner);
+    apply_update_escape_clawback(pass, escape_clawback_mist);
+    apply_credential_slot(pass, source, nullifiers, commitment, expires_at, clock);
 }
 #[test_only]
 fun test_nullifier_byte(seed: u8): vector<u8> {
