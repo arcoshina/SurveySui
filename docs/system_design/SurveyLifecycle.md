@@ -81,6 +81,7 @@ effective_fee_bps = total_fee_bps × discount_bps / 10_000   // 預設 2000 × 5
 
 領獎檢查 Step 0–3 與發獎規格見 [ADR_ClaimUnified.md](ADR_ClaimUnified.md)。生命週期視角的關鍵帳目：
 
+- **內容完整性驗證（前端）**：`SurveyPage` 載入時解出問卷 markdown（inline 解密 / Walrus 下載 / 公開明文），**recompute `sha256(markdown)` 與鏈上 `content_hash` 比對**。不符 → 非阻斷的警告頁（精簡說明可能遭竄改或來源異常，提供「繼續填答」與「回到首頁」）。`content_hash` 鏈上不可改（`commit_survey` 後無 setter），故此比對能偵測 RPC / aggregator 對內容的掉包。發布端（`FundPage`）與讀取端共用 `crypto.ts::sha256`。詳見 [StorageStrategy.md](StorageStrategy.md)。
 - 每筆 claim 將 `AnswerRecord`（inline payload 或 blob_id）寫入 vault dynamic field，`answers_count += 1`。
 - 名額：首次 claim 計入 `claimed_count`（≤ `max_responses`）；repeat 計入 `claim_counts[sender]`（≤ `repeat_max_times`，注意鏈上判斷為 `prior <= repeat_max_times`，即同錢包最多 `1 + repeat_max_times` 筆）。
 - `ticket_fee`（`claim_mode = 1`）自 `gas_balance` 扣轉 `admin_treasury`。

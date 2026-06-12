@@ -27,6 +27,7 @@ import {
   deriveCreatorKeyPair,
   encryptSurveyContent,
   buildPublicContentBlob,
+  sha256,
   type CreatorKeyPair,
 } from '../lib/crypto'
 import { translateMoveAbort } from '../lib/moveAbort'
@@ -354,12 +355,6 @@ export default function FundPage() {
       setErrorMsg(fullSurvey.error)
       setStatus('error')
       return
-    }
-
-    const sha256 = async (text: string): Promise<Uint8Array> => {
-      const data = new TextEncoder().encode(text)
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-      return new Uint8Array(hashBuffer)
     }
 
     let contentHash: Uint8Array
