@@ -87,7 +87,9 @@ effective_fee_bps = total_fee_bps × discount_bps / 10_000   // 預設 2000 × 5
 - `ticket_fee`（`claim_mode = 1`）自 `gas_balance` 扣轉 `admin_treasury`。
 - gas / storage 補償自 `gas_balance` 扣付（分流規則見 [GasSponsorship.md](GasSponsorship.md)）。
 
-creator 可隨時調整（皆 creator only）：`set_sponsor_address`、`set_gas_compensation_amount`（≥ 下限）、`set_purge_grace_ms`、`set_max_inline_answer_bytes`、`set_max_blob_id_bytes`。
+creator 可隨時調整（皆 creator only）：`set_sponsor_address`、`set_gas_compensation_amount`（≥ 下限）、`set_max_inline_answer_bytes`、`set_max_blob_id_bytes`。
+
+`purge_grace_ms` **不在可調整之列**：它於 `create_empty` 建立時一次設定（界限 7–92 天，由 env `VITE_PURGE_GRACE_MS` 帶入），之後鏈上無 setter、不可變。上限固定為 `DEFAULT_PURGE_GRACE_MS`（92 天），確保發起者無法事後拉長寬限期、延後平台（admin / sponsor）的強制銷毀窗口。
 
 ---
 

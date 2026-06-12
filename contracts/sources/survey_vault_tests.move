@@ -16,6 +16,9 @@ use surveysui::stacked_survey_reward::STACKED_SURVEY_REWARD;
 use surveysui::survey_registry::{Self, Survey};
 use surveysui::amm_pool::{Self, Pool, ProtocolConfig};
 
+// create_empty 的 purge grace 參數：用合約預設上限 92 天，保留先前行為。
+const TEST_PURGE_GRACE_MS: u64 = 92 * 24 * 60 * 60 * 1000;
+
 // 輔助：生成長度 32 的 nullifier bytes
 fun claim_with_pass(
     vault: &mut SurveyVault,
@@ -199,6 +202,7 @@ fun test_deposit_gas_success() {
             5_000_000,
             0,
             0,
+            TEST_PURGE_GRACE_MS,
             option::none(),
             &config,
             &clock,
@@ -1486,6 +1490,7 @@ fun test_split_fee_on_reward_budget() {
             0,
             0,
             0,
+            TEST_PURGE_GRACE_MS,
             option::none(),
             &config,
             &clock,
@@ -1558,6 +1563,7 @@ fun test_merge_balances_rejects_underfunded_gross() {
             0,
             0,
             0,
+            TEST_PURGE_GRACE_MS,
             option::none(),
             &config,
             &clock,
@@ -1615,6 +1621,7 @@ fun test_merge_balances_rejects_non_canonical_pool() {
             0,
             0,
             0,
+            TEST_PURGE_GRACE_MS,
             option::none(),
             &config,
             &clock,
@@ -1662,6 +1669,7 @@ fun test_share_vault_requires_fee_paid() {
         0,
         0,
         0,
+        TEST_PURGE_GRACE_MS,
         option::none(),
         &config,
         &clock,
@@ -1794,6 +1802,7 @@ fun test_post_share_merge_balances_aborts() {
             0,
             0,
             0,
+            TEST_PURGE_GRACE_MS,
             option::none(),
             &config,
             &clock,

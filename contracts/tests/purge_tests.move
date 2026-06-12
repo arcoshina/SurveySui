@@ -41,12 +41,12 @@ fun setup(sc: &mut ts::Scenario, clk: &clock::Clock, config: &ProtocolConfig): I
         0,
         0,
         0,
+        GRACE_MS,
         option::none(),
         config,
         clk,
         ts::ctx(sc),
     );
-    survey_vault::set_purge_grace_ms(&mut vault, GRACE_MS, ts::ctx(sc));
 
     survey_vault::add_answer_for_testing(&mut vault, b"ciphertext-1");
     survey_vault::add_answer_for_testing(&mut vault, b"ciphertext-2");
@@ -309,6 +309,47 @@ fun create_deadline_beyond_max_aborts() {
         0,
         0,
         0,
+        GRACE_MS,
+        option::none(),
+        &config,
+        &clk,
+        ts::ctx(&mut sc),
+    );
+    survey_vault::share_vault_for_testing(vault);
+    ts::return_shared(config);
+    clock::destroy_for_testing(clk);
+    ts::end(sc);
+}
+
+// create_empty rejects a purge grace longer than DEFAULT_PURGE_GRACE_MS (92d):
+// the creator must not be able to extend the platform's forced-purge window.
+#[test]
+#[expected_failure(abort_code = surveysui::survey_vault::EGraceTooLong)]
+fun create_grace_beyond_max_aborts() {
+    let mut sc = ts::begin(CREATOR);
+    {
+        let ctx = ts::ctx(&mut sc);
+        survey_registry::test_init(ctx);
+    };
+    init_protocol(&mut sc);
+
+    ts::next_tx(&mut sc, CREATOR);
+    let clk = clock::create_for_testing(ts::ctx(&mut sc));
+    let config = ts::take_shared<ProtocolConfig>(&sc);
+    let gas = coin::zero<SUI>(ts::ctx(&mut sc));
+    let vault = survey_vault::create_empty(
+        1,
+        0,
+        1,
+        10,
+        1_000,
+        CREATOR,
+        gas,
+        @0x0,
+        0,
+        0,
+        0,
+        92 * 24 * 60 * 60 * 1000 + 1, // > DEFAULT_PURGE_GRACE_MS (92d)
         option::none(),
         &config,
         &clk,
@@ -355,12 +396,12 @@ fun purge_batched_requires_multiple_txs() {
             0,
             0,
             0,
+            GRACE_MS,
             option::none(),
             &config,
             &clk,
             ts::ctx(&mut sc),
         );
-        survey_vault::set_purge_grace_ms(&mut vault, GRACE_MS, ts::ctx(&mut sc));
         let mut i = 0u64;
         while (i < 5) {
             survey_vault::add_answer_for_testing(&mut vault, b"x");
@@ -464,6 +505,7 @@ fun register_survey_non_creator_aborts() {
         0,
         0,
         0,
+        GRACE_MS,
         option::none(),
         &config,
         &clk,
@@ -531,6 +573,7 @@ fun register_empty_prompt_does_not_squat_content_hash() {
         0,
         0,
         0,
+        GRACE_MS,
         option::none(),
         &config,
         &clk,
@@ -606,6 +649,7 @@ fun register_same_content_hash_after_prepare_abort_succeeds() {
         0,
         0,
         0,
+        GRACE_MS,
         option::none(),
         &config,
         &clk,
@@ -689,6 +733,7 @@ fun register_survey_twice_same_vault_aborts() {
         0,
         0,
         0,
+        GRACE_MS,
         option::none(),
         &config,
         &clk,

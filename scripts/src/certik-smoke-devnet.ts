@@ -51,6 +51,9 @@ const SMOKE_ATTACKER_MNEMONIC =
 /** Matches init.ts default `min_gas_compensation_mist` (F73). */
 const DEFAULT_MIN_GAS_COMP_MIST = 100_000_000
 
+/** Matches contract `DEFAULT_PURGE_GRACE_MS` (92 days); set once at create_empty, immutable. */
+const DEFAULT_PURGE_GRACE_MS = 92 * 24 * 60 * 60 * 1000
+
 /** `create_empty` vault with gas deposit meeting protocol floor + required_gas (F73). */
 function moveCallCreateEmptyVault(
   tx: Transaction,
@@ -83,6 +86,7 @@ function moveCallCreateEmptyVault(
       tx.pure.u64(minGas),
       tx.pure.u64(0),
       tx.pure.u64(0),
+      tx.pure.u64(DEFAULT_PURGE_GRACE_MS),
       tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(opts.allowedNftType).toBytes()),
       tx.object(opts.protocolConfigId),
       tx.object('0x6'),

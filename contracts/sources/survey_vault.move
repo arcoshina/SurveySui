@@ -65,6 +65,7 @@ const EMaxBlobIdOutOfRange: u64 = 30;
 const EGasCompTooLow: u64 = 31;
 const EVaultAlreadyHasSurvey: u64 = 32;
 const EDeadlineTooFar: u64 = 33;
+const EGraceTooLong: u64 = 34;
 const AUTH_PASS: u8 = 0;
 const AUTH_TICKET: u8 = 1;
 const CLAIM_MODE_PASS_AUDIENCE: u8 = 0;
@@ -858,6 +859,7 @@ public fun create_empty(
     gas_compensation_amount: u64,
     storage_compensation_amount: u64,
     ticket_fee: u64,
+    purge_grace_ms: u64,
     allowed_nft_type: Option<vector<u8>>,
     config: &ProtocolConfig,
     clock: &Clock,
@@ -873,6 +875,10 @@ public fun create_empty(
         deadline_ms <= clock::timestamp_ms(clock) + MAX_SURVEY_DURATION_MS,
         EDeadlineTooFar,
     );
+    // grace 在建立時一次定案、之後不可改:下限保護 sponsor 代付成本回收節奏,
+    // 上限(= 預設 92 天)防發起者事後延後平台的強制銷毀能力。
+    assert!(purge_grace_ms >= MIN_PURGE_GRACE_MS, EGraceTooShort);
+    assert!(purge_grace_ms <= DEFAULT_PURGE_GRACE_MS, EGraceTooLong);
     let per_response_sui = gas_compensation_amount + storage_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
         max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
@@ -902,7 +908,7 @@ public fun create_empty(
         storage_compensation_amount,
         answers_count: 0,
         answers_purged: 0,
-        purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
+        purge_grace_ms,
         max_inline_answer_bytes: DEFAULT_MAX_INLINE_ANSWER_BYTES,
         max_blob_id_bytes: DEFAULT_MAX_BLOB_ID_BYTES,
         fee_paid: false,
@@ -1014,11 +1020,6 @@ public fun set_gas_compensation_amount(
     assert!(ctx.sender() == vault.creator, ENotCreator);
     assert!(new_amount >= amm_pool::min_gas_compensation_mist(config), EGasCompTooLow);
     vault.gas_compensation_amount = new_amount;
-}
-public fun set_purge_grace_ms(vault: &mut SurveyVault, new_grace_ms: u64, ctx: &TxContext) {
-    assert!(ctx.sender() == vault.creator, ENotCreator);
-    assert!(new_grace_ms >= MIN_PURGE_GRACE_MS, EGraceTooShort);
-    vault.purge_grace_ms = new_grace_ms;
 }
 public fun set_max_inline_answer_bytes(vault: &mut SurveyVault, new_max: u64, ctx: &TxContext) {
     assert!(ctx.sender() == vault.creator, ENotCreator);

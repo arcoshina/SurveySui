@@ -322,16 +322,13 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
       tx.pure.u64(gasCompensationAmount),
       tx.pure.u64(storageCompensationAmount),
       tx.pure.u64(ticketFee.toString()),
+      // Auto-destroy grace period (env-configured). Set once at creation and
+      // immutable on-chain thereafter — there is no setter to extend it later.
+      tx.pure.u64(PURGE_GRACE_MS),
       allowedNftTypeArg,
       tx.object(p.protocolConfigId),
       tx.object('0x6'),
     ],
-  })
-
-  // 1b. Set the env-configured auto-destroy grace period on the new vault.
-  tx.moveCall({
-    target: `${p.packageId}::survey_vault::set_purge_grace_ms`,
-    arguments: [vault, tx.pure.u64(PURGE_GRACE_MS)],
   })
 
   // 1c. Set inline answer size cap from deployment env (Walrus above this threshold).
