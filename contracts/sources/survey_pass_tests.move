@@ -617,7 +617,7 @@ fun test_admin_revoke_credential_success() {
         survey_pass::admin_revoke_credential(
             &mut pass,
             &config,
-            6, // 註銷 Google
+            vector[make_nullifier(6)], // 註銷 Google（以 nullifier 列舉）
             ctx,
         );
 
@@ -675,7 +675,7 @@ fun test_admin_revoke_credential_nullifier_stays_pinned() {
         let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
         let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
-        survey_pass::admin_revoke_credential(&mut pass, &config, 6, ctx);
+        survey_pass::admin_revoke_credential(&mut pass, &config, vector[make_nullifier(6)], ctx);
         test_scenario::return_shared(config);
         test_scenario::return_shared(pass);
     };
@@ -754,10 +754,9 @@ fun test_mint_with_extra_credentials_dual_source() {
     test_scenario::end(scenario);
 }
 
-// F55: extra 與 primary 同 source 時拒絕 mint
+// 雙 email（同 source 2、不同 nullifier）在單筆 mint 並存為兩槽（nullifier 主鍵模型）
 #[test]
-#[expected_failure(abort_code = surveysui::survey_pass::EDuplicateSource)]
-fun test_mint_with_extra_same_source_aborts() {
+fun test_mint_with_extra_same_source_two_slots() {
     let mut scenario = test_scenario::begin(ADMIN);
     {
         let ctx = test_scenario::ctx(&mut scenario);
@@ -779,7 +778,7 @@ fun test_mint_with_extra_same_source_aborts() {
             2,
             vector[n1],
             vector<u8>[],
-            1_000u64,
+            9_999_999_999_999u64,
             vector[2],
             vector[vector[n2]],
             vector[vector<u8>[]],
@@ -796,12 +795,53 @@ fun test_mint_with_extra_same_source_aborts() {
         let pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
 
-        // 同 source 只應有一槽，且以較晚的 expires_at 為準
+        // 兩個 email 各自一槽，同 source 2；credential_sources 每槽一條 → 長度 2
         assert!(survey_pass::is_source_valid(&pass, 2, &clock), 0);
-        assert!(vector::length(&survey_pass::credential_sources(&pass)) == 1, 0);
+        assert!(vector::length(&survey_pass::credential_sources(&pass)) == 2, 0);
+        let nullifiers = survey_pass::all_nullifiers(&pass);
+        assert!(vector::length(&nullifiers) == 2, 1);
 
         clock::destroy_for_testing(clock);
         test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// 同一次 mint 出現重複 nullifier → EDuplicateNullifier
+#[test]
+#[expected_failure(abort_code = surveysui::survey_pass::EDuplicateNullifier)]
+fun test_mint_with_extra_duplicate_nullifier_aborts() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+
+        let dup = make_nullifier(82);
+
+        survey_pass::mint_pass_with_extra_for_testing(
+            &mut registry,
+            OWNER,
+            OWNER,
+            2,
+            vector[dup],
+            vector<u8>[],
+            9_999_999_999_999u64,
+            vector[6],
+            vector[vector[dup]], // 與 primary 撞 nullifier
+            vector[vector<u8>[]],
+            vector[9_999_999_999_999u64],
+            &clock,
+            ctx,
+        );
+
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
     };
     test_scenario::end(scenario);
 }
@@ -899,7 +939,7 @@ fun test_tampered_commitment_fails_is_source_valid() {
         let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
         assert!(survey_pass::is_source_valid(&pass, 2, &clock), 0);
-        survey_pass::set_slot_commitment_for_testing(&mut pass, 2, vector[0, 1, 2]);
+        survey_pass::set_slot_commitment_for_testing(&mut pass, make_nullifier(90), vector[0, 1, 2]);
         assert!(!survey_pass::is_source_valid(&pass, 2, &clock), 1);
         assert!(!survey_pass::is_valid(&pass, &clock), 2);
         clock::destroy_for_testing(clock);
@@ -940,7 +980,7 @@ fun test_apply_credential_on_revoked_slot_aborts() {
         let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
         let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
-        survey_pass::admin_revoke_credential(&mut pass, &config, 6, ctx);
+        survey_pass::admin_revoke_credential(&mut pass, &config, vector[make_nullifier(91)], ctx);
         test_scenario::return_shared(config);
         test_scenario::return_shared(pass);
     };
@@ -1200,6 +1240,286 @@ fun test_sponsored_update_accumulates_clawback() {
             9_999_999_999_999u64, 30_000_000u64, &clock, ctx,
         );
         assert!(survey_pass::escape_clawback_mist(&pass) == 80_000_000u64, 0);
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::end(scenario);
+}
+
+// ② 批次註銷 email A 之 nullifier → 同 source 的 email B 仍有效（無連坐）
+#[test]
+fun test_batch_revoke_one_email_keeps_other() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    // mint email A，update 加綁 email B（同 source 2，不同 nullifier）
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_for_testing(
+            &mut registry, OWNER, 2, vector[make_nullifier(100)], vector[],
+            9_999_999_999_999u64, &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::update_credential_for_testing(
+            &mut pass, &mut registry, 2, vector[make_nullifier(101)], vector[],
+            9_999_999_999_999u64, 0u64, &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+        test_scenario::return_shared(registry);
+    };
+    // 批次註銷 email A（make_nullifier(100)）
+    test_scenario::next_tx(&mut scenario, ADMIN);
+    {
+        let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::admin_revoke_credential(&mut pass, &config, vector[make_nullifier(100)], ctx);
+        test_scenario::return_shared(config);
+        test_scenario::return_shared(pass);
+    };
+    // email B 仍有效 → source 2 仍通過、Pass 仍有效
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        assert!(survey_pass::is_source_valid(&pass, 2, &clock), 0);
+        assert!(survey_pass::is_valid(&pass, &clock), 1);
+        assert!(vector::length(&survey_pass::all_nullifiers(&pass)) == 2, 2);
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// ③ 跨 source 失控（Google sub 6 + 同帳號 email 2）批次一次註銷；無關的 GitHub(7) 不受影響
+#[test]
+fun test_batch_revoke_cross_source() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    // mint Google(6) + email(2) 同帳號雙憑證
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_with_extra_for_testing(
+            &mut registry, OWNER, OWNER, 6, vector[make_nullifier(110)], vector<u8>[],
+            9_999_999_999_999u64,
+            vector[2], vector[vector[make_nullifier(111)]], vector[vector<u8>[]],
+            vector[9_999_999_999_999u64], &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    // 自付加綁無關的 GitHub(7)
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::update_credential_for_testing(
+            &mut pass, &mut registry, 7, vector[make_nullifier(112)], vector[],
+            9_999_999_999_999u64, 0u64, &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+        test_scenario::return_shared(registry);
+    };
+    // 批次註銷失控帳號跨 source 的兩個 nullifier
+    test_scenario::next_tx(&mut scenario, ADMIN);
+    {
+        let config = test_scenario::take_shared<surveysui::survey_pass::IssuerConfig>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::admin_revoke_credential(
+            &mut pass, &config, vector[make_nullifier(110), make_nullifier(111)], ctx,
+        );
+        test_scenario::return_shared(config);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        assert!(!survey_pass::is_source_valid(&pass, 6, &clock), 0);
+        assert!(!survey_pass::is_source_valid(&pass, 2, &clock), 1);
+        assert!(survey_pass::is_source_valid(&pass, 7, &clock), 2); // GitHub 不受連坐
+        assert!(survey_pass::is_valid(&pass, &clock), 3);
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// ④ 超過 MAX_CREDENTIAL_SLOTS（16）→ ETooManySlots
+#[test]
+#[expected_failure(abort_code = surveysui::survey_pass::ETooManySlots)]
+fun test_slot_cap_exceeded_aborts() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_for_testing(
+            &mut registry, OWNER, 2, vector[make_nullifier(120)], vector[],
+            9_999_999_999_999u64, &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        // mint=1 槽，再 update 16 次（seed 121..136）；第 16 次（第 17 槽）→ abort
+        let mut i = 0u8;
+        while (i < 16) {
+            survey_pass::update_credential_for_testing(
+                &mut pass, &mut registry, 2, vector[make_nullifier(121 + i)], vector[],
+                9_999_999_999_999u64, 0u64, &clock, ctx,
+            );
+            i = i + 1;
+        };
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::end(scenario);
+}
+
+// ⑤ delete 後雙 email nullifier 皆釋放（OTHER 可用同一 nullifier 重新 mint）
+#[test]
+fun test_delete_releases_all_nullifiers() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    // OWNER mint email A + 加綁 email B
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_for_testing(
+            &mut registry, OWNER, 2, vector[make_nullifier(140)], vector[],
+            9_999_999_999_999u64, &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::update_credential_for_testing(
+            &mut pass, &mut registry, 2, vector[make_nullifier(141)], vector[],
+            9_999_999_999_999u64, 0u64, &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+        test_scenario::return_shared(registry);
+    };
+    // OWNER 刪除 Pass（ACTIVE 槽 → 釋放 nullifier）
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::delete_pass(&mut registry, pass, ctx);
+        test_scenario::return_shared(registry);
+    };
+    // OTHER 用同一組 nullifier 重新 mint → 兩者皆已釋放才會成功
+    test_scenario::next_tx(&mut scenario, OTHER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_with_extra_for_testing(
+            &mut registry, OTHER, OTHER, 2, vector[make_nullifier(140)], vector<u8>[],
+            9_999_999_999_999u64,
+            vector[2], vector[vector[make_nullifier(141)]], vector[vector<u8>[]],
+            vector[9_999_999_999_999u64], &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    test_scenario::next_tx(&mut scenario, OTHER);
+    {
+        let pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        assert!(survey_pass::is_source_valid(&pass, 2, &clock), 0);
+        assert!(vector::length(&survey_pass::all_nullifiers(&pass)) == 2, 1);
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(pass);
+    };
+    test_scenario::end(scenario);
+}
+
+// ⑥ 重綁同一 nullifier = 刷新（不增槽）
+#[test]
+fun test_rebind_same_nullifier_refreshes() {
+    let mut scenario = test_scenario::begin(ADMIN);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::test_init(ctx);
+    };
+    // mint email，TTL 短（1_000）
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        survey_pass::mint_pass_for_testing(
+            &mut registry, OWNER, 2, vector[make_nullifier(150)], vector[],
+            1_000u64, &clock, ctx,
+        );
+        clock::destroy_for_testing(clock);
+        test_scenario::return_shared(registry);
+    };
+    // 用同一 nullifier 重綁，刷新 TTL → 槽數不變、刷新後有效
+    test_scenario::next_tx(&mut scenario, OWNER);
+    {
+        let mut registry = test_scenario::take_shared<NullifierRegistry>(&scenario);
+        let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
+        let mut clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+        let ctx = test_scenario::ctx(&mut scenario);
+        clock::set_for_testing(&mut clock, 2_000); // 已過原 TTL
+        survey_pass::update_credential_for_testing(
+            &mut pass, &mut registry, 2, vector[make_nullifier(150)], vector[],
+            9_999_999_999_999u64, 0u64, &clock, ctx,
+        );
+        assert!(vector::length(&survey_pass::credential_sources(&pass)) == 1, 0);
+        assert!(vector::length(&survey_pass::all_nullifiers(&pass)) == 1, 1);
+        assert!(survey_pass::is_source_valid(&pass, 2, &clock), 2);
         clock::destroy_for_testing(clock);
         test_scenario::return_shared(pass);
         test_scenario::return_shared(registry);

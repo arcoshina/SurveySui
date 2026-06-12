@@ -28,11 +28,12 @@ flowchart LR
 
 | 名詞 | 說明 |
 |------|------|
-| `SurveyPass` | `owner`、`deposit_payer`（出資人，可 ≠ owner）、`credential_sources`、`status`（ACTIVE=0 / REVOKED=3）、`escape_clawback_mist` |
-| `CredentialSlot` | per-source dynamic field：`commitment`、`nullifiers[]`、`issued_at`、`expires_at`、`status`（ACTIVE=0 / REVOKED=1）。**無 EXPIRED 狀態**——過期以 `expires_at` 即時判讀 |
+| `SurveyPass` | `owner`、`deposit_payer`（出資人，可 ≠ owner）、`credential_sources`、`credential_keys`、`status`（ACTIVE=0 / REVOKED=3）、`escape_clawback_mist` |
+| `credential_sources` / `credential_keys` | 兩個平行陣列、同序 1:1：`credential_keys` 為各槽的 nullifier（dynamic field 主鍵，補不可枚舉）；`credential_sources` 為各槽 source，**每槽一條、允許重複**（如雙 email→`[2,2]`）。前端顯示層去重 |
+| `CredentialSlot` | **一憑證一槽**，dynamic field key = `CredentialKey { nullifier }`；body：`source`、`commitment`、`issued_at`、`expires_at`、`status`（ACTIVE=0 / REVOKED=1）。同一 source 可有多槽（多個 email）。每本 Pass 上限 `MAX_CREDENTIAL_SLOTS = 16` 槽（`ETooManySlots`）。**無 EXPIRED 狀態**——過期以 `expires_at` 即時判讀 |
 | `NullifierRegistry` | 全域 shared：`used: nullifier → owner`（防同一身分綁不同 owner）、`passes: owner → pass_id`（一人一本） |
 | `IssuerConfig` | `issuer_pubkey`（BFF ticket 驗簽公鑰，admin 可輪換 `set_issuer_pubkey`）、`admin` |
-| `commitment` | `blake2b256(BCS(CredentialDigestPayload{owner, source, nullifiers, expires_at}))`——槽內容防竄改錨；`is_valid` / `is_source_valid` 都重算比對 |
+| `commitment` | `blake2b256(BCS(CredentialDigestPayload{owner, source, nullifier, expires_at}))`——單憑證槽內容防竄改錨；`is_valid` / `is_source_valid` 都重算比對 |
 | sentinel Pass | `init` 時 share 一本 `status=REVOKED、owner=@0x0` 的空 Pass，供 `use_pass=false` 的 claim PTB 填位（搭配 [`claim_sentinel::VoidNft`](../../contracts/sources/claim_sentinel.move)） |
 
 **驗證來源常數**（`SRC_*`）：
@@ -63,9 +64,9 @@ TTL 可由 `BFF_PASS_TTL_MS_EMAIL` / `_SOCIAL` / `_WORLDID`、全域 `BFF_PASS_T
 
 | 函式 | gating | 行為 |
 |------|--------|------|
-| `mint_pass` | `sender == owner`；owner 無既有 Pass | 登記 nullifier → 建 Pass → 寫入第一個槽 → share |
-| `mint_pass_with_extra_credentials` | 同上 | 一次鑄多來源；extra 各自驗票；來源不可重複（`EDuplicateSource`）；extra ticket 的 `escape_clawback_mist` 固定 0 |
-| `update_pass_credential` | `sender == owner`；Pass ACTIVE | 既有槽刷新（**REVOKED 槽不可刷**，`ECredentialRevoked`）或新增來源槽；nullifier 一律重新登記 |
+| `mint_pass` | `sender == owner`；owner 無既有 Pass | 登記 nullifier → 建 Pass → 為 ticket 內每個 nullifier 各寫一槽 → share |
+| `mint_pass_with_extra_credentials` | 同上 | 一次鑄多憑證；extra 各自驗票；**所有 nullifier（含 primary）不可重複**（`EDuplicateNullifier`，同 source 不同 nullifier 允許）；extra ticket 的 `escape_clawback_mist` 固定 0 |
+| `update_pass_credential` | `sender == owner`；Pass ACTIVE | 同一 nullifier 既存槽 → 刷新（**REVOKED 槽不可刷**，`ECredentialRevoked`）；新 nullifier → 新增槽（受 16 上限保護，`ETooManySlots`）。nullifier 一律重新登記。**不同 email = 不同 nullifier = 不同槽**（無覆寫、無 leak） |
 
 **Nullifier 雙層防護**：
 
@@ -74,8 +75,9 @@ TTL 可由 `BFF_PASS_TTL_MS_EMAIL` / `_SOCIAL` / `_WORLDID`、全域 `BFF_PASS_T
 
 **有效性判讀**：
 
-- `is_source_valid(pass, source, clock)`：Pass ACTIVE ∧ 槽 ACTIVE ∧ 未過期 ∧ nullifiers 非空 ∧ commitment 相符。
-- `is_valid(pass, clock)`：任一來源槽滿足上述即 true（即 `effective` 資格 = 各 active 槽之聯集）。
+- `is_source_valid(pass, source, clock)`：**掃描全槽**（n ≤ 16），任一 `slot.source == source` 且 ACTIVE ∧ 未過期 ∧ commitment 相符即 true。同 source 多槽（多 email）任一有效即通過。
+- `is_valid(pass, clock)`：任一槽滿足上述即 true（即 `effective` 資格 = 各 active 槽之聯集）。
+- `all_nullifiers(pass)`：回傳 `credential_keys`（一槽一 nullifier、含 REVOKED / 過期，從不於撤銷時移除），供 vault claim 去重黑名單。
 
 ---
 
@@ -100,10 +102,10 @@ BFF 端（[`passEscapeClawbackValidation.ts`](../../packages/gas-station-core/sr
 | 層 | 入口 | 效果 |
 |----|------|------|
 | 鏈上整本 | `admin_revoke_pass`（`IssuerConfig.admin`） | `pass.status = REVOKED`；所有 claim / update 失效；**之後刪除不釋放 nullifier** |
-| 鏈上單槽 | `admin_revoke_credential(source)` | 槽 `status = REVOKED`；其他來源照常；該槽 **不可再 update**；nullifier **不釋放** |
+| 鏈上批次 | `admin_revoke_credential(nullifiers[])` | 對列舉的每個 nullifier 翻其槽 `status = REVOKED`；其他槽照常；該槽 **不可再 update**；nullifier **不釋放**。清單中不存在/已 REVOKED 者略過（不 abort）。**失控帳號橫跨多 source**（gmail = Google-sub【6】＋ email【2】），故按「具體 nullifier」列舉批次撤銷，而非按 source 一刀切 |
 | 鏈下 mint guard | BFF 已註銷庫（[`revocation.ts`](../../bff/src/security/revocation.ts)、`REVOCATION_MINT_GUARD_ENABLED=true`） | 簽發 ticket 前查庫，阻擋已註銷 nullifier 重新 mint；`/api/admin/revocation/*`（`ADMIN_SECRET`）維護 |
 
-**「不釋放 nullifier」是刻意設計**（CertiK F53 / CodeReview S2 定性 By Design）：註銷針對「驗證來源帳戶遭駭」場景，該身分對此來源永久失效，駭客不能換地址重綁。**錢包遺失** 的復原不走 revoke：應 `delete_pass`（憑證仍 ACTIVE 時會釋放 nullifier），再到新地址重新 mint 綁回同一身分。一鍵救援腳本 [`admin_rescue.ts`](../../scripts/src/admin_rescue.ts)（`pnpm admin:rescue`）同步執行鏈上 revoke 與 BFF 庫登記。
+**「不釋放 nullifier」是刻意設計**（CertiK F53 / CodeReview S2 定性 By Design）：註銷針對「驗證來源帳戶遭駭」場景，該身分永久失效，駭客不能換地址重綁。**錢包遺失** 的復原不走 revoke：應 `delete_pass`（憑證仍 ACTIVE 時會釋放 nullifier），再到新地址重新 mint 綁回同一身分。一鍵救援腳本 [`admin_rescue.ts`](../../scripts/src/admin_rescue.ts)以 `--creds "<hex>:<source>,..."` **列舉失控帳號的全部 nullifier**（跨 source），同步執行鏈上批次 revoke 與 BFF 庫登記。
 
 ---
 
@@ -122,7 +124,7 @@ REBATE_FEE_FLOOR = 25_000_000 MIST = 0.025 SUI
 
 > floor 改 flat 的依據：`escape_clawback_mist` 已精準累加 sponsor 每筆代付的實際淨 gas（≥ owner 自刪時可回收的 storage rebate），本身即足額反女巫；原 `(1 + 憑證數)` 倍率經 devnet 實測超收約 2 倍，且會把「自付加綁的 slot」一併計費，故移除。
 
-`do_delete` 行為：自 `registry.passes` 移除登記；逐槽移除 dynamic field——**僅當 Pass ACTIVE 且槽 ACTIVE** 才釋放 `registry.used` 中屬於該 owner 的 nullifier（REVOKED 一律保留＝黑名單持續生效）；最後銷毀物件。
+`do_delete` 行為：自 `registry.passes` 移除登記；逐 `credential_keys`（nullifier）移除 dynamic field——**僅當 Pass ACTIVE 且槽 ACTIVE** 才釋放 `registry.used` 中屬於該 owner 的該 nullifier（REVOKED 一律保留＝黑名單持續生效）；最後銷毀物件。一憑證一槽下，刪除會釋放每個 ACTIVE 槽的 nullifier（含同 source 的多 email），不再有覆寫殘留。
 
 ---
 
@@ -132,3 +134,4 @@ REBATE_FEE_FLOOR = 25_000_000 MIST = 0.025 SUI
 |------|------|
 | 2026-06-11 | 初版：自 `survey_pass.move`、BFF pass/auth 模組現狀萃取；取代 History/專案 SurveyPass 方案.md 與 History/專案 Pass註銷.md 之規格地位 |
 | 2026-06-12 | 放寬代付 Pass 的 update 接受 `clawback=0`（自付加綁，解開「代付後只能代付更新」鎖死）；自刪 floor 改 flat `max(clawback, 0.025 SUI)`（取消憑證數倍率，依 devnet 實測超收約 2 倍）；`self_delete_sponsored_pass` 改精確金額 `==`、整顆轉付、不找零（消 lint W99001），error `EFeeTooLow`→`EFeeMismatch` |
+| 2026-06-12 | **憑證模型改 nullifier 主鍵**：`CredentialKey { source }`→`{ nullifier }`，一憑證一槽，`source` 移入 slot body，`SurveyPass` 增 `credential_keys`，每本上限 16 槽（`ETooManySlots`）。同一 source 可多槽（如多 email），結構性消除「不同 email 覆寫同槽」的永久 nullifier leak。`admin_revoke_credential` 改吃**批次 nullifier 清單**（失控帳號跨 source 列舉撤銷），`EDuplicateSource` 退役改 `EDuplicateNullifier`；`is_source_valid` / `all_nullifiers` / `do_delete` 改以 `credential_keys` 迭代 |

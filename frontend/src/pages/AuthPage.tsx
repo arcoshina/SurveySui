@@ -880,7 +880,8 @@ export default function AuthPage() {
                     return renderPassCard({
                       tier: activePass.effectiveTier,
                       expiresAt: activePass.expiresAt,
-                      sourceText: activePass.credentialSources.map((s) => getSourceLabel(s)).join(', '),
+                      // credential_sources 每槽一條、可能重複（如雙 email→[2,2]），顯示去重
+                      sourceText: [...new Set(activePass.credentialSources)].map((s) => getSourceLabel(s)).join(', '),
                       isExpired: activePass.expiresAt > 0 && activePass.expiresAt <= Date.now(),
                       showObjectId: true,
                     })

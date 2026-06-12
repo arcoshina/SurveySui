@@ -1950,7 +1950,7 @@ fun test_claim_records_revoked_credential_nullifiers() {
         let config = test_scenario::take_shared<IssuerConfig>(&scenario);
         let mut pass = test_scenario::take_shared<SurveyPass>(&scenario);
         let ctx = test_scenario::ctx(&mut scenario);
-        survey_pass::admin_revoke_credential(&mut pass, &config, 6, ctx);
+        survey_pass::admin_revoke_credential(&mut pass, &config, vector[make_nullifier(6)], ctx);
         test_scenario::return_shared(config);
         test_scenario::return_shared(pass);
     };

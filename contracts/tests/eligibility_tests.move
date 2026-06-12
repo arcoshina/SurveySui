@@ -635,3 +635,96 @@ fun claim_ticket_auth_on_pass_mode_aborts() {
     ts::end(sc);
 }
 
+// 各 source 資格閘門：持對應有效槽的 Pass 通過 allowed_sources=[該 source] 的問卷。
+// EMAIL(2) 已由 claim_unified_empty_allowlist_succeeds 等覆蓋（create_for_testing 即 email 槽）。
+fun claim_source_gate_succeeds(source: u8) {
+    let mut sc = ts::begin(CREATOR);
+    let vault_id = setup_vault(&mut sc);
+
+    ts::next_tx(&mut sc, RESPONDENT);
+    let pass = survey_pass::create_with_source_for_testing(RESPONDENT, source, 2_000_000, ts::ctx(&mut sc));
+    let mut vault = ts::take_shared<SurveyVault>(&sc);
+    let clock = clock::create_for_testing(ts::ctx(&mut sc));
+    let survey = survey_registry::create_survey_for_testing(
+        vault_id,
+        CREATOR,
+        b"hash",
+        option::some(b"content"),
+        option::none(),
+        b"schema",
+        vector[],
+        vector[source],
+        ts::ctx(&mut sc),
+    );
+
+    claim_pass(
+        &mut vault,
+        &survey,
+        &pass,
+        vector[],
+        option::some(b"answers"),
+        option::none(),
+        &clock,
+        ts::ctx(&mut sc),
+    );
+    assert!(survey_vault::claimed_count(&vault) == 1, 0);
+
+    clock::destroy_for_testing(clock);
+    survey_pass::delete_pass_for_testing(pass);
+    survey_registry::destroy_survey_for_testing(survey);
+    ts::return_shared(vault);
+    ts::end(sc);
+}
+
+#[test]
+fun claim_gate_world_id_source() { claim_source_gate_succeeds(survey_pass::src_world_id()); }
+
+#[test]
+fun claim_gate_google_source() { claim_source_gate_succeeds(survey_pass::src_social_google()); }
+
+#[test]
+fun claim_gate_github_source() { claim_source_gate_succeeds(survey_pass::src_social_github()); }
+
+// 負向：只持 Google(6) 槽的 Pass 不通過 allowed_sources=[World ID(5)] 的問卷。
+#[test]
+#[expected_failure(abort_code = surveysui::survey_vault::EInvalidPass)]
+fun claim_gate_wrong_source_aborts() {
+    let mut sc = ts::begin(CREATOR);
+    let vault_id = setup_vault(&mut sc);
+
+    ts::next_tx(&mut sc, RESPONDENT);
+    let pass = survey_pass::create_with_source_for_testing(
+        RESPONDENT, survey_pass::src_social_google(), 2_000_000, ts::ctx(&mut sc),
+    );
+    let mut vault = ts::take_shared<SurveyVault>(&sc);
+    let clock = clock::create_for_testing(ts::ctx(&mut sc));
+    let survey = survey_registry::create_survey_for_testing(
+        vault_id,
+        CREATOR,
+        b"hash",
+        option::some(b"content"),
+        option::none(),
+        b"schema",
+        vector[],
+        vector[survey_pass::src_world_id()],
+        ts::ctx(&mut sc),
+    );
+
+    claim_pass(
+        &mut vault,
+        &survey,
+        &pass,
+        vector[],
+        option::some(b"answers"),
+        option::none(),
+        &clock,
+        ts::ctx(&mut sc),
+    );
+
+    clock::destroy_for_testing(clock);
+    survey_pass::delete_pass_for_testing(pass);
+    survey_registry::destroy_survey_for_testing(survey);
+    ts::return_shared(vault);
+    ts::end(sc);
+}
+
