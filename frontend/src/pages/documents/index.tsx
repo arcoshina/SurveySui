@@ -122,7 +122,7 @@ export default function DocumentsPage() {
 
   return (
     <div className="flex-1 bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 transition-colors duration-200">
-      <div className="mx-auto max-w-6xl px-6 py-12 flex flex-col md:flex-row gap-8">
+      <div className="mx-auto max-w-6xl px-6 pt-4 pb-12 flex flex-col md:flex-row gap-8">
         {/* 左側選單（由 manifest 自動產生） */}
         <aside ref={asideRef} className="w-full md:w-64 shrink-0 space-y-2 self-start will-change-transform">
           <button
