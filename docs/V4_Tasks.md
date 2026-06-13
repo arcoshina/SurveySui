@@ -46,6 +46,20 @@
 
 ## 進度紀錄  
 
+### 2026/6/13
+- [~] 確認文件內容
+    - [x] 身分認證
+    - [x] 費用與代付
+    - [ ] 常見問題
+    - [ ] Overflow 2026 亮點說明
+- [x] Markdown 表格渲染
+- [ ] 補足多語文件
+- [ ] 實際部屬前後端 + devnet
+- [ ] 線上測試功能完整性
+- [ ] 實際部屬前後端 + devnet
+
+
+
 ### 2026/6/12
 - [x] 修正在代付 Pass 中不能掛自付 credencial 的限制_opus  
 - [x] 準備上線步驟文件_gemini  
@@ -54,11 +68,12 @@
 - [x] 清理測試遺留雜碼_opus  
 - [x] 首頁說明文件架構重構
 - [x] 補足說明文件-中文
-- [ ] 確認文件內容
-- [ ] 補足多語文件
-- [ ] 實際部屬前後端 + devnet
-- [ ] 線上測試功能完整性
-- [ ] 實際部屬前後端 + devnet
+    - [x] 去除銷毀寬限期的延長功能  
+    - [x] 前端雜湊比對題目卷，加上竄改警告頁
+- [~] 確認文件內容
+    - [x] 開始使用
+    - [x] 建立問卷
+    - [x] 填答與領獎
 
 
 ### 2026/6/11
@@ -86,7 +101,7 @@
   - [x] 補充系統行為文件_Fable
 
 ###　2026/6/9
-- [~] 修改審計報告中的漏洞_Composer  
+- [-] 修改審計報告中的漏洞_Composer  
   - [x] 發現大量架構層面錯誤_Composer  
   - [x] 修正 Claim 多入口 -> 單一入口_Composer  
   - [x] 修正填答時 Pass 沒有驗簽_Composer  
@@ -106,10 +121,10 @@
 - [x] 預留二階段問卷空位_Composer  
 - [x] 防禦 "大型答卷直傳鏈上抽乾代付池"_Composer   
 - [x] 修正 OAuth 代付次數瑕疵_Composer  
-- [x] 自動銷毀時收到的押金，扣除 Gas 及 50% 手續費後轉帳給發起人_Composer  
+- [x] 自動銷毀收 50% 手續費後轉帳給發起人_Composer  
 - [x] Walrus 儲存生命週期問題_Composer  
-- [x] Gas Station 分散式 Coin Queue（gas-station-core + Cloudflare DO）_Composer
-- [x] Dashboard 文案修改： 結束後未使用的 SSR 與 Gas 會退回您的錢包。銷毀時題目與答卷將被永久刪除，鏈上儲存押金將退回。若結束後超過 90 天仍未銷毀，系統將自動銷毀，扣除 gas 及 50% 手續費。_Composer
+- [x] Gas Station 分散式 Coin Queue_Composer
+- [x] Dashboard 銷毀文案修改_Composer
 
 ### 2026/6/6
 - [x] 首頁的按鈕：`說明文件`、`新手教學`、`建立問卷`_Gemini  
