@@ -39,7 +39,6 @@ const auth: AuthDict = {
   submitting: '送信中...',
   btnUpdatePass: '検証を更新',
   btnVerifyAndMint: '検証してミント',
-  footer: 'SurveySui 分散型本人確認センター',
   backToSurvey: 'アンケートに戻って回答を続ける ➡',
   selfReport: '自己申告',
   emailOtp: 'メール OTP',

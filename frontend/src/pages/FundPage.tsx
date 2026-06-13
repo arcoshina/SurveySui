@@ -252,7 +252,7 @@ export default function FundPage() {
 
   if (!draftId || !draft) {
     return (
-      <main className="min-h-screen p-8 max-w-xl mx-auto">
+      <main className="flex-1 p-8 max-w-xl mx-auto">
         <h1 className="text-h1 mb-4">{t.pageTitle}</h1>
         <p className="text-red-600">
           {t.draftNotFound(draftId ?? '?')}
@@ -263,7 +263,7 @@ export default function FundPage() {
 
   if (!frontmatter?.ok) {
     return (
-      <main className="min-h-screen p-8 max-w-xl mx-auto">
+      <main className="flex-1 p-8 max-w-xl mx-auto">
         <h1 className="text-h1 mb-4">{t.pageTitle}</h1>
         <p className="text-red-600">{t.frontmatterParseFailed(frontmatter?.error ?? t.unknownError)}</p>
       </main>
@@ -582,7 +582,7 @@ export default function FundPage() {
   const ssr = (base: bigint) => formatSsr(base)
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
+    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800/80 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn transition-colors">
         {/* 頂部標題 */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 border-slate-100 dark:border-neutral-800">

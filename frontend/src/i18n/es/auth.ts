@@ -39,7 +39,6 @@ const auth: AuthDict = {
   submitting: 'Enviando...',
   btnUpdatePass: 'Actualizar verificación',
   btnVerifyAndMint: 'Verificar y acuñar',
-  footer: 'Centro de Credenciales de Identidad Descentralizado SurveySui',
   backToSurvey: 'Volver a la encuesta para continuar respondiendo ➡',
   selfReport: 'Autodeclaración',
   emailOtp: 'OTP por correo electrónico',

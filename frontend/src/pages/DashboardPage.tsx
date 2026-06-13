@@ -1046,7 +1046,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
   if (vaultId && isAccessDenied) {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
           <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
@@ -1059,7 +1059,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
   if (!vaultId) {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
+      <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
           <div className="flex-1">
             <h1 className="text-h1">
@@ -1224,7 +1224,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
   const surveyTitle = detailSurveyTitle || (currentSurvey ? currentSurvey.title : loadingDetails ? t.loadingShort : t.surveyDefault)
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
+    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
       <div className="mb-4">
         <Link
           to="/dashboard"

@@ -39,7 +39,6 @@ const auth: AuthDict = {
   submitting: '제출 중...',
   btnUpdatePass: '인증 갱신',
   btnVerifyAndMint: '인증 및 민팅',
-  footer: 'SurveySui 탈중앙화 신원 인증 센터',
   backToSurvey: '설문조사로 돌아가 답변 계속하기 ➡',
   selfReport: '자기 선언',
   emailOtp: '이메일 OTP',

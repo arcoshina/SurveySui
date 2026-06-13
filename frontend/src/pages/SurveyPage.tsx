@@ -1028,7 +1028,7 @@ export default function SurveyPage() {
 
   if (phase === 'hash-mismatch') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-amber-200 dark:border-amber-900/50 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-500 border border-amber-100 dark:border-amber-900/50">
             <AlertTriangle size={28} />
@@ -1054,7 +1054,7 @@ export default function SurveyPage() {
 
   if (!activeSigner && phase !== 'loading' && phase !== 'closed') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <h1 className="text-h1">{t.connectWalletTitle}</h1>
           <p className="text-muted leading-relaxed">
@@ -1079,7 +1079,7 @@ export default function SurveyPage() {
 
   if (phase === 'loading') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
           <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
@@ -1092,7 +1092,7 @@ export default function SurveyPage() {
 
   if ((phase === 'error' || !survey) && phase !== 'closed') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
             <AlertTriangle size={24} />
@@ -1107,7 +1107,7 @@ export default function SurveyPage() {
 
   if (phase === 'closed') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500">
             <svg
@@ -1140,7 +1140,7 @@ export default function SurveyPage() {
 
   if (phase === 'success') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 border border-emerald-100 mb-1 animate-scaleIn">
             <svg
@@ -1198,7 +1198,7 @@ export default function SurveyPage() {
   if (phase === 'review' || phase === 'submitting') {
     if (!survey) return null
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
+      <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
           <div className="border-b pb-4 border-slate-100 dark:border-neutral-800">
             <h1 className="text-h1">{t.reviewTitle}</h1>
@@ -1357,7 +1357,7 @@ export default function SurveyPage() {
   if (!survey) return null
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
+    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
 
         {/* 頂部問卷標題與說明區 */}
@@ -1807,10 +1807,6 @@ export default function SurveyPage() {
             </button>
           )}
         </form>
-        {/* Footer */}
-        <footer className="py-8 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
-          © 2026 SurveySui
-        </footer>
       </div>
     </main>
   )

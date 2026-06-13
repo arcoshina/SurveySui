@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, BookOpen } from 'lucide-react'
+import { ArrowLeft, BookOpen, ChevronDown } from 'lucide-react'
 import { renderMarkdown } from '../../lib/markdown'
 import { listDocs, loadDocBody } from '../../lib/docsContent'
 import { useLanguage } from '../../context/LanguageContext'
@@ -16,6 +16,26 @@ export default function DocumentsPage() {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(docs[0]?.slug ?? null)
   const [body, setBody] = useState('')
   const [status, setStatus] = useState<Status>('loading')
+  const [navOpen, setNavOpen] = useState(false) // 手機版選單收合狀態（md+ 永遠展開）
+  const mainRef = useRef<HTMLDivElement>(null)
+
+  // 從正文解析 h2 標題（剛好兩個 #，自動排除 h3+），供左欄目錄使用
+  const headings = useMemo(() => {
+    const result: string[] = []
+    for (const line of body.split(/\r?\n/)) {
+      const m = /^##\s+(.+)$/.exec(line)
+      if (m) result.push(m[1].trim())
+    }
+    return result
+  }, [body])
+
+  // 點目錄第 i 項 → 捲動到右側對應的第 i 個 <h2>（清單與內容同源、順序一致）
+  const scrollToHeading = (index: number) => {
+    mainRef.current?.querySelectorAll('h2')[index]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  }
 
   // 切換語言後當前 slug 可能在新語系不存在（各語系獨立、不後備）→ 自動退回該語系第一篇
   const activeSlug = docs.some((d) => d.slug === selectedSlug) ? selectedSlug : (docs[0]?.slug ?? null)
@@ -47,45 +67,65 @@ export default function DocumentsPage() {
   }, [lang, activeSlug])
 
   return (
-    <div className="min-h-screen bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 transition-colors duration-200">
-      {/* 導覽列 */}
-      <header className="border-b border-slate-100 dark:border-neutral-900 py-4 px-6 flex items-center justify-between">
-        <Link
-          to="/"
-          className="inline-flex items-center gap-2 text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white transition-colors"
-        >
-          <ArrowLeft size={18} />
-          <span>{t.backToHome}</span>
-        </Link>
-        <div className="text-sm font-semibold tracking-wider text-blue-600 dark:text-blue-400">
-          SURVEYSUI DOCUMENTS
-        </div>
-      </header>
-
+    <div className="flex-1 bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 transition-colors duration-200">
       <div className="mx-auto max-w-6xl px-6 py-12 flex flex-col md:flex-row gap-8">
         {/* 左側選單（由 manifest 自動產生） */}
-        <aside className="w-full md:w-64 shrink-0 space-y-2">
-          <div className="text-xs font-bold text-slate-400 dark:text-neutral-500 uppercase tracking-wider px-3 mb-3">
-            {t.navHeading}
-          </div>
+        <aside className="w-full md:w-64 shrink-0 space-y-2 sticky top-16 self-start max-h-[calc(100vh-5rem)] overflow-y-auto">
+          <button
+            onClick={() => setNavOpen((v) => !v)}
+            className="w-full flex items-center justify-between text-sm font-bold text-slate-400 dark:text-neutral-500 uppercase tracking-wider px-3 mb-3 md:pointer-events-none"
+          >
+            <span>{t.navHeading}</span>
+            <ChevronDown
+              size={16}
+              className={`md:hidden transition-transform ${navOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
+          <div className={`${navOpen ? 'block' : 'hidden'} md:block space-y-2`}>
           {docs.length === 0 ? (
             <div className="px-3 py-2.5 text-sm text-slate-400 dark:text-neutral-500">{t.empty}</div>
           ) : (
             docs.map((doc) => (
-              <button
-                key={doc.slug}
-                onClick={() => setSelectedSlug(doc.slug)}
-                className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-normal flex items-center gap-2 transition-all cursor-pointer ${
-                  activeSlug === doc.slug
-                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 font-medium'
-                    : 'hover:bg-slate-50 dark:hover:bg-neutral-900 text-slate-600 dark:text-neutral-400'
-                }`}
-              >
-                <BookOpen size={16} />
-                <span>{doc.title}</span>
-              </button>
+              <div key={doc.slug}>
+                <button
+                  onClick={() => {
+                    setSelectedSlug(doc.slug)
+                    setNavOpen(false) // 手機版選文章後自動收合
+                  }}
+                  className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-normal flex items-center gap-2 transition-all cursor-pointer ${
+                    activeSlug === doc.slug
+                      ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 font-medium'
+                      : 'hover:bg-slate-50 dark:hover:bg-neutral-900 text-slate-600 dark:text-neutral-400'
+                  }`}
+                >
+                  <BookOpen size={16} />
+                  <span>{doc.title}</span>
+                </button>
+                {activeSlug === doc.slug && status === 'ready' && headings.length > 0 && (
+                  <ul className="pl-9 mt-1 space-y-1">
+                    {headings.map((heading, i) => (
+                      <li key={i}>
+                        <button
+                          onClick={() => scrollToHeading(i)}
+                          className="w-full text-left text-xs text-slate-500 dark:text-neutral-500 hover:text-slate-800 dark:hover:text-neutral-300 transition-colors cursor-pointer py-0.5"
+                        >
+                          {heading}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             ))
           )}
+          </div>
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 px-3 mt-4 text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+          >
+            <ArrowLeft size={18} />
+            <span>{t.backToHome}</span>
+          </Link>
         </aside>
 
         {/* 右側文件內容 */}
@@ -98,9 +138,10 @@ export default function DocumentsPage() {
             <p className="text-slate-500 dark:text-neutral-400">{t.loadError}</p>
           ) : (
             <div
+              ref={mainRef}
               className="prose prose-slate dark:prose-invert max-w-none
                 [&>h1]:text-3xl [&>h1]:font-normal [&>h1]:text-slate-900 dark:[&>h1]:text-white [&>h1]:mb-6
-                [&>h2]:text-xl [&>h2]:font-normal [&>h2]:text-slate-900 dark:[&>h2]:text-neutral-200 [&>h2]:mt-8 [&>h2]:mb-4
+                [&>h2]:text-xl [&>h2]:font-normal [&>h2]:text-slate-900 dark:[&>h2]:text-neutral-200 [&>h2]:mt-8 [&>h2]:mb-4 [&>h2]:scroll-mt-32
                 [&>p]:text-base [&>p]:leading-relaxed [&>p]:mb-4 [&>p]:text-slate-600 dark:[&>p]:text-neutral-400
                 [&>ul]:list-disc [&>ul]:pl-5 [&>ul]:space-y-2 [&>ul]:mb-6 [&>ul]:text-slate-600 dark:[&>ul]:text-neutral-400
                 [&>ul_strong]:text-slate-800 dark:[&>ul_strong]:text-neutral-200
@@ -110,6 +151,7 @@ export default function DocumentsPage() {
           )}
         </main>
       </div>
+
     </div>
   )
 }

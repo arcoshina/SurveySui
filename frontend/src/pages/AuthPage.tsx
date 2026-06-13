@@ -832,7 +832,7 @@ export default function AuthPage() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-12 min-h-screen flex flex-col justify-between text-slate-800 dark:text-neutral-200 animate-fadeIn transition-colors">
+    <main className="mx-auto max-w-4xl px-6 py-12 flex-1 flex flex-col text-slate-800 dark:text-neutral-200 animate-fadeIn transition-colors">
       <div className="w-full">
         {/* Title Header */}
         <div className="border-b pb-6 mb-8 border-slate-100 dark:border-neutral-800">
@@ -1304,9 +1304,6 @@ export default function AuthPage() {
         </div>
       )}
 
-      <footer className="mt-16 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
-        {t.footer} &copy; {new Date().getFullYear()}
-      </footer>
     </main>
   )
 }

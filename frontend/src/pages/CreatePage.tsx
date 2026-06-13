@@ -502,7 +502,7 @@ export default function CreatePage() {
   const deadlineLocal = deadlineMsToLocalInput(data.deadlineMs)
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-200 transition-colors">
+    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-200 transition-colors">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800/80 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn transition-colors">
         <div className="space-y-2">
           <h1 className="text-h1 flex items-center gap-2">
