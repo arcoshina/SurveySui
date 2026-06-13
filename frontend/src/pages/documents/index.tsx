@@ -73,9 +73,12 @@ export default function DocumentsPage() {
         <aside className="w-full md:w-64 shrink-0 space-y-2 sticky top-16 self-start max-h-[calc(100vh-5rem)] overflow-y-auto">
           <button
             onClick={() => setNavOpen((v) => !v)}
-            className="w-full flex items-center justify-between text-sm font-bold text-slate-400 dark:text-neutral-500 uppercase tracking-wider px-3 mb-3 md:pointer-events-none"
+            className="w-full flex items-center justify-between text-sm font-normal text-slate-400 dark:text-neutral-500 uppercase tracking-wider px-3 mb-3 md:pointer-events-none"
           >
-            <span>{t.navHeading}</span>
+            <span className="flex items-center gap-2">
+              <BookOpen size={16} />
+              {t.navHeading}
+            </span>
             <ChevronDown
               size={16}
               className={`md:hidden transition-transform ${navOpen ? 'rotate-180' : ''}`}
@@ -83,7 +86,7 @@ export default function DocumentsPage() {
           </button>
           <div className={`${navOpen ? 'block' : 'hidden'} md:block space-y-2`}>
           {docs.length === 0 ? (
-            <div className="px-3 py-2.5 text-sm text-slate-400 dark:text-neutral-500">{t.empty}</div>
+            <div className="px-3 py-2 text-sm text-slate-400 dark:text-neutral-500">{t.empty}</div>
           ) : (
             docs.map((doc) => (
               <div key={doc.slug}>
@@ -92,13 +95,12 @@ export default function DocumentsPage() {
                     setSelectedSlug(doc.slug)
                     setNavOpen(false) // 手機版選文章後自動收合
                   }}
-                  className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-normal flex items-center gap-2 transition-all cursor-pointer ${
+                  className={`w-full text-left px-6 py-1 rounded-xl text-sm font-normal flex items-center gap-2 transition-all cursor-pointer ${
                     activeSlug === doc.slug
                       ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 font-medium'
                       : 'hover:bg-slate-50 dark:hover:bg-neutral-900 text-slate-600 dark:text-neutral-400'
                   }`}
                 >
-                  <BookOpen size={16} />
                   <span>{doc.title}</span>
                 </button>
                 {activeSlug === doc.slug && status === 'ready' && headings.length > 0 && (
