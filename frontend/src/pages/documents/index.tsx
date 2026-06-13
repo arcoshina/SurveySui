@@ -18,6 +18,7 @@ export default function DocumentsPage() {
   const [status, setStatus] = useState<Status>('loading')
   const [navOpen, setNavOpen] = useState(false) // 手機版選單收合狀態（md+ 永遠展開）
   const mainRef = useRef<HTMLDivElement>(null)
+  const asideRef = useRef<HTMLElement>(null)
 
   // 從正文解析 h2 標題（剛好兩個 #，自動排除 h3+），供左欄目錄使用
   const headings = useMemo(() => {
@@ -66,11 +67,64 @@ export default function DocumentsPage() {
     }
   }, [lang, activeSlug])
 
+  // 雙向 sticky：側欄比視窗高時，往下捲跟著走並黏在底部（頁腳上方），往上捲黏回頂端。
+  // 純 CSS sticky 一次只能黏一邊，故用 transform 位移；僅桌機（md+）啟用，手機維持單欄堆疊。
+  useEffect(() => {
+    const aside = asideRef.current
+    const container = aside?.parentElement
+    if (!aside || !container) return
+    const NAVBAR = 64 // 對應 top-16（4rem）
+
+    let translate = 0
+    let frame = 0
+
+    const apply = () => {
+      frame = 0
+      // 手機版（單欄堆疊）不黏附，還原位移
+      if (!window.matchMedia('(min-width: 768px)').matches) {
+        if (translate !== 0) {
+          translate = 0
+          aside.style.transform = ''
+        }
+        return
+      }
+      const vh = window.innerHeight
+      const asideH = aside.offsetHeight
+      // 去掉目前位移後的自然視窗頂端位置
+      const naturalTop = aside.getBoundingClientRect().top - translate
+      // 渲染後頂端可落在 [lo, hi]：頂端最高黏在 NAVBAR；側欄較高時最低讓底部貼齊視窗底
+      const lo = Math.min(NAVBAR, vh - asideH)
+      const renderedTop = Math.min(NAVBAR, Math.max(lo, naturalTop))
+      // 不可超出容器（避免蓋到頁腳）
+      const maxTranslate = Math.max(0, container.offsetHeight - asideH)
+      translate = Math.min(Math.max(renderedTop - naturalTop, 0), maxTranslate)
+      aside.style.transform = `translateY(${translate}px)`
+    }
+
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(apply)
+    }
+
+    apply()
+    window.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule)
+    // 內容高度變化（展開 h2 目錄、切換文章）時重算
+    const ro = new ResizeObserver(schedule)
+    ro.observe(aside)
+    ro.observe(container)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      ro.disconnect()
+    }
+  }, [])
+
   return (
     <div className="flex-1 bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 transition-colors duration-200">
       <div className="mx-auto max-w-6xl px-6 py-12 flex flex-col md:flex-row gap-8">
         {/* 左側選單（由 manifest 自動產生） */}
-        <aside className="w-full md:w-64 shrink-0 space-y-2 sticky top-16 self-start max-h-[calc(100vh-5rem)] overflow-y-auto">
+        <aside ref={asideRef} className="w-full md:w-64 shrink-0 space-y-2 self-start will-change-transform">
           <button
             onClick={() => setNavOpen((v) => !v)}
             className="w-full flex items-center justify-between text-sm font-normal text-slate-400 dark:text-neutral-500 uppercase tracking-wider px-3 mb-3 md:pointer-events-none"
