@@ -181,9 +181,9 @@ export default function Navbar() {
       </div>
       {/* 翻譯警告橫列 */}
       {showTranslationWarn && (
-        <div className="bg-blue-50 dark:bg-blue-600/10 text-blue-900 dark:text-blue-200 border-t border-blue-200 dark:border-blue-700/40 py-2 px-6 flex items-center justify-between gap-4 text-xs font-normal transition-colors">
+        <div className="bg-blue-50 dark:bg-blue-600/10 text-blue-900 dark:text-blue-200 border-t border-blue-200 dark:border-blue-700/40 py-2 px-6 flex items-center justify-between gap-4 text-sm font-normal transition-colors">
           <div className="flex items-center gap-2 mx-auto">
-            <Languages size={15} className="text-blue-600 dark:text-blue-400 shrink-0" />
+            <Languages size={16} className="text-blue-600 dark:text-blue-400 shrink-0" />
             <span>{t.translationWarning}</span>
           </div>
           <button

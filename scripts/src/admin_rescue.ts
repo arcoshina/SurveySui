@@ -1,6 +1,7 @@
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { Transaction } from '@mysten/sui/transactions'
+import { bcs } from '@mysten/sui/bcs'
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +34,7 @@ try {
 function parseArgs() {
   const args = process.argv.slice(2)
   const params: Record<string, string | boolean> = {}
-  
+
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -48,37 +49,63 @@ function parseArgs() {
   return params
 }
 
+interface Cred {
+  nullifier: string // hex
+  source: number
+}
+
+/**
+ * 解析要註銷的憑證清單。一個失控帳號（如一個 gmail）會橫跨多 source
+ * （Google OAuth 的 sub nullifier【6】＋ email nullifier【2】），故救援端須「列舉」
+ * 失控帳號的全部 nullifier，一次批次傳入。
+ *
+ * 形式一（批次，推薦）：--creds "<hex>:<source>,<hex>:<source>,..."
+ * 形式二（單一，相容）：--nullifier <hex> --source <u8>
+ */
+function parseCreds(params: Record<string, string | boolean>): Cred[] {
+  if (typeof params.creds === 'string') {
+    return params.creds
+      .split(',')
+      .map((pair) => pair.trim())
+      .filter((pair) => pair.length > 0)
+      .map((pair) => {
+        const [nh, s] = pair.split(':')
+        if (!nh || s === undefined) {
+          throw new Error(`Invalid --creds entry "${pair}". Expected "<hex>:<source>".`)
+        }
+        return { nullifier: nh.trim().replace(/^0x/, ''), source: parseInt(s.trim(), 10) }
+      })
+  }
+  if (typeof params.nullifier === 'string' && typeof params.source === 'string') {
+    return [{ nullifier: params.nullifier.replace(/^0x/, ''), source: parseInt(params.source, 10) }]
+  }
+  return []
+}
+
 async function main() {
   const params = parseArgs()
-  
+
   const unrevoke = !!params.unrevoke
   const offlineOnly = !!params['offline-only']
   const passId = params.pass as string
-  const sourceStr = params.source as string
-  const nullifierHex = params.nullifier as string
   const reason = (params.reason as string) || 'Admin rescue revocation'
 
-  if (!sourceStr) {
-    console.error('Error: --source <u8> is required.')
+  const creds = parseCreds(params)
+
+  if (creds.length === 0) {
+    console.error('Error: provide --creds "<hex>:<source>,..." or --nullifier <hex> --source <u8>.')
     printUsage()
     process.exit(1)
   }
-  const source = parseInt(sourceStr, 10)
+  if (creds.some((c) => !Number.isInteger(c.source))) {
+    console.error('Error: every credential needs a valid integer source.')
+    printUsage()
+    process.exit(1)
+  }
 
+  // 鏈上批次註銷需要 Pass 物件；offline-only / unrevoke 僅同步 BFF。
   if (!unrevoke && !offlineOnly && !passId) {
-    console.error('Error: Either --pass <PASS_OBJECT_ID> or --offline-only must be specified.')
-    printUsage()
-    process.exit(1)
-  }
-
-  if (offlineOnly && !nullifierHex) {
-    console.error('Error: --nullifier <HEX> is required when running in offline-only mode.')
-    printUsage()
-    process.exit(1)
-  }
-
-  if (unrevoke && !nullifierHex) {
-    console.error('Error: --nullifier <HEX> is required for unrevoking.')
+    console.error('Error: --pass <PASS_OBJECT_ID> is required for on-chain revocation (or use --offline-only).')
     printUsage()
     process.exit(1)
   }
@@ -91,59 +118,24 @@ async function main() {
   const bffUrl = process.env.VITE_BFF_URL || process.env.BFF_URL || 'http://localhost:3100'
 
   const client = new SuiClient({ url: getFullnodeUrl(network) })
-  
-  let finalNullifiers: string[] = []
-  if (nullifierHex) {
-    finalNullifiers = [nullifierHex]
-  }
 
-  // ── Step 1: Execute on-chain transaction if needed ──
+  // ── Step 1: Execute on-chain batch revocation if needed ──
   if (!offlineOnly && !unrevoke && passId) {
-    console.log(`[Chain] Querying SurveyPass ${passId}...`)
-    // Query Pass's credential nullifiers from dynamic fields before executing transaction
-    try {
-      const dfResponse = await client.getDynamicFieldObject({
-        parentId: passId,
-        name: {
-          type: `${packageId}::survey_pass::CredentialKey`,
-          value: { source }
-        }
-      })
-      
-      if (dfResponse.data && dfResponse.data.content && dfResponse.data.content.dataType === 'moveObject') {
-        const fields = dfResponse.data.content.fields as any
-        const slot = fields.value?.fields
-        if (slot && Array.isArray(slot.nullifiers)) {
-          // Nullifiers are returned as byte arrays. Convert them to hex strings.
-          finalNullifiers = slot.nullifiers.map((n: any) => {
-            const bytes = Array.isArray(n) ? n : (n.fields?.vec ?? [])
-            return Buffer.from(bytes).toString('hex')
-          })
-          console.log(`[Chain] Successfully retrieved ${finalNullifiers.length} nullifier(s) from contract slot.`)
-        }
-      }
-    } catch (err: any) {
-      console.warn(`[Chain] Warning: Could not fetch nullifiers from contract slot (perhaps slot doesn't exist). ${err.message}`)
-    }
-
-    if (finalNullifiers.length === 0) {
-      console.error('Error: Could not retrieve nullifier from chain, and no --nullifier argument was provided.')
-      process.exit(1)
-    }
-
     const adminPrivKey = requireEnv('SUI_ADMIN_PRIVATE_KEY')
     const keypair = adminPrivKey.startsWith('suiprivkey')
       ? Ed25519Keypair.fromSecretKey(adminPrivKey)
       : Ed25519Keypair.fromSecretKey(Buffer.from(adminPrivKey, 'hex'))
-    
-    console.log(`[Chain] Sending admin_revoke_credential transaction for source ${source}...`)
+
+    const nullifierBytes = creds.map((c) => Array.from(Buffer.from(c.nullifier, 'hex')))
+
+    console.log(`[Chain] Sending admin_revoke_credential (batch of ${creds.length} nullifier(s))...`)
     const tx = new Transaction()
     tx.moveCall({
       target: `${packageId}::survey_pass::admin_revoke_credential`,
       arguments: [
         tx.object(passId),
         tx.object(issuerConfigId),
-        tx.pure.u8(source),
+        tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize(nullifierBytes).toBytes()),
       ],
     })
 
@@ -152,7 +144,7 @@ async function main() {
       signer: keypair,
       options: { showEffects: true }
     })
-    
+
     await client.waitForTransaction({ digest: txResponse.digest })
     if (txResponse.effects?.status.status === 'failure') {
       console.error(`[Chain] Transaction failed: ${txResponse.effects.status.error}`)
@@ -161,13 +153,13 @@ async function main() {
     console.log(`[Chain] Transaction successful! Digest: ${txResponse.digest}`)
   }
 
-  // ── Step 2: Sync with BFF Off-chain DB ──
+  // ── Step 2: Sync with BFF Off-chain DB（per (nullifier, source)）──
   const action = unrevoke ? 'unrevoke' : 'revoke'
   console.log(`[BFF] Sending sync request (${action}) to BFF at ${bffUrl}...`)
-  
-  for (const nh of finalNullifiers) {
+
+  for (const { nullifier: nh, source } of creds) {
     const endpoint = `${bffUrl}/api/admin/revocation/${action}`
-    const payload = unrevoke 
+    const payload = unrevoke
       ? { nullifier: nh, source }
       : { nullifier: nh, source, passId, reason }
 
@@ -185,7 +177,7 @@ async function main() {
       if (!res.ok) {
         throw new Error(data.message || 'HTTP Error')
       }
-      console.log(`[BFF] Successfully updated BFF for nullifier ${nh}:`, data.message)
+      console.log(`[BFF] Successfully updated BFF for nullifier ${nh} (source ${source}):`, data.message)
     } catch (err: any) {
       console.error(`[BFF] Error syncing with BFF for nullifier ${nh}: ${err.message}`)
       process.exit(1)
@@ -197,15 +189,18 @@ async function main() {
 
 function printUsage() {
   console.log(`
-Usage:
-  # Revoke a source when Pass still exists (Chain transaction + BFF sync)
-  npx tsx scripts/src/admin_rescue.ts --pass <PASS_OBJECT_ID> --source <SOURCE_U8> [--reason <REASON>]
-  
-  # Revoke a source when Pass has been deleted (BFF sync only)
-  npx tsx scripts/src/admin_rescue.ts --nullifier <HEX> --source <SOURCE_U8> --offline-only [--reason <REASON>]
-  
-  # Unrevoke a source (BFF sync only)
-  npx tsx scripts/src/admin_rescue.ts --unrevoke --nullifier <HEX> --source <SOURCE_U8>
+Usage（一個失控帳號可橫跨多 source，請列舉其全部 nullifier）:
+  # 批次撤銷（Pass 仍存在）：鏈上批次 + BFF 同步
+  npx tsx scripts/src/admin_rescue.ts --pass <PASS_OBJECT_ID> --creds "<hex>:<source>,<hex>:<source>" [--reason <REASON>]
+
+  # 單一憑證（相容寫法）
+  npx tsx scripts/src/admin_rescue.ts --pass <PASS_OBJECT_ID> --nullifier <HEX> --source <SOURCE_U8> [--reason <REASON>]
+
+  # Pass 已刪除，僅同步 BFF 黑名單
+  npx tsx scripts/src/admin_rescue.ts --offline-only --creds "<hex>:<source>,..." [--reason <REASON>]
+
+  # 解除撤銷（僅同步 BFF）
+  npx tsx scripts/src/admin_rescue.ts --unrevoke --creds "<hex>:<source>,..."
   `)
 }
 

@@ -7,7 +7,11 @@ import {
   decryptAnswers,
   encryptSurveyContent,
   decryptSurveyContent,
+  buildPublicContentBlob,
+  parseContentBlob,
+  sha256,
 } from './crypto'
+import { bytesToHex } from './answerCodec'
 
 // Deterministic stand-in for a wallet personal-message signature.
 function fakeSig(seedByte: number): Uint8Array {
@@ -199,5 +203,50 @@ describe('survey content encryption (unchanged, symmetric)', () => {
     )
     expect(out).toBe(markdown)
     expect(Buffer.from(creatorPublicKeyBytes)).toEqual(Buffer.from(kp.x25519PublicKeyBytes))
+  })
+})
+
+// Reproduces the publish→read content_hash flow:
+//   publish (FundPage): content_hash = sha256(md), stored on-chain
+//   read (SurveyPage):  recompute sha256(decoded markdown) and compare
+// These tests guarantee the read side reconstructs a byte-identical markdown so
+// honest surveys are never falsely flagged, and that tampering is detected.
+describe('content_hash integrity (publish ↔ read round-trip)', () => {
+  const samples = [
+    '# Hello\n\nPlain ascii body.',
+    '# 中文標題\n\n含 emoji 😀 與符號 ™ 的內容。\n\n- 項目一\n- 項目二\n',
+    '', // empty markdown edge case
+  ]
+
+  it('public blob (0x00) decodes byte-identically and hash matches', async () => {
+    for (const md of samples) {
+      const publishHash = bytesToHex(await sha256(md))
+      const blob = buildPublicContentBlob(md)
+      const parsed = parseContentBlob(blob)
+      expect(parsed.version).toBe(0x00)
+      expect(parsed.markdown).toBe(md)
+      const readHash = bytesToHex(await sha256(parsed.markdown!))
+      expect(readHash).toBe(publishHash)
+    }
+  })
+
+  it('encrypted blob (0x01) decrypts byte-identically and hash matches', async () => {
+    const kp = await deriveCreatorKeyPair(fakeSig(33), fakeSalt(33))
+    for (const md of samples) {
+      const publishHash = bytesToHex(await sha256(md))
+      const { encryptedBlob, contentKey } = await encryptSurveyContent(md, kp.x25519PublicKeyBytes)
+      const { markdown } = await decryptSurveyContent(encryptedBlob, contentKey)
+      expect(markdown).toBe(md)
+      const readHash = bytesToHex(await sha256(markdown))
+      expect(readHash).toBe(publishHash)
+    }
+  })
+
+  it('detects tampering — a single mutated byte yields a different hash', async () => {
+    const md = '# Real survey\n\nQ1: pick one.'
+    const publishHash = bytesToHex(await sha256(md))
+    const tampered = md.replace('pick one', 'pick TWO')
+    const tamperedHash = bytesToHex(await sha256(tampered))
+    expect(tamperedHash).not.toBe(publishHash)
   })
 })

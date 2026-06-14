@@ -95,6 +95,19 @@ export function bytesToBase64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 }
 
+/**
+ * SHA-256 of a UTF-8 string → 32 raw bytes.
+ *
+ * Single source of truth for content_hash: the publish side (FundPage) and the
+ * read side (SurveyPage integrity check) MUST hash identically, so both go
+ * through here to prevent algorithm drift.
+ */
+export async function sha256(text: string): Promise<Uint8Array> {
+  const data = new TextEncoder().encode(text)
+  const digest = await crypto.subtle.digest('SHA-256', data as any)
+  return new Uint8Array(digest)
+}
+
 /** Build PKCS#8 DER for X25519 from 32-byte seed. */
 function seedToX25519Pkcs8(seed: Uint8Array): Uint8Array {
   const der = new Uint8Array(X25519_PKCS8_PREFIX.length + seed.length)

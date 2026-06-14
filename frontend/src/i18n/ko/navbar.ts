@@ -13,7 +13,7 @@ const navbar: NavbarDict = {
   themeToDark: '다크 모드로 전환',
   openMenu: '메뉴 열기',
   betaWarning: '이 프로젝트는 아직 개발 중이며 테스트 전용입니다. 팀은 이 베타 버전의 콘텐츠 또는 사용에 대해 어떠한 책임도 지지 않습니다.',
-  translationWarning: '알림: 본 사이트는 다국어를 지원합니다. 일부 콘텐츠는 기계 번역되었을 수 있으며, 번역이 불명확한 경우 영어 또는 중국어(번체) 버전을 참고해 주시기 바랍니다.',
+  translationWarning: '본 사이트의 다국어 콘텐츠는 기계 번역입니다. 의미가 부정확한 경우 중국어(번체) 버전을 기준으로 해 주시기 바랍니다.',
   closeWarningBtn: '닫기',
 }
 

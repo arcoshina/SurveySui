@@ -13,7 +13,7 @@ const navbar: NavbarDict = {
   themeToDark: 'Cambiar a modo oscuro',
   openMenu: 'Abrir menú',
   betaWarning: 'Este proyecto aún está en desarrollo y es solo para pruebas. El equipo no asume ninguna responsabilidad por el contenido o uso de esta versión beta.',
-  translationWarning: 'Aviso: Ahora se admiten varios idiomas. Es posible que parte del contenido esté traducido automáticamente. En caso de discrepancia, consulta la versión en inglés o chino.',
+  translationWarning: 'El contenido multilingüe de este sitio está traducido automáticamente. Si el significado no es preciso, consulta la versión en chino.',
   closeWarningBtn: 'Cerrar',
 }
 

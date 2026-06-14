@@ -54,6 +54,7 @@ function inlineFormat(text: string): string {
   return escaped
     .replace(/\*\*([^\*]+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^\*]+?)\*/g, '<em>$1</em>')
+    .replace(/~~([^~]+?)~~/g, '<del>$1</del>')
     .replace(/`([^`]+?)`/g, '<code>$1</code>')
 }
 
@@ -104,6 +105,8 @@ export function renderMarkdown(md: string): string {
 
   const closeTable = () => {
     if (inTable) {
+      // 外層容器：表格不佔滿、先換行，塞不下時由此容器水平捲動
+      parts.push('<div class="prose-table">')
       parts.push('<table>')
       if (tableRows.length > 0) {
         parts.push('<thead>')
@@ -128,6 +131,7 @@ export function renderMarkdown(md: string): string {
         }
       }
       parts.push('</table>')
+      parts.push('</div>')
       inTable = false
       tableRows = []
       hasTableHeaderSeparator = false

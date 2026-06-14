@@ -21,7 +21,7 @@ export default function GuidePage() {
   const t = useT('guide')
 
   return (
-    <div className="min-h-screen bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 animate-fadeIn transition-colors">
+    <div className="flex-1 bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 animate-fadeIn transition-colors">
       {/* Header */}
       <section className="mx-auto max-w-3xl px-6 pt-16 pb-10">
         <h1 className="text-3xl sm:text-4xl font-normal leading-tight mb-6 text-slate-900 dark:text-white text-left">
@@ -86,10 +86,6 @@ export default function GuidePage() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="py-8 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
-        © 2026 SurveySui
-      </footer>
     </div>
   )
 }

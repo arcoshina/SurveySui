@@ -48,8 +48,8 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes
 }
 
-// 須與合約 survey_pass::REBATE_FEE_FLOOR 一致（MIST）。自付逃生門時附給項目方的費用下限。
-const REBATE_FEE_FLOOR_MIST = 10_000_000n
+// 須與合約 survey_pass::REBATE_FEE_FLOOR 一致（MIST）。自付逃生門時附給項目方的費用下限（flat floor）。
+const REBATE_FEE_FLOOR_MIST = 25_000_000n
 
 // 與後端 buildDeleteAuthMessage 完全一致的授權訊息格式（用 passId 原字串，不正規化）
 function buildDeleteAuthMessage(passId: string, signedTimestamp: number): string {
@@ -638,8 +638,8 @@ export default function AuthPage() {
   // 自付逃生門：使用者自付刪除代付 Pass，附 REBATE_FEE_FLOOR 費用回項目方
   async function offerEscapeHatch() {
     if (!activePass || !activeSigner) return
-    const credentialsCount = BigInt(activePass.credentialSources?.length ?? 1)
-    const floorFeeMist = REBATE_FEE_FLOOR_MIST * (1n + credentialsCount)
+    // flat floor：與合約 required_self_delete_fee 一致 = max(escape_clawback_mist, REBATE_FEE_FLOOR)
+    const floorFeeMist = REBATE_FEE_FLOOR_MIST
     const clawbackMist = activePass.escapeClawbackMist ?? 0n
     const dynamicFeeMist = clawbackMist > floorFeeMist ? clawbackMist : floorFeeMist
     const estSui = (Number(dynamicFeeMist) / 1_000_000_000).toFixed(4)
@@ -832,7 +832,7 @@ export default function AuthPage() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-12 min-h-screen flex flex-col justify-between text-slate-800 dark:text-neutral-200 animate-fadeIn transition-colors">
+    <main className="mx-auto max-w-4xl px-6 py-12 flex-1 flex flex-col text-slate-800 dark:text-neutral-200 animate-fadeIn transition-colors">
       <div className="w-full">
         {/* Title Header */}
         <div className="border-b pb-6 mb-8 border-slate-100 dark:border-neutral-800">
@@ -880,7 +880,8 @@ export default function AuthPage() {
                     return renderPassCard({
                       tier: activePass.effectiveTier,
                       expiresAt: activePass.expiresAt,
-                      sourceText: activePass.credentialSources.map((s) => getSourceLabel(s)).join(', '),
+                      // credential_sources 每槽一條、可能重複（如雙 email→[2,2]），顯示去重
+                      sourceText: [...new Set(activePass.credentialSources)].map((s) => getSourceLabel(s)).join(', '),
                       isExpired: activePass.expiresAt > 0 && activePass.expiresAt <= Date.now(),
                       showObjectId: true,
                     })
@@ -1303,9 +1304,6 @@ export default function AuthPage() {
         </div>
       )}
 
-      <footer className="mt-16 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
-        {t.footer} &copy; {new Date().getFullYear()}
-      </footer>
     </main>
   )
 }

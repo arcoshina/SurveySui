@@ -36,6 +36,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       28: '協議費用已結算，不可重複扣款。',
       29: 'Walrus blob ID 超過此問卷的鏈上長度上限。',
       30: 'blob ID 長度設定超出允許範圍。',
+      33: '問卷有效期不可超過 92 天，請縮短截止時間後重試。',
     },
     amm_pool: {
       1: 'SUI 注資金額為 0',
@@ -79,6 +80,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       28: 'Protocol fee already settled; cannot charge twice.',
       29: 'Walrus blob ID exceeds this survey on-chain length limit.',
       30: 'Blob ID length setting is out of allowed range.',
+      33: 'Survey lifetime cannot exceed 92 days; please shorten the deadline and try again.',
     },
     amm_pool: {
       1: 'SUI injection amount is 0.',
@@ -122,6 +124,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       28: 'プロトコル手数料は精算済みのため、二重に請求できません。',
       29: 'Walrus blob ID がこのアンケートのオンチェーン長さ上限を超えています。',
       30: 'blob ID の長さ設定が許容範囲を超えています。',
+      33: 'アンケートの有効期間は92日を超えることはできません。締め切りを短くして再試行してください。',
     },
     amm_pool: {
       1: 'SUI の注入額が 0 です。',
@@ -165,6 +168,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       28: '프로토콜 수수료가 이미 정산되어 중복 청구할 수 없습니다.',
       29: 'Walrus blob ID가 이 설문의 온체인 길이 한도를 초과했습니다.',
       30: 'blob ID 길이 설정이 허용 범위를 벗어났습니다.',
+      33: '설문 유효 기간은 92일을 초과할 수 없습니다. 마감 시간을 줄인 후 다시 시도하세요.',
     },
     amm_pool: {
       1: 'SUI 주입 금액이 0입니다.',
@@ -208,6 +212,7 @@ const ABORT_MAP: Record<string, Record<string, Record<number, string>>> = {
       28: 'La comisión del protocolo ya se ha liquidado; no se puede cobrar dos veces.',
       29: 'El blob ID de Walrus supera el límite de longitud en cadena de esta encuesta.',
       30: 'La configuración de longitud del blob ID está fuera del rango permitido.',
+      33: 'La duración de la encuesta no puede superar los 92 días; acorta la fecha límite e inténtalo de nuevo.',
     },
     amm_pool: {
       1: 'El monto de inyección de SUI es 0.',
@@ -256,6 +261,7 @@ const NAME_TO_CODE: Record<string, Record<string, number>> = {
     EFeeAlreadyPaid: 28,
     EBlobIdTooLarge: 29,
     EMaxBlobIdOutOfRange: 30,
+    EDeadlineTooFar: 33,
   },
   amm_pool: {
     EZeroAmount: 1,

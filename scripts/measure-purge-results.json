@@ -1,0 +1,43 @@
+{
+  "network": "localnet",
+  "packageId": "0x14731902ce525f614e4ef81fdaf0c6eb34be873c534a8578c11dc931d61ed75a",
+  "gasBudgetCapMist": "50000000000",
+  "purgeAnswersBatch": "100000000",
+  "timestamp": "2026-06-14T11:29:09.991Z",
+  "ceilings": [
+    {
+      "payload": "small (blob-id ~100B)",
+      "payloadBytes": 100,
+      "maxSafeN": 975,
+      "limiting": "MovePrimitiveRuntimeError(MoveLocationOpt(Some(MoveLocation { module: ModuleId { address: 0000000000000000000000000000000000000000000000000000000000000002, name: Identifier(\"dynamic_field\") }, function: 16, instruction: 0, function_name: Some(\"remove_child_object\") }))) in command 0",
+      "atCeiling": {
+        "computationCost": "38000000",
+        "storageCost": "7493600",
+        "storageRebate": "2858397696",
+        "upfrontGas": "45493600",
+        "netGas": "-2812904096"
+      },
+      "firstFailN": 1000,
+      "firstFailError": "MovePrimitiveRuntimeError(MoveLocationOpt(Some(MoveLocation { module: ModuleId { address: 0000000000000000000000000000000000000000000000000000000000000002, name: Identifier(\"dynamic_field\") }, function: 16, instruction: 0, function_name: Some(\"remove_child_object\") }))) in command 0"
+    },
+    {
+      "payload": "large (inline ~6144B)",
+      "payloadBytes": 6144,
+      "maxSafeN": 975,
+      "limiting": "MovePrimitiveRuntimeError(MoveLocationOpt(Some(MoveLocation { module: ModuleId { address: 0000000000000000000000000000000000000000000000000000000000000002, name: Identifier(\"dynamic_field\") }, function: 16, instruction: 0, function_name: Some(\"remove_child_object\") }))) in command 0",
+      "atCeiling": {
+        "computationCost": "1477000000",
+        "storageCost": "9925600",
+        "storageRebate": "47206305828",
+        "upfrontGas": "1486925600",
+        "netGas": "-45719380228"
+      },
+      "firstFailN": 1000,
+      "firstFailError": "MovePrimitiveRuntimeError(MoveLocationOpt(Some(MoveLocation { module: ModuleId { address: 0000000000000000000000000000000000000000000000000000000000000002, name: Identifier(\"dynamic_field\") }, function: 16, instruction: 0, function_name: Some(\"remove_child_object\") }))) in command 0"
+    }
+  ],
+  "validations": [
+    "executed N=243: success, vault destroyed=true",
+    "executed N=975: success, vault destroyed=true"
+  ]
+}

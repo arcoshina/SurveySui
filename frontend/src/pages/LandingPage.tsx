@@ -373,7 +373,7 @@ export default function LandingPage() {
   }, [pages.length, currentPage])
 
   return (
-    <div className="min-h-screen bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 animate-fadeIn transition-colors">
+    <div className="flex-1 bg-white text-slate-800 dark:bg-neutral-950 dark:text-neutral-300 animate-fadeIn transition-colors">
       {/* Hero */}
       <section className="mx-auto max-w-5xl px-6 py-20 text-center">
         <h1 className="text-4xl sm:text-5xl font-normal leading-tight mb-6 text-slate-900 dark:text-white">
@@ -620,10 +620,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="py-8 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
-        © 2026 SurveySui
-      </footer>
     </div>
   )
 }

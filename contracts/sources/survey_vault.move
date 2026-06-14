@@ -21,7 +21,11 @@ use std::ascii;
 const STATUS_OPEN: u8   = 0;
 const STATUS_CLOSED: u8 = 1;
 const MIN_PURGE_GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
-const DEFAULT_PURGE_GRACE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
+const DEFAULT_PURGE_GRACE_MS: u64 = 92 * 24 * 60 * 60 * 1000;
+/// Hard cap on a survey's active lifetime at creation (nominal 90d, relaxed to 92d).
+const MAX_SURVEY_DURATION_MS: u64 = 92 * 24 * 60 * 60 * 1000;
+/// Liveness fallback: anyone may purge this long after the terminal anchor.
+const PURGE_FALLBACK_GRACE_MS: u64 = 365 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_INLINE_ANSWER_BYTES: u64 = 6144;
 const MIN_MAX_INLINE_ANSWER_BYTES: u64 = 1024;
 const MAX_MAX_INLINE_ANSWER_BYTES: u64 = 32768;
@@ -60,6 +64,10 @@ const EBlobIdTooLarge: u64 = 29;
 const EMaxBlobIdOutOfRange: u64 = 30;
 const EGasCompTooLow: u64 = 31;
 const EVaultAlreadyHasSurvey: u64 = 32;
+const EDeadlineTooFar: u64 = 33;
+const EGraceTooLong: u64 = 34;
+/// Measurement-only entry guard (see bulk_add_answers_for_measurement). Never on mainnet.
+const EMeasurementNotAdmin: u64 = 35;
 const AUTH_PASS: u8 = 0;
 const AUTH_TICKET: u8 = 1;
 const CLAIM_MODE_PASS_AUDIENCE: u8 = 0;
@@ -348,8 +356,7 @@ fun step1a_identity_ok<Nft: key>(
     use_pass: bool,
     pass: &SurveyPass,
     use_nft: bool,
-    nft: &Nft,
-    attribute_nullifiers: &vector<vector<u8>>,
+    _nft: &Nft,
     clock: &Clock,
     ctx: &TxContext,
 ): bool {
@@ -474,7 +481,6 @@ public fun claim<Nft: key>(
             pass,
             use_nft,
             nft,
-            &attribute_nullifiers,
             clock,
             ctx,
         ),
@@ -747,7 +753,16 @@ public fun purge(
             assert!(now > vault.deadline_ms, EPurgeTooEarly);
             vault.deadline_ms
         };
-        assert!(now >= anchor + vault.purge_grace_ms, EPurgeTooEarly);
+        let sender = ctx.sender();
+        let is_authorized = sender == amm_pool::config_admin(config)
+            || amm_pool::is_purge_sponsor(config, sender);
+        if (is_authorized) {
+            // admin / BFF sponsor: normal grace window.
+            assert!(now >= anchor + vault.purge_grace_ms, EPurgeTooEarly);
+        } else {
+            // anyone else: liveness fallback only, far past the anchor.
+            assert!(now >= anchor + PURGE_FALLBACK_GRACE_MS, EPurgeTooEarly);
+        };
     };
     let survey_id = object::id(&survey);
     let batch = amm_pool::purge_answers_batch(config);
@@ -846,8 +861,10 @@ public fun create_empty(
     gas_compensation_amount: u64,
     storage_compensation_amount: u64,
     ticket_fee: u64,
+    purge_grace_ms: u64,
     allowed_nft_type: Option<vector<u8>>,
     config: &ProtocolConfig,
+    clock: &Clock,
     ctx: &mut TxContext,
 ): SurveyVault {
     assert!(per_response >= 1, EInvalidRewardConfig);
@@ -856,6 +873,14 @@ public fun create_empty(
         gas_compensation_amount >= amm_pool::min_gas_compensation_mist(config),
         EGasCompTooLow,
     );
+    assert!(
+        deadline_ms <= clock::timestamp_ms(clock) + MAX_SURVEY_DURATION_MS,
+        EDeadlineTooFar,
+    );
+    // grace 在建立時一次定案、之後不可改:下限保護 sponsor 代付成本回收節奏,
+    // 上限(= 預設 92 天)防發起者事後延後平台的強制銷毀能力。
+    assert!(purge_grace_ms >= MIN_PURGE_GRACE_MS, EGraceTooShort);
+    assert!(purge_grace_ms <= DEFAULT_PURGE_GRACE_MS, EGraceTooLong);
     let per_response_sui = gas_compensation_amount + storage_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
         max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
@@ -885,7 +910,7 @@ public fun create_empty(
         storage_compensation_amount,
         answers_count: 0,
         answers_purged: 0,
-        purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
+        purge_grace_ms,
         max_inline_answer_bytes: DEFAULT_MAX_INLINE_ANSWER_BYTES,
         max_blob_id_bytes: DEFAULT_MAX_BLOB_ID_BYTES,
         fee_paid: false,
@@ -998,11 +1023,6 @@ public fun set_gas_compensation_amount(
     assert!(new_amount >= amm_pool::min_gas_compensation_mist(config), EGasCompTooLow);
     vault.gas_compensation_amount = new_amount;
 }
-public fun set_purge_grace_ms(vault: &mut SurveyVault, new_grace_ms: u64, ctx: &TxContext) {
-    assert!(ctx.sender() == vault.creator, ENotCreator);
-    assert!(new_grace_ms >= MIN_PURGE_GRACE_MS, EGraceTooShort);
-    vault.purge_grace_ms = new_grace_ms;
-}
 public fun set_max_inline_answer_bytes(vault: &mut SurveyVault, new_max: u64, ctx: &TxContext) {
     assert!(ctx.sender() == vault.creator, ENotCreator);
     assert!(new_max >= MIN_MAX_INLINE_ANSWER_BYTES, EMaxInlineOutOfRange);
@@ -1052,4 +1072,39 @@ public fun add_answer_for_testing(vault: &mut SurveyVault, payload: vector<u8>) 
         claimed_at_ms: 0,
     });
     vault.answers_count = idx + 1;
+}
+
+/// MEASUREMENT ONLY — bulk-insert `count` real AnswerRecord dynamic fields, each
+/// carrying a `payload_size`-byte payload, to profile how many answers a single
+/// `purge` transaction can destroy. Admin-gated. This entry must live only on the
+/// `measurement` git branch / localnet and MUST NOT be merged to main or published
+/// to any public network: it lets the admin inflate `answers_count` arbitrarily.
+public fun bulk_add_answers_for_measurement(
+    vault: &mut SurveyVault,
+    count: u64,
+    payload_size: u64,
+    config: &ProtocolConfig,
+    ctx: &TxContext,
+) {
+    assert!(ctx.sender() == amm_pool::config_admin(config), EMeasurementNotAdmin);
+    // Build the payload template once; vector<u8> is copyable, so each record copies it.
+    let mut payload = vector<u8>[];
+    let mut b = 0;
+    while (b < payload_size) {
+        vector::push_back(&mut payload, 0u8);
+        b = b + 1;
+    };
+    let mut i = 0;
+    while (i < count) {
+        let idx = vault.answers_count;
+        df::add(&mut vault.id, idx, AnswerRecord {
+            kind: 0,
+            payload,
+            respondent: @0x0,
+            sub_hash: vector[],
+            claimed_at_ms: 0,
+        });
+        vault.answers_count = idx + 1;
+        i = i + 1;
+    };
 }

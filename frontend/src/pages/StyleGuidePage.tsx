@@ -7,7 +7,7 @@ export default function StyleGuidePage() {
   const { isDark, toggleTheme } = useTheme()
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-neutral-950 text-slate-800 dark:text-neutral-100 transition-colors duration-200 pb-20">
+    <div className="flex-1 bg-slate-50 dark:bg-neutral-950 text-slate-800 dark:text-neutral-100 transition-colors duration-200 pb-20">
       {/* Header */}
       <div className="bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 py-8 px-6 transition-colors shadow-sm">
         <div className="max-w-5xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">

@@ -73,6 +73,8 @@ flowchart TB
 - **IPFS fallback 是本地 mock**（[`ipfsProxy.ts`](../../bff/src/storage/ipfsProxy.ts)）：非真正去中心化，僅作 Walrus 不可用時的開發備援。正式環境的容錯策略（重試 Walrus vs 真 IPFS pinning）尚未決策（TBD）。
 - Walrus blob **不會在 purge 時刪除**（Walrus 由 epoch 到期自然過期）；`VITE_WALRUS_STORAGE_EPOCHS` 與 `purge_grace_ms` 需在部署時一起調校，避免答卷在寬限期內已不可讀。
 - blob 內容的可用性與完整性由 `blob_id` 上鏈背書；鏈上不驗 blob 內容雜湊（信任 Walrus content-addressing）。
+- **問卷內容完整性 = 鏈上承諾 + 前端讀取驗證兩段**：發布時前端對完整 markdown 算 `content_hash = sha256(md)` 上鏈（`FundPage`），登記後不可改；作答時 `SurveyPage` 解出內容（inline 解密 / Walrus 下載 / 公開明文皆然）後 **recompute `sha256(markdown)` 與鏈上 `content_hash` 比對**，不符即落入非阻斷的警告頁（使用者可選擇續填或返回）。兩端共用 `crypto.ts::sha256` 杜絕演算法 drift。
+- **殘留信任邊界**：前端仍信任使用者選用的 RPC / Walrus aggregator 之**可用性**；上述驗證把「內容被掉包」的攻擊面限縮為「可被前端偵測並警示」，但不防 DoS（節點拒絕服務）。
 
 ## 環境變數
 

@@ -342,7 +342,7 @@ export async function initProtocolAndCanonicalPool(
   console.log(`  protocolConfigId: ${protocolConfigId}`)
 
   const minGasComp = parseEnvU64('MIN_GAS_COMPENSATION_AMOUNT', 100_000_000n)
-  const purgeBatch = parseEnvU64('PURGE_ANSWERS_BATCH', 100n)
+  const purgeBatch = parseEnvU64('PURGE_ANSWERS_BATCH', 500n)
   console.log(
     `Configuring protocol limits (min_gas_compensation=${minGasComp}, purge_batch=${purgeBatch})…`
   )
@@ -361,6 +361,42 @@ export async function initProtocolAndCanonicalPool(
     options: { showEffects: true },
   })
   await client.waitForTransaction({ digest: limitsResult.digest, timeout: 120_000 })
+
+  // Authorise BFF sponsor address(es) for normal-grace purge. Comma-separated, ≤3.
+  // Defaults to GAS_SPONSOR_ADDRESS (the multisig sponsor the BFF signs purge with)
+  // so deploy/reset wire this up automatically; set SUI_PURGE_SPONSORS to override
+  // (e.g. to add backup sponsors). Without any sponsor the BFF falls into the long
+  // liveness-fallback window — only the creator could purge at grace.
+  const purgeSponsorsRaw = process.env.SUI_PURGE_SPONSORS ?? process.env.GAS_SPONSOR_ADDRESS
+  const sponsors = (purgeSponsorsRaw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  if (sponsors.length > 3) {
+    throw new Error(`SUI_PURGE_SPONSORS supports at most 3 addresses, got ${sponsors.length}`)
+  }
+  if (sponsors.length > 0) {
+    console.log(`Setting purge sponsors (${sponsors.length})…`)
+    const sponsorsTx = new Transaction()
+    sponsorsTx.moveCall({
+      target: `${packageId}::amm_pool::set_purge_sponsors`,
+      arguments: [
+        sponsorsTx.object(protocolConfigId),
+        sponsorsTx.pure.vector('address', sponsors),
+      ],
+    })
+    const sponsorsResult = await client.signAndExecuteTransaction({
+      transaction: sponsorsTx,
+      signer: keypair,
+      options: { showEffects: true },
+    })
+    await client.waitForTransaction({ digest: sponsorsResult.digest, timeout: 120_000 })
+    console.log(`  purge sponsors set: ${sponsors.join(', ')}`)
+  } else {
+    console.warn(
+      '  ⚠️  Neither SUI_PURGE_SPONSORS nor GAS_SPONSOR_ADDRESS set — purge_sponsors is empty; BFF cannot purge at grace until admin calls set_purge_sponsors.'
+    )
+  }
 
   console.log('Bootstrapping canonical AMM pool…')
   const poolTx = new Transaction()

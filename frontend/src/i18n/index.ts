@@ -60,6 +60,12 @@ import jaExplore from './ja/explore'
 import koExplore from './ko/explore'
 import esExplore from './es/explore'
 
+import zhDocs from './zh/docs'
+import enDocs from './en/docs'
+import jaDocs from './ja/docs'
+import koDocs from './ko/docs'
+import esDocs from './es/docs'
+
 /**
  * 集中語言字典註冊表。
  * 每個 namespace 對應一頁（或共用元件）的文案，ZH 為型別正本、EN 須吻合其形狀。
@@ -76,6 +82,7 @@ export const dictionaries = {
   create: { ZH: zhCreate, EN: enCreate, JA: jaCreate, KO: koCreate, ES: esCreate },
   dashboard: { ZH: zhDashboard, EN: enDashboard, JA: jaDashboard, KO: koDashboard, ES: esDashboard },
   explore: { ZH: zhExplore, EN: enExplore, JA: jaExplore, KO: koExplore, ES: esExplore },
+  docs: { ZH: zhDocs, EN: enDocs, JA: jaDocs, KO: koDocs, ES: esDocs },
 } as const
 
 export type Namespace = keyof typeof dictionaries

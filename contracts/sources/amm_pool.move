@@ -14,7 +14,10 @@ const EInvalidFeeConfig: u64     = 4;
 const ENotCanonicalPool: u64     = 6;
 const EPoolAlreadyRegistered: u64 = 7;
 const EInvalidPurgeBatch: u64    = 9;
+const ETooManySponsors: u64      = 10;
 const DEFAULT_PURGE_ANSWERS_BATCH: u64 = 100;
+/// Max number of BFF sponsor addresses authorised to purge at the normal grace.
+const MAX_PURGE_SPONSORS: u64 = 3;
 /// Human units: 1 SUI → 1000 SR/SSR at bootstrap (DECIMALS=6).
 const INITIAL_SSR_PER_SUI: u128 = 1000;
 /// 10^(9 - DECIMALS) for bootstrap divisor (DECIMALS=6 → 1000).
@@ -39,6 +42,8 @@ public struct ProtocolConfig has key {
     canonical_pool_id: Option<ID>,
     min_gas_compensation_mist: u64,
     purge_answers_batch: u64,
+    /// BFF sponsor addresses authorised to purge at the normal grace (≤ MAX_PURGE_SPONSORS).
+    purge_sponsors: vector<address>,
 }
 public fun create_protocol_config(ctx: &mut TxContext) {
     transfer::share_object(ProtocolConfig {
@@ -47,7 +52,22 @@ public fun create_protocol_config(ctx: &mut TxContext) {
         canonical_pool_id: option::none(),
         min_gas_compensation_mist: 0,
         purge_answers_batch: DEFAULT_PURGE_ANSWERS_BATCH,
+        purge_sponsors: vector[],
     });
+}
+/// Admin-only: replace the full list of purge sponsor addresses (≤ MAX_PURGE_SPONSORS).
+public fun set_purge_sponsors(
+    config: &mut ProtocolConfig,
+    sponsors: vector<address>,
+    ctx: &TxContext,
+) {
+    assert!(ctx.sender() == config.admin, ENotAdmin);
+    assert!(sponsors.length() <= MAX_PURGE_SPONSORS, ETooManySponsors);
+    config.purge_sponsors = sponsors;
+}
+public fun config_admin(config: &ProtocolConfig): address { config.admin }
+public fun is_purge_sponsor(config: &ProtocolConfig, who: address): bool {
+    config.purge_sponsors.contains(&who)
 }
 public fun configure_protocol_limits(
     config: &mut ProtocolConfig,

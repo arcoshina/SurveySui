@@ -89,10 +89,50 @@
     box-shadow: none !important;
   }
 
-  /* 優化日韓文大段文字的折行體驗，維持完整單詞不碎裂 */
+  /* 折行：預設（含中／英／西）回到逐字／詞的自然折行 */
   h1, h2, h3, h4, h5, h6, p, .prose {
-    word-break: keep-all;
+    word-break: normal;
     overflow-wrap: break-word;
+  }
+
+  /* 僅日（ja）韓（ko）維持完整單詞不碎裂；依 <html lang> 自動切換 */
+  :is(h1, h2, h3, h4, h5, h6, p, .prose):lang(ja),
+  :is(h1, h2, h3, h4, h5, h6, p, .prose):lang(ko) {
+    word-break: keep-all;
+  }
+
+  /* Markdown 表格（.prose 為三處 renderMarkdown 共用標記；配色依 docs/Style_Guide.md §1/§7） */
+  /* 外層容器：表格不佔滿、儲存格先換行，min-content 仍塞不下時才水平捲動 */
+  .prose .prose-table {
+    margin: 1.5rem 0;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .prose table {
+    width: auto;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  .prose thead {
+    border-bottom: 1px solid var(--color-slate-300);
+  }
+  .prose th {
+    text-align: left;
+    padding: 0.625rem 0.75rem;
+    font-weight: 400;
+    color: var(--color-slate-800);
+  }
+  .prose td {
+    padding: 0.625rem 0.75rem;
+    vertical-align: top;
+    color: var(--color-slate-600);
+    border-bottom: 1px solid var(--color-slate-100);
+  }
+  .dark .prose thead { border-bottom-color: var(--color-neutral-700); }
+  .dark .prose th { color: var(--color-neutral-200); }
+  .dark .prose td {
+    color: var(--color-neutral-400);
+    border-bottom-color: var(--color-neutral-800);
   }
 }
 

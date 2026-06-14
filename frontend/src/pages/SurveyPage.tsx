@@ -17,7 +17,7 @@ import {
   probeGasSponsorHealth,
   USER_DECLINED_SELF_PAID,
 } from '../lib/sponsoredTx'
-import { decryptSurveyContent, encryptAnswers, base64urlToBytes, parseContentBlob } from '../lib/crypto'
+import { decryptSurveyContent, encryptAnswers, base64urlToBytes, parseContentBlob, sha256 } from '../lib/crypto'
 import { parseFullSurveyMarkdown, type QuestionType, sanitizeQuestionIds } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
@@ -92,6 +92,7 @@ type Phase =
   | 'success'
   | 'error'
   | 'closed'
+  | 'hash-mismatch'
 
 export default function SurveyPage() {
   const { id } = useParams<{ id: string }>()
@@ -541,6 +542,29 @@ export default function SurveyPage() {
           }
         }
 
+        // 完整性驗證：重算內容雜湊，與鏈上登記的 content_hash 比對。
+        // 發布端對同一份 markdown 算 sha256 上鏈（FundPage），這裡用同一個共用
+        // sha256 還原比對，攔截 RPC / Walrus aggregator 對內容的掉包。
+        let contentHashMismatch = false
+        try {
+          const onchainContentHash = fields.content_hash
+          if (onchainContentHash) {
+            const onchainHex = bytesToHex(normalizeBytes(onchainContentHash))
+            const computedHex = bytesToHex(await sha256(markdown))
+            contentHashMismatch = onchainHex.toLowerCase() !== computedHex.toLowerCase()
+            if (contentHashMismatch) {
+              console.warn(
+                '[SurveyPage] content_hash mismatch — on-chain:',
+                onchainHex,
+                'computed:',
+                computedHex
+              )
+            }
+          }
+        } catch (e) {
+          console.warn('[SurveyPage] content_hash verification failed to run:', e)
+        }
+
         // Parse markdown
         const parsed = parseFullSurveyMarkdown(markdown)
         if (!parsed.ok) {
@@ -643,7 +667,8 @@ export default function SurveyPage() {
         } catch (e) {
           console.warn('[SurveyPage] failed to restore saved answers:', e)
         }
-        setPhase('filling')
+        // survey 已 set，使用者按「繼續填答」時即有資料可渲染。
+        setPhase(contentHashMismatch ? 'hash-mismatch' : 'filling')
       } catch (err: any) {
         console.error('Failed to load survey:', err)
         setSubmitError(err.message || t.errLoadSurveyFailed)
@@ -1001,9 +1026,35 @@ export default function SurveyPage() {
     }
   }, [answers, id])
 
+  if (phase === 'hash-mismatch') {
+    return (
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-amber-200 dark:border-amber-900/50 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-500 border border-amber-100 dark:border-amber-900/50">
+            <AlertTriangle size={28} />
+          </div>
+          <h1 className="text-h1">{t.hashMismatchTitle}</h1>
+          <p className="text-muted leading-relaxed">{t.hashMismatchDesc}</p>
+          <div className="w-full flex flex-col gap-3">
+            <button
+              type="button"
+              onClick={() => setPhase('filling')}
+              className="btn-danger w-full"
+            >
+              {t.hashMismatchContinue}
+            </button>
+            <Link to="/" className="btn-secondary w-full">
+              {t.backHome}
+            </Link>
+          </div>
+        </div>
+      </main>
+    )
+  }
+
   if (!activeSigner && phase !== 'loading' && phase !== 'closed') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <h1 className="text-h1">{t.connectWalletTitle}</h1>
           <p className="text-muted leading-relaxed">
@@ -1028,7 +1079,7 @@ export default function SurveyPage() {
 
   if (phase === 'loading') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
           <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
@@ -1041,7 +1092,7 @@ export default function SurveyPage() {
 
   if ((phase === 'error' || !survey) && phase !== 'closed') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
             <AlertTriangle size={24} />
@@ -1056,7 +1107,7 @@ export default function SurveyPage() {
 
   if (phase === 'closed') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500">
             <svg
@@ -1089,7 +1140,7 @@ export default function SurveyPage() {
 
   if (phase === 'success') {
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 border border-emerald-100 mb-1 animate-scaleIn">
             <svg
@@ -1147,7 +1198,7 @@ export default function SurveyPage() {
   if (phase === 'review' || phase === 'submitting') {
     if (!survey) return null
     return (
-      <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
+      <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
           <div className="border-b pb-4 border-slate-100 dark:border-neutral-800">
             <h1 className="text-h1">{t.reviewTitle}</h1>
@@ -1306,7 +1357,7 @@ export default function SurveyPage() {
   if (!survey) return null
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 max-w-4xl mx-auto">
+    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
 
         {/* 頂部問卷標題與說明區 */}
@@ -1756,10 +1807,6 @@ export default function SurveyPage() {
             </button>
           )}
         </form>
-        {/* Footer */}
-        <footer className="py-8 text-center text-xs text-slate-400 dark:text-neutral-500 font-medium transition-colors">
-          © 2026 SurveySui
-        </footer>
       </div>
     </main>
   )

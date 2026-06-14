@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import fs from 'node:fs'
 import path from 'node:path'
+import docsManifest from './vite-plugin-docs-manifest'
 
 // Read and parse root .env
 const envPath = path.resolve(__dirname, '../.env')
@@ -19,7 +20,7 @@ if (fs.existsSync(envPath)) {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), docsManifest()],
   envDir: path.resolve(__dirname, '..'),
   define: {
     'import.meta.env.VITE_PACKAGE_ID': JSON.stringify(env.SUI_PACKAGE_ID || ''),

@@ -56,8 +56,8 @@ export const SRC_ATTRIBUTES = 8
 /**
  * Fetches per-credential slots for a SurveyPass by enumerating its CredentialKey dynamic fields.
  *
- * 每個來源對應一個 CredentialSlot（dynamic field，key = CredentialKey { source }）。
- * 回傳各憑證的 source / tier / issuedAt / expiresAt，供扇形堆疊卡顯示。
+ * 一憑證一槽（dynamic field，key = CredentialKey { nullifier }）；source 改存於 slot body。
+ * 同一 source 可有多槽（如雙 email）。回傳各憑證的 source / tier / issuedAt / expiresAt。
  *
  * @param suiClient The SuiClient instance
  * @param passId The SurveyPass object ID
@@ -79,10 +79,6 @@ export async function fetchPassCredentials(
     do {
       const page: any = await suiClient.getDynamicFields({ parentId: passId, cursor })
       for (const df of page.data ?? []) {
-        // df.name.value 形如 { source: N }
-        const source = Number((df.name?.value as any)?.source)
-        if (!Number.isFinite(source)) continue
-
         const fieldObj = await suiClient.getDynamicFieldObject({
           parentId: passId,
           name: df.name,
@@ -90,7 +86,9 @@ export async function fetchPassCredentials(
         const content = fieldObj?.data?.content
         if (content && 'fields' in content) {
           const slot = (content.fields as any).value?.fields ?? (content.fields as any).value
-          if (slot) {
+          // source 改存於 slot body（key 現為 nullifier）；非 CredentialSlot 的 df 略過
+          const source = Number(slot?.source)
+          if (slot && Number.isFinite(source)) {
             result.push({
               source,
               tier: getSourceTier(source),

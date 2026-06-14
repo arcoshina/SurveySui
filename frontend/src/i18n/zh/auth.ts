@@ -37,7 +37,6 @@ const auth = {
   submitting: '提交中...',
   btnUpdatePass: '更新驗證',
   btnVerifyAndMint: '驗證並鑄造',
-  footer: 'SurveySui 去中心化誰位通證中心',
   backToSurvey: '返回問卷繼續填答 ➡',
   selfReport: '自我申報',
   emailOtp: '電子郵件 OTP',

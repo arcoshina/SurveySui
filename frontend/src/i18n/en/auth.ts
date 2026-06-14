@@ -39,7 +39,6 @@ const auth: AuthDict = {
   submitting: 'Submitting...',
   btnUpdatePass: 'Update SurveyPass',
   btnVerifyAndMint: 'Verify & Mint',
-  footer: 'SurveySui Decentralized Identity Center',
   backToSurvey: 'Back to survey ➡',
   selfReport: 'Self Report',
   emailOtp: 'Email OTP',

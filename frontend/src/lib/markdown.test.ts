@@ -9,6 +9,12 @@ describe('renderMarkdown XSS and Link/Image Proxy Sanitization', () => {
     )
   })
 
+  it('should render strikethrough text correctly', () => {
+    expect(renderMarkdown('This is ~~deleted~~ text')).toBe(
+      '<p>This is <del>deleted</del> text</p>'
+    )
+  })
+
   it('should escape raw HTML tags to prevent HTML injection', () => {
     const malicious = 'Hello <script>alert(1)</script> <iframe src="evil"></iframe>'
     expect(renderMarkdown(malicious)).not.toContain('<script>')
