@@ -89,10 +89,16 @@
     box-shadow: none !important;
   }
 
-  /* 優化日韓文大段文字的折行體驗，維持完整單詞不碎裂 */
+  /* 折行：預設（含中／英／西）回到逐字／詞的自然折行 */
   h1, h2, h3, h4, h5, h6, p, .prose {
-    word-break: keep-all;
+    word-break: normal;
     overflow-wrap: break-word;
+  }
+
+  /* 僅日（ja）韓（ko）維持完整單詞不碎裂；依 <html lang> 自動切換 */
+  :is(h1, h2, h3, h4, h5, h6, p, .prose):lang(ja),
+  :is(h1, h2, h3, h4, h5, h6, p, .prose):lang(ko) {
+    word-break: keep-all;
   }
 
   /* Markdown 表格（.prose 為三處 renderMarkdown 共用標記；配色依 docs/Style_Guide.md §1/§7） */
