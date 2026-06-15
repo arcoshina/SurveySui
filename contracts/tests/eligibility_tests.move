@@ -35,7 +35,7 @@ fun claim_pass(
     pass: &SurveyPass,
     attribute_nullifiers: vector<vector<u8>>,
     encrypted_answers: Option<vector<u8>>,
-    answer_blob_id: Option<vector<u8>>,
+    _answer_blob_id: Option<vector<u8>>,
     clock: &clock::Clock,
     ctx: &mut TxContext,
 ) {
@@ -55,7 +55,6 @@ fun claim_pass(
         vector[],
         0,
         encrypted_answers,
-        answer_blob_id,
         clock,
         ctx,
     );
@@ -279,7 +278,6 @@ fun claim_attribute_allowlist_without_pass_aborts() {
         vector[],
         0,
         option::some(b"answers"),
-        option::none(),
         &clock,
         ts::ctx(&mut sc),
     );
@@ -421,7 +419,6 @@ fun claim_ticket_without_step1_identity_aborts() {
         vector[4, 5, 6],
         9_999_999_999,
         option::some(b"answers"),
-        option::none(),
         &clock,
         ts::ctx(&mut sc),
     );
@@ -620,7 +617,6 @@ fun claim_ticket_auth_on_pass_mode_aborts() {
         vector[4, 5, 6],
         9_999_999_999,
         option::some(b"answers"),
-        option::none(),
         &clock,
         ts::ctx(&mut sc),
     );

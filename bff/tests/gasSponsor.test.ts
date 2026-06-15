@@ -4,9 +4,9 @@ import cors from '@fastify/cors'
 import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { bcs } from '@mysten/sui/bcs'
-import { createMultisigSponsorSigner, keypairFromHex } from '@surveysui/gas-station-core'
+import { createMultisigSponsorSigner, keypairFromHex, InMemoryCoinLockStore } from '@surveysui/gas-station-core'
 import { registerGasRoutes, __useInMemoryPassReservationsForTests } from '../src/gas/handler.js'
-import { __resetGasConfigCache } from '../src/gas/gasConfig.js'
+import { __resetGasConfigCache, getGasConfig } from '../src/gas/gasConfig.js'
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
 import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
 import { signTicket } from '../src/auth/ticket.js'
@@ -293,6 +293,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     delete process.env.SUI_PACKAGE_ID
     delete process.env.MAX_PLATFORM_CLAIM_GAS_MIST
     delete process.env.MIN_PLATFORM_SPONSOR_TIER
+    delete process.env.PLATFORM_CLAIM_SPONSOR_ENABLED
     delete process.env.GAS_STATION_MODE
     delete process.env.GAS_STATION_URL
     delete process.env.GAS_STATION_SHARED_SECRET
@@ -908,6 +909,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   })
 
   it('should reject platform claim when wallet pass is email-only (tier check)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
     process.env.MIN_PLATFORM_SPONSOR_TIER = '1'
     __resetGasConfigCache()
 
@@ -968,6 +970,94 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     expect(response.statusCode).toBe(403)
     expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
+  })
+
+  it('rejects vault-insufficient claim with 409 vault_gas_insufficient when platform fallback disabled (default)', async () => {
+    // Default: PLATFORM_CLAIM_SPONSOR_ENABLED unset → false. Vault gas pool empty → 409, no coin locked.
+    mockSuiClient.getObject.mockResolvedValue({
+      data: {
+        objectId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            gas_balance: '0',
+            gas_compensation_amount: '5000000',
+            storage_compensation_amount: '0',
+            max_inline_answer_bytes: '6144',
+          },
+        },
+      },
+    })
+
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId: '0x000000000000000000000000000000000000000000000000000000000000000c',
+      }),
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(JSON.parse(response.payload).error).toBe('vault_gas_insufficient')
+    // Rejected before the pipeline → no gas coin acquired/locked.
+    expect(mockSuiClient.dryRunTransactionBlock).not.toHaveBeenCalled()
+  })
+
+  it('/execute releases the spent gas coin lock after broadcast (local mode)', async () => {
+    const spyQueue = InMemoryCoinLockStore.fromGasConfig(getGasConfig())
+    const invalidateSpy = vi.spyOn(spyQueue, 'invalidateCoin')
+    const server2 = Fastify()
+    await server2.register(cors, { origin: true })
+    registerGasRoutes(server2, { suiClient: mockSuiClient as any, packageId, coinQueue: spyQueue })
+
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId: '0x000000000000000000000000000000000000000000000000000000000000000c',
+      }),
+    })
+    tx.setSender(userAddress)
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const sponsorRes = await server2.inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: { txBytes, senderAddress: userAddress },
+    })
+    expect(sponsorRes.statusCode).toBe(200)
+    const { sponsoredTxBytes, sponsorSignature } = JSON.parse(sponsorRes.payload)
+    const { signature: userSignature } = await userKeypair.signTransaction(
+      new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
+    )
+    const execRes = await server2.inject({
+      method: 'POST',
+      url: '/api/gas/execute',
+      payload: { sponsoredTxBytes, userSignature, sponsorSignature },
+    })
+
+    expect(execRes.statusCode).toBe(200)
+    expect(invalidateSpy).toHaveBeenCalled()
+    await server2.close()
   })
 
   it('should reject PTB mixing survey_pass and survey_vault::claim', async () => {

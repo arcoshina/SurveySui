@@ -58,8 +58,6 @@ describe('runSponsorPipeline', () => {
         isPassSponsor: true,
         isPlatformSponsor: false,
         claimGasCompensationAmount: null,
-        claimStorageCompensationAmount: null,
-        claimHasBlob: false,
       },
     })
 
@@ -115,8 +113,6 @@ describe('runSponsorPipeline', () => {
         isPassSponsor: false,
         isPlatformSponsor: false,
         claimGasCompensationAmount: null,
-        claimStorageCompensationAmount: null,
-        claimHasBlob: false,
       },
     })
 

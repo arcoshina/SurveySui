@@ -13,6 +13,7 @@ import {
   assertTxSenderMatches,
   senderFromTransactionData,
   gasOwnerFromTransactionData,
+  gasPaymentCoinIdsFromTransactionData,
   verifyTxSignatureBy,
 } from './sponsorAuth.js'
 import { resolveCountScope } from './sponsorPolicy.js'
@@ -32,6 +33,7 @@ import {
   fetchGasStationHealth,
   forwardSponsorToGasStation,
   getGasStationMode,
+  releaseGasStationCoins,
 } from './gasStationClient.js'
 import { getWalletSponsorRateLimitStore } from './stores/sqliteWalletRateLimitStore.js'
 interface GasSponsorRequestBody {
@@ -229,7 +231,10 @@ export function registerGasRoutes(
       sponsorAddress,
       suiClient: deps.suiClient,
       ticketIssuerKeypair: loadTicketIssuerKeypair(),
-      options: { enforcePassLimit: false },
+      options: {
+        enforcePassLimit: false,
+        platformClaimEnabled: gasConfig.platformClaimSponsorEnabled,
+      },
       hooks: {
         effectiveInlineLimit,
         todayUtcDate,
@@ -486,6 +491,16 @@ export function registerGasRoutes(
             error: 'execution_failed',
             message: result.effects.status.error ?? 'Transaction execution failed',
           })
+        }
+        // Coin is now spent on-chain; free its lock immediately instead of waiting
+        // for the TTL, raising coin-pool turnover. Best-effort, never blocks the response.
+        const spentCoinIds = gasPaymentCoinIdsFromTransactionData(sponsoredTxBytes)
+        if (spentCoinIds.length > 0) {
+          if (getGasStationMode() === 'do') {
+            void releaseGasStationCoins(spentCoinIds).catch(() => undefined)
+          } else {
+            for (const id of spentCoinIds) coinQueue.invalidateCoin(id)
+          }
         }
         return { digest: result.digest }
       } catch (err: any) {

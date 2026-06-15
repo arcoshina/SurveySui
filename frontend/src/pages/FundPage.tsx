@@ -188,11 +188,8 @@ export default function FundPage() {
     return BigInt(gasHealth.gasCompensationAmount ?? '0')
   }, [gasHealth])
 
-  const storageCompensationAmountMIST = useMemo(() => {
-    if (!frontmatter?.ok) return 0n
-    const amount = frontmatter.data.storageCompensationAmount ?? 0.01
-    return BigInt(Math.round(amount * 1_000_000_000))
-  }, [frontmatter])
+  // 答卷一律 inline、storage 補償已廢除:不再向 gas 池預存 storage 補償,避免過度鎖倉。
+  const storageCompensationAmountMIST = 0n
 
   const ticketFeeMist = useMemo(() => getTicketFeeMist(), [])
 
@@ -414,6 +411,8 @@ export default function FundPage() {
         schemaHash,
         creatorPubKey: creatorPubKeyForChain,
         questions: fullSurvey.data.questions,
+        // 加密問卷：題幹與選項明文不進交易輸入（schema_hash 仍用真實題目計算）
+        redactQuestionContent: encrypt,
         allowedSources: fullSurvey.data.allowedSources,
         offsetIn: cost.offsetIn,
         creatorSsrCoins: ssrCoins,

@@ -6,7 +6,7 @@
 
 ## 摘要
 
-BFF 以 **2-of-3 multisig sponsor** 為使用者代付兩類交易：**Pass 鑄造/更新**（平台終身額度制）與 **問卷 claim**（vault gas 池支付補償；池空時轉平台日額度）。所有代付交易經 **MoveCall 白名單 + dry-run** 驗證後才簽名，無資料表記帳——**免費額度即時數鏈上歷史**。
+BFF 以 **2-of-3 multisig sponsor** 為使用者代付兩類交易：**Pass 鑄造/更新**（平台終身額度制）與 **問卷 claim**（由發起者預存的 vault gas 池支付補償；池不足時預設**拒簽並引導自付**，可用 env `PLATFORM_CLAIM_SPONSOR_ENABLED` 開回平台日額度 fallback）。所有代付交易經 **MoveCall 白名單 + dry-run** 驗證後才簽名，無資料表記帳——**免費額度即時數鏈上歷史**。
 
 **單簽授權模型**：代付分兩步——`/api/gas/sponsor` 只做白名單驗證 + dry-run + 代簽（不消耗額度、不需前置授權簽章），`/api/gas/execute` 驗證**使用者的交易簽章**（即代付同意憑證）後才原子預留額度並廣播。使用者全程只簽**一次**（交易本身）。額度狙擊（冒用他人地址消耗終生額度）由「execute 需受害者交易簽章、攻擊者偽造不出」杜絕；硬上限由 execute 端的原子預留保證。
 
@@ -50,7 +50,7 @@ flowchart TB
 - Pass 類與 claim **不可混在同一筆**；其他模組一律拒絕。
 - 代付 mint 的 `deposit_payer` 參數必須 = sponsor 地址（確保 rebate 分流，見 [PassLifecycle.md](PassLifecycle.md)）。
 - Pass ticket 在 BFF 端先驗一次 issuer 簽名；extra credentials 上限 `MAX_EXTRA_CREDENTIALS`。
-- claim 代付加驗：inline 答案 ≤ `effectiveInlineLimit`（env cap 與 vault 鏈上值取小）、blob_id ≤ 1000 bytes、`encrypted_answers` 與 `answer_blob_id` 不可同時帶。
+- claim 代付加驗：答卷一律 inline，`encrypted_answers` ≤ `effectiveInlineLimit`（env cap 與 vault 鏈上值取小），超限回 `inline_answer_too_large`。**已無 blob 答卷路線**。
 - 代付 Pass 交易另經 escape clawback 驗證：首張代付 ticket ≥ `ceil(netGas × 110%)`（[PassLifecycle.md](PassLifecycle.md)）。
 
 ---
@@ -72,11 +72,17 @@ flowchart TB
 
 ### Claim 代付（vault → platform 兩層）
 
-驗證時讀取 vault：`gas_balance ≥ gas_compensation_amount` → **vault-sponsored**（補償在鏈上回流 sponsor，見下節）；不足 → **platform-sponsored**：
+**前置：答卷一律 inline，無 blob/Walrus 路線。** 加密後超過 inline 上限者，前端**阻擋送出**並引導精簡內容／改貼雲端連結（見 [StorageStrategy.md](StorageStrategy.md)）。已廢除答卷 blob 與 `storage_compensation_amount`，根因：blob_id 鏈上不可驗、易被詐冒抽乾補助池。
 
-- 日額度 `PLATFORM_SPONSOR_DAILY_LIMIT`（預設 **3 次／錢包／UTC 日**，SQLite 記帳）。
-- Tier 門檻 `MIN_PLATFORM_SPONSOR_TIER`（預設 0；設 1 時須持有 Social / World ID 槽，見 [PassLifecycle.md](PassLifecycle.md)）。
-- 單筆 gas 上限 `MAX_PLATFORM_CLAIM_GAS_MIST`（預設 30_000_000）。
+驗證時讀取 vault：`gas_balance ≥ gas_compensation_amount` → **vault-sponsored**（gas 補償在鏈上回流 sponsor，見下節）；不足時的行為由 env 旗標 **`PLATFORM_CLAIM_SPONSOR_ENABLED`**（預設 **false**）決定：
+
+- **預設（關閉）**：直接回 **`409 vault_gas_insufficient`**，**不代付**。前端據此引導受訪者**自付** gas 完成領獎（合約原生支援自付 claim；FE 走既有 self-paid fallback，顯示「此問卷 Gas 代付池已用罄」對話框）。狀態碼刻意用 409（非 422、訊息不含 "dry run"/"MoveAbort"），以免被前端誤判為硬擋的 `DRY_RUN_REJECTED`。
+- **開啟（`=true`）**：沿用舊的 **platform-sponsored** 兩層 fallback——平台承擔 gas，靠下列防護：
+  - 日額度 `PLATFORM_SPONSOR_DAILY_LIMIT`（預設 **3 次／錢包／UTC 日**，SQLite 記帳）。
+  - Tier 門檻 `MIN_PLATFORM_SPONSOR_TIER`（預設 0；設 1 時須持有 Social / World ID 槽，見 [PassLifecycle.md](PassLifecycle.md)）。
+  - 單筆 gas 上限 `MAX_PLATFORM_CLAIM_GAS_MIST`（預設 30_000_000）。
+
+> 旗標於 `local` 與 `do`（Gas Station DO）兩模式皆生效：BFF `/sponsor` 與 worker DO 的 `validateSponsorTransaction` 都帶入 `platformClaimEnabled`。
 
 ---
 
@@ -94,11 +100,12 @@ flowchart TB
 
 ## 鏈上補償金流（`survey_vault::claim` 內，[`survey_vault.move`](../../contracts/sources/survey_vault.move) `process_claim_and_payout`）
 
-| 情境 | gas 補償（`gas_compensation_amount`） | 儲存補償（`storage_compensation_amount`） |
-|------|--------------------------------------|--------------------------------------------|
-| 代付且 tx sponsor == `vault.sponsor_address` | → sponsor（池足額才付） | blob 答卷且池足額 → **併入同一筆轉給 sponsor** |
-| 自付（無 sponsor）＋ blob 答卷 | 不付 | → respondent（補貼其自付的 Walrus/儲存成本） |
-| 自付＋ inline 答卷 | 不付 | 不付 |
+答卷一律 inline，補償只剩 **gas 補償**（`storage_compensation_amount` 已廢除）：
+
+| 情境 | gas 補償（`gas_compensation_amount`） |
+|------|--------------------------------------|
+| 代付且 tx sponsor == `vault.sponsor_address` | → sponsor（池足額才付） |
+| 自付（無 sponsor） | 不付（自付者的成本由發起者的 `reward` 吸收） |
 
 - `vault.sponsor_address` 由 creator 設定（預設為建立時參數）；補償下限 `ProtocolConfig.min_gas_compensation_mist`（`EGasCompTooLow`）。
 - BFF 對 vault-sponsored claim 動態估補償展示值：取最近 10 筆 `claim` 成功交易的 netGas（修剪最大值後取 peak），上限 `min × 3`，快取 60 秒（[`handler.ts`](../../bff/src/gas/handler.ts) `calculateDynamicGasCompensation`）。
@@ -110,7 +117,7 @@ flowchart TB
 
 - **金鑰**：`GAS_SPONSOR_PRIV_1/2` + 冷存 `GAS_SPONSOR_PUBKEY_3` 組 2-of-3 multisig（[`sponsorSigner.ts`](../../bff/src/gas/sponsorSigner.ts)；產生腳本 `scripts/src/setup-multisig-sponsor.ts`）。分層原則見 [安全指引](../安全指引.md)。
 - **模式**：`GAS_STATION_MODE=local`（BFF 內簽）或 `do`（轉發 Cloudflare Durable Object，`GAS_STATION_URL` + `GAS_STATION_SHARED_SECRET`，HMAC 驗證）。
-- **Coin 佇列**：sponsor coin 上鎖輪用（lock TTL 30s、重試 3 次、庫存 5s 刷新）。
+- **Coin 佇列**：sponsor coin 上鎖輪用（lock TTL 30s、重試 3 次、庫存 5s 刷新）。`/execute` 廣播成功後會**立即釋放**該筆 gas coin 的鎖（local 直接 `invalidateCoin`；do 模式以 HMAC 簽章打 worker `POST /release`，best-effort、失敗仍由 TTL 兜底），避免已花掉的 coin 空佔鎖位、提升池週轉。
 - **Coin merge task**（[`coinMergeTask.ts`](../../bff/src/gas/coinMergeTask.ts)）：碎片 coin（< `COIN_MERGE_THRESHOLD_SUI`，預設 0.1 SUI）數量 ≥ `COIN_MERGE_TRIGGER_COUNT`（預設 50）時合併；間隔 `COIN_MERGE_INTERVAL_MS`（預設 1h）。
 - close / purge 背景任務同樣以 sponsor signer 送出（見 [SurveyLifecycle.md](SurveyLifecycle.md)）。
 
@@ -120,3 +127,7 @@ flowchart TB
 |------|------|
 | 2026-06-11 | 初版：自 `bff/src/gas/`、`packages/gas-station-core/` 現狀萃取，整合鏈上補償分流與 SPONSOR_COUNT_SCOPE 語意 |
 | 2026-06-11 | 改單簽授權模型：拆出 `/api/gas/execute`，額度預留/日額度遞增移至「驗過使用者交易簽章之後」，移除前置 personal-message 授權簽章（使用者由 2 簽降為 1 簽，仍杜絕額度狙擊） |
+| 2026-06-15 | Claim platform 代付改 env 旗標 `PLATFORM_CLAIM_SPONSOR_ENABLED` 控制（預設關）：vault 池不足即回 `409 vault_gas_insufficient`，前端引導自付；新增 `/execute` 廣播後即時釋放 gas coin 鎖（local + do worker `/release`） |
+| 2026-06-15 | blob（Walrus）答卷不代付：新增 env 旗標 `SPONSOR_BLOB_ANSWERS_ENABLED`（預設關），帶 `answer_blob_id` 的 claim 回 `409 blob_answer_not_sponsored`，前端落自付（仍可送 Walrus）；理由為 blob 領取額外耗 vault 池 `storage_compensation_amount`、抬高代付成本 |
+| 2026-06-15 | 前端 blob 自付改主動式：`SurveyPage` 於**上傳 Walrus 前**先估 gas、跳自付確認框，確認後才上傳並 `forceSelfPaid` 直接自付（不再呼叫 `/api/gas/sponsor`）。BFF `blob_answer_not_sponsored` 退居「防繞過前端」防線；`SPONSOR_BLOB_ANSWERS_ENABLED` 自此僅作用於直打 BFF 的呼叫 |
+| 2026-06-15 | **廢除答卷 blob 路線與 storage 補償**：答卷一律 inline，超過上限即拒（禁止大型答卷）。移除合約 `answer_blob_id`／`used_blob_ids`／`max_blob_id_bytes`、core/BFF 的 blob 代付驗證與 `SPONSOR_BLOB_ANSWERS_ENABLED`、前端 Walrus 上傳與自付分流；`storage_compensation_amount` 停用（struct 欄位已移除，`create_empty` 保留參數位置但忽略）。根因：blob_id 鏈上不可驗、易詐冒抽乾補助池（V4_Tasks L40/L41）。問卷內容 Walrus 不受影響 |

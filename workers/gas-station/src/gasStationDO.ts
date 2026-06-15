@@ -68,6 +68,28 @@ export class GasStationDO implements DurableObject {
       return Response.json(await this.health())
     }
 
+    if (request.method === 'POST' && url.pathname === '/release') {
+      const rawBody = await request.text()
+      const authError = this.verifyRequestAuth(request, rawBody)
+      if (authError) {
+        return Response.json({ error: 'unauthorized', message: authError }, { status: 401 })
+      }
+      let releaseBody: { coinObjectIds?: string[] }
+      try {
+        releaseBody = JSON.parse(rawBody) as { coinObjectIds?: string[] }
+      } catch {
+        return Response.json({ error: 'invalid_json', message: 'Malformed JSON body' }, { status: 400 })
+      }
+      // Spent coins: drop the lock + cache directly (not via the sponsor queue).
+      // Racing with acquire is benign — worst case the next acquire re-fetches inventory.
+      const ids = Array.isArray(releaseBody.coinObjectIds) ? releaseBody.coinObjectIds : []
+      for (const id of ids) {
+        if (typeof id === 'string') this.coinStore.invalidateCoin(id)
+      }
+      this.metrics.lockedCoinCount = this.coinStore.getLockedCoinIds().size
+      return Response.json({ released: ids.length })
+    }
+
     if (request.method !== 'POST' || url.pathname !== '/sponsor') {
       return new Response('Not found', { status: 404 })
     }
@@ -194,6 +216,7 @@ export class GasStationDO implements DurableObject {
         enforcePassLimit: false,
         enforcePlatformQuota: false,
         enforcePlatformTier: false,
+        platformClaimEnabled: gasConfig.platformClaimSponsorEnabled,
       },
     })
     if (!validation.ok) {

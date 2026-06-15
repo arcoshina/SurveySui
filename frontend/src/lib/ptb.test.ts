@@ -1,12 +1,45 @@
 import { describe, expect, it } from 'vitest'
 import {
   SSR_BASE_PER_UNIT,
+  buildCreateSurveyPtb,
   computeSsrOut,
   estimateFundCostV2,
   invertSuiForMint,
 } from './ptb'
 
 const DEFAULT_FEE = { totalFeeBps: 2000n, discountBps: 5000n }
+
+// 蒐集交易所有 Pure 輸入的 raw bytes，攤平成單一 buffer 供子序列搜尋。
+function collectPureInputBytes(tx: ReturnType<typeof buildCreateSurveyPtb>): Uint8Array {
+  const inputs = (tx.getData().inputs ?? []) as Array<{ Pure?: { bytes?: string } }>
+  const chunks = inputs
+    .map((i) => i?.Pure?.bytes)
+    .filter((b): b is string => typeof b === 'string')
+    .map((b) => new Uint8Array(Buffer.from(b, 'base64')))
+  const total = chunks.reduce((n, c) => n + c.length, 0)
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(c, off)
+    off += c.length
+  }
+  return out
+}
+
+function containsSubsequence(haystack: Uint8Array, needle: Uint8Array): boolean {
+  if (needle.length === 0) return false
+  for (let i = 0; i + needle.length <= haystack.length; i++) {
+    let hit = true
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) {
+        hit = false
+        break
+      }
+    }
+    if (hit) return true
+  }
+  return false
+}
 
 describe('computeSsrOut / invertSuiForMint', () => {
   it('bootstrap: 1 SUI mints 1000 SSR', () => {
@@ -96,6 +129,57 @@ describe('estimateFundCostV2 (additive royalty on reward budget)', () => {
     expect(est.grossSsrBase).toBe(net + est.feeBase)
   })
 
+})
+
+describe('buildCreateSurveyPtb redactQuestionContent', () => {
+  const SECRET_PROMPT = 'SECRET_PROMPT_文字'
+  const SECRET_OPTION = 'SECRET_OPTION_選項'
+  const enc = new TextEncoder()
+
+  const baseParams = {
+    packageId: '0x2',
+    poolId: '0x2',
+    protocolConfigId: '0x2',
+    srTreasuryId: '0x2',
+    ssrTreasuryId: '0x2',
+    registryId: '0x2',
+    adminTreasury: '0x2',
+    perResponse: 1n,
+    maxResponses: 1,
+    deadlineMs: 1n,
+    encryptedContent: new Uint8Array([1, 2, 3]),
+    suiToSpend: 0n,
+    contentHash: new Uint8Array(32),
+    schemaHash: new Uint8Array(32),
+    creatorPubKey: new Uint8Array(32),
+    questions: [
+      { id: 'q-real-id', type: 'single_choice', prompt: SECRET_PROMPT, options_json: [SECRET_OPTION], required: true },
+    ],
+  }
+
+  it('redact=true: 題幹與選項文字不出現在任何交易輸入', () => {
+    const tx = buildCreateSurveyPtb({ ...baseParams, redactQuestionContent: true })
+    const bytes = collectPureInputBytes(tx)
+    expect(containsSubsequence(bytes, enc.encode(SECRET_PROMPT))).toBe(false)
+    expect(containsSubsequence(bytes, enc.encode(SECRET_OPTION))).toBe(false)
+  })
+
+  it('redact=false（公開問卷）: 題幹與選項仍明文上鏈', () => {
+    const tx = buildCreateSurveyPtb({ ...baseParams, redactQuestionContent: false })
+    const bytes = collectPureInputBytes(tx)
+    expect(containsSubsequence(bytes, enc.encode(SECRET_PROMPT))).toBe(true)
+    expect(containsSubsequence(bytes, enc.encode(SECRET_OPTION))).toBe(true)
+  })
+
+  it('redact=true: schema_hash 由呼叫端傳入、不受佔位影響', () => {
+    const schemaHash = new Uint8Array(32).fill(7)
+    const tx = buildCreateSurveyPtb({ ...baseParams, schemaHash, redactQuestionContent: true })
+    const bytes = collectPureInputBytes(tx)
+    expect(containsSubsequence(bytes, schemaHash)).toBe(true)
+  })
+})
+
+describe('estimateFundCostV2 tail', () => {
   it('inverts mint cost from pool reserves', () => {
     const minted = 500n * SSR_BASE_PER_UNIT
     const suiReserve = 10_000_000_000n

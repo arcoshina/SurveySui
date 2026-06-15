@@ -5,7 +5,6 @@ const guide: GuideDict = {
   title: 'Guía para principiantes: Cómo crear tu billetera Sui',
   intro:
     'SurveySui es una plataforma de encuestas creada en la blockchain pública de Sui. Solo necesitas una billetera Sui gratuita para conectarte, obtener tu SurveyPass y comenzar a responder encuestas de forma totalmente gratuita. Las tarifas de transacción las paga el creador de la encuesta. A continuación, te mostramos los 5 pasos para comenzar rápidamente con zkLogin (inicio de sesión con Google) a través de la billetera Slush, sin necesidad de frases mnemónicas ni criptomonedas.',
-  stepLabel: 'Paso',
   steps: [
     {
       title: 'Instalar la extensión de la billetera Slush',

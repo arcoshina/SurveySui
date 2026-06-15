@@ -15,7 +15,7 @@ const ENotCanonicalPool: u64     = 6;
 const EPoolAlreadyRegistered: u64 = 7;
 const EInvalidPurgeBatch: u64    = 9;
 const ETooManySponsors: u64      = 10;
-const DEFAULT_PURGE_ANSWERS_BATCH: u64 = 100;
+const DEFAULT_PURGE_ANSWERS_BATCH: u64 = 500;
 /// Max number of BFF sponsor addresses authorised to purge at the normal grace.
 const MAX_PURGE_SPONSORS: u64 = 3;
 /// Human units: 1 SUI → 1000 SR/SSR at bootstrap (DECIMALS=6).

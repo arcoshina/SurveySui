@@ -86,25 +86,6 @@ const getMaxInlineAnswerBytes = (): number => {
 
 export const MAX_INLINE_ANSWER_BYTES = getMaxInlineAnswerBytes()
 
-/** Mirrors `survey_vault::DEFAULT_MAX_BLOB_ID_BYTES` (256). Used only at survey create PTB. */
-const getMaxBlobIdBytes = (): number => {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      const bytes = import.meta.env.VITE_MAX_BLOB_ID_BYTES
-      if (bytes) return Number(bytes)
-    }
-  } catch {}
-  try {
-    if (typeof process !== 'undefined' && process.env) {
-      const bytes = process.env.MAX_BLOB_ID_BYTES ?? process.env.VITE_MAX_BLOB_ID_BYTES
-      if (bytes) return Number(bytes)
-    }
-  } catch {}
-  return 256
-}
-
-export const MAX_BLOB_ID_BYTES = getMaxBlobIdBytes()
-
 // ── estimate fund cost V2 ─────────────────────────────────────────────────────
 
 export interface EstimateFundCostV2Params {
@@ -240,6 +221,11 @@ export interface BuildCreateSurveyPtbParams {
     options_json: string[] | null
     required: boolean
   }>
+  /**
+   * 加密問卷時設為 true：題幹與選項以佔位值送入 new_question，真實文字絕不進交易輸入
+   * （Sui 交易歷史永久公開）。題型與必填保留供格式驗證；schema_hash 仍由呼叫端用真實題目計算。
+   */
+  redactQuestionContent?: boolean
   offsetIn?: bigint
   creatorSsrCoins?: { coinObjectId: string; balance: string }[]
   sponsorAddress?: string
@@ -331,16 +317,10 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     ],
   })
 
-  // 1c. Set inline answer size cap from deployment env (Walrus above this threshold).
+  // 1c. Set inline answer size cap from deployment env. 答卷一律 inline,超過即拒。
   tx.moveCall({
     target: `${p.packageId}::survey_vault::set_max_inline_answer_bytes`,
     arguments: [vault, tx.pure.u64(MAX_INLINE_ANSWER_BYTES)],
-  })
-
-  // 1d. Set Walrus blob id byte cap (chain enforces on blob claim path).
-  tx.moveCall({
-    target: `${p.packageId}::survey_vault::set_max_blob_id_bytes`,
-    arguments: [vault, tx.pure.u64(MAX_BLOB_ID_BYTES)],
   })
 
   // 2. Deposit existing SSR offset
@@ -429,17 +409,23 @@ export function buildCreateSurveyPtb(p: BuildCreateSurveyPtbParams): Transaction
     arguments: [vault, tx.object(p.poolId), tx.object(p.protocolConfigId)],
   })
 
-  // Build questions vector
-  const questionsArgs = questions.map((q) => {
+  // Build questions vector.
+  // 加密問卷（redactQuestionContent）：題幹用固定佔位 '-'（非空以通過合約 EEmptyQuestion）、
+  // 選項用空陣列、id 用序號，僅保留題型與必填。真實題幹/選項文字不進交易輸入。
+  const questionsArgs = questions.map((q, i) => {
+    const redact = p.redactQuestionContent === true
+    const id = redact ? String(i + 1) : q.id
+    const prompt = redact ? '-' : q.prompt
+    const options = redact ? [] : q.options_json || []
     return tx.moveCall({
       target: `${p.packageId}::survey_registry::new_question`,
       arguments: [
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.id))),
+        tx.pure.vector('u8', Array.from(new TextEncoder().encode(id))),
         tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.type))),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(q.prompt))),
+        tx.pure.vector('u8', Array.from(new TextEncoder().encode(prompt))),
         tx.pure.vector(
           'vector<u8>',
-          (q.options_json || []).map((opt) => Array.from(new TextEncoder().encode(opt)))
+          options.map((opt) => Array.from(new TextEncoder().encode(opt)))
         ),
         tx.pure.bool(q.required),
       ],

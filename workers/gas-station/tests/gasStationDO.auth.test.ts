@@ -29,7 +29,7 @@ function mockState(): DurableObjectState {
       setAlarm: async () => {},
       deleteAlarm: async () => {},
       sync: async () => {},
-      transaction: async (closure) => closure(mockState().storage),
+      transaction: async (closure: (txn: any) => any) => closure(mockState().storage),
     },
     blockConcurrencyWhile: async (fn: () => Promise<void>) => {
       await fn()
@@ -103,6 +103,43 @@ describe('GasStationDO /sponsor auth', () => {
     expect(res.status).toBe(401)
   })
 
+  it('rejects /release without valid HMAC', async () => {
+    const res = await doInstance.fetch(
+      new Request('https://gas-station.test/release', {
+        method: 'POST',
+        body: JSON.stringify({ coinObjectIds: ['0xabc'] }),
+      })
+    )
+    expect(res.status).toBe(401)
+  })
+
+  it('releases the given coin locks on signed /release', async () => {
+    const coinId = '0x00000000000000000000000000000000000000000000000000000000000000aa'
+    // Seed a live lock directly on the coin store.
+    ;(doInstance as any).coinStore.state.locks[coinId] = { expiresAt: Date.now() + 999_999 }
+    expect((doInstance as any).coinStore.getLockedCoinIds().has(coinId)).toBe(true)
+
+    const body = { coinObjectIds: [coinId] }
+    const rawBody = JSON.stringify(body)
+    const timestamp = String(Date.now())
+    const signature = signGasStationBody(SHARED_SECRET, timestamp, rawBody)
+    const res = await doInstance.fetch(
+      new Request('https://gas-station.test/release', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-gas-station-timestamp': timestamp,
+          'x-gas-station-signature': signature,
+        },
+        body: rawBody,
+      })
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { released: number }
+    expect(json.released).toBe(1)
+    expect((doInstance as any).coinStore.getLockedCoinIds().has(coinId)).toBe(false)
+  })
+
   it('re-validates PTB and ignores client pipelineContext (invalid tx → 400)', async () => {
     const packageId = baseEnv().SUI_PACKAGE_ID!
     const sender = '0x0000000000000000000000000000000000000000000000000000000000000003'
@@ -121,8 +158,6 @@ describe('GasStationDO /sponsor auth', () => {
         isPassSponsor: false,
         isPlatformSponsor: false,
         claimGasCompensationAmount: null,
-        claimStorageCompensationAmount: null,
-        claimHasBlob: false,
       },
     }
     const res = await doInstance.fetch(signedRequest(body))

@@ -49,6 +49,8 @@ export interface ValidateSponsorTransactionInput {
     enforcePassLimit?: boolean
     enforcePlatformQuota?: boolean
     enforcePlatformTier?: boolean
+    /** When false, vault-insufficient claims are rejected instead of falling back to platform sponsorship. */
+    platformClaimEnabled?: boolean
   }
 }
 
@@ -140,6 +142,7 @@ export async function validateSponsorTransaction(
   const enforcePassLimit = options.enforcePassLimit !== false
   const enforcePlatformQuota = options.enforcePlatformQuota !== false
   const enforcePlatformTier = options.enforcePlatformTier !== false
+  const platformClaimEnabled = options.platformClaimEnabled !== false
   const inlineLimitFn = hooks.effectiveInlineLimit ?? defaultEffectiveInlineLimit
 
   const tx = Transaction.fromKind(Buffer.from(txBytes, 'base64'))
@@ -208,8 +211,6 @@ export async function validateSponsorTransaction(
   const isPassSponsor = hasPass
   let isPlatformSponsor = false
   let claimGasCompensationAmount: bigint | null = null
-  let claimStorageCompensationAmount: bigint | null = null
-  let claimHasBlob = false
   let passId: string | null = null
 
   if (isPassSponsor) {
@@ -272,11 +273,9 @@ export async function validateSponsorTransaction(
   } else {
     const call = commands[0].MoveCall!
     let answersArg: unknown = null
-    let blobIdArg: unknown = null
     let vaultId: string | null = null
     if (call.function === 'claim') {
       answersArg = call.arguments[12]
-      blobIdArg = call.arguments[13]
       const firstArg = call.arguments[0]
       if (firstArg && typeof firstArg === 'object' && (firstArg as { $kind?: string }).$kind === 'Input') {
         vaultId = getObjectIdFromInput(tx.getData().inputs[(firstArg as { Input: number }).Input])
@@ -292,19 +291,10 @@ export async function validateSponsorTransaction(
       }
     }
     let answersParsed: { isSome: boolean; payload: Uint8Array | null }
-    let blobParsed: { isSome: boolean; payload: Uint8Array | null }
     try {
       answersParsed = parseOptionVectorU8(answersArg ? getPureBytes(answersArg) : null)
-      blobParsed = parseOptionVectorU8(blobIdArg ? getPureBytes(blobIdArg) : null)
     } catch {
       return err(400, 'malformed_option', 'Malformed Option argument in claim parameters')
-    }
-    if (answersParsed.isSome && blobParsed.isSome) {
-      return err(
-        400,
-        'ambiguous_answer_payload',
-        'Cannot set both inline encrypted_answers and answer_blob_id'
-      )
     }
     if (!vaultId) {
       return err(400, 'invalid_transaction_commands', 'Failed to extract SurveyVault ID')
@@ -324,28 +314,29 @@ export async function validateSponsorTransaction(
     const inlineLimit = inlineLimitFn(vaultMaxInline)
     if (answersParsed.isSome && answersParsed.payload) {
       if (answersParsed.payload.length > inlineLimit) {
+        // 答卷一律 inline 上鏈;超過上限即拒(禁止大型答卷,blob 路線已廢除)。
         return err(
           400,
           'inline_answer_too_large',
-          `Encrypted answers payload exceeds inline limit (${inlineLimit} bytes); use Walrus storage`
+          `Encrypted answers payload exceeds inline limit (${inlineLimit} bytes); please shorten the answer`
         )
       }
     }
-    if (blobParsed.isSome && blobParsed.payload && blobParsed.payload.length > 1000) {
-      return err(400, 'blob_id_too_large', 'Answer blob_id size exceeds limit')
-    }
-    claimHasBlob = blobParsed.isSome
     claimGasCompensationAmount = BigInt((fields.gas_compensation_amount as string | number | undefined) ?? '0')
-    claimStorageCompensationAmount = BigInt(
-      (fields.storage_compensation_amount as string | number | undefined) ?? '0'
-    )
     const gasBalance = BigInt((fields.gas_balance as string | undefined) ?? '0')
-    // F46: 與鏈上逐筆回補條件對齊——含 blob 的領取負債為 gas_comp + storage_comp
-    // （survey_vault.move:655-660）。只判 gas_comp 會讓部分償付不足的 blob 領取逃過
-    // 平台日額度。任何因 gas_comp 被調高造成的缺口都導入有上限的平台路徑。
-    const requiredLiability =
-      claimGasCompensationAmount + (claimHasBlob ? claimStorageCompensationAmount : 0n)
+    // 領取負債只剩 gas 補償(storage 補償已廢除)。池不足且未開平台 fallback 即回 409,
+    // FE 導向自付。
+    const requiredLiability = claimGasCompensationAmount
     if (gasBalance < requiredLiability) {
+      if (!platformClaimEnabled) {
+        // 409 (not 422, message free of "dry run"/"MoveAbort") so the FE treats it
+        // as a soft error and routes to the self-paid fallback rather than a hard block.
+        return err(
+          409,
+          'vault_gas_insufficient',
+          'Survey gas pool is insufficient; sponsorship unavailable for this claim'
+        )
+      }
       isPlatformSponsor = true
     }
     if (isPlatformSponsor && enforcePlatformQuota && hooks.getPlatformSponsorDailyCount) {
@@ -376,8 +367,6 @@ export async function validateSponsorTransaction(
       isPassSponsor,
       isPlatformSponsor,
       claimGasCompensationAmount: claimGasCompensationAmount?.toString() ?? null,
-      claimStorageCompensationAmount: claimStorageCompensationAmount?.toString() ?? null,
-      claimHasBlob,
     },
   }
 }

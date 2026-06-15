@@ -29,9 +29,6 @@ const PURGE_FALLBACK_GRACE_MS: u64 = 365 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_INLINE_ANSWER_BYTES: u64 = 6144;
 const MIN_MAX_INLINE_ANSWER_BYTES: u64 = 1024;
 const MAX_MAX_INLINE_ANSWER_BYTES: u64 = 32768;
-const DEFAULT_MAX_BLOB_ID_BYTES: u64 = 256;
-const MIN_MAX_BLOB_ID_BYTES: u64 = 64;
-const MAX_MAX_BLOB_ID_BYTES: u64 = 1024;
 const ENotCreator: u64           = 0;
 const ENoQuota: u64              = 1;
 const EExpired: u64              = 2;
@@ -45,7 +42,6 @@ const ERepeatLimitReached: u64   = 9;
 const EInsufficientGasBalance: u64 = 10;
 const EInvalidGasDeposit: u64 = 11;
 const EDuplicateNullifier: u64 = 12;
-const EDuplicateBlobId: u64 = 13;
 const EInvalidSurveyVaultMatch: u64 = 14;
 const EPurgeTooEarly: u64 = 15;
 const EGraceTooShort: u64 = 16;
@@ -60,8 +56,6 @@ const EClaimModeMismatch: u64 = 25;
 const EInvalidAuthKind: u64 = 26;
 const EFeeNotPaid: u64 = 27;
 const EFeeAlreadyPaid: u64 = 28;
-const EBlobIdTooLarge: u64 = 29;
-const EMaxBlobIdOutOfRange: u64 = 30;
 const EGasCompTooLow: u64 = 31;
 const EVaultAlreadyHasSurvey: u64 = 32;
 const EDeadlineTooFar: u64 = 33;
@@ -119,7 +113,6 @@ public struct SurveyVault has key {
     claimed_count: u64,
     claim_counts: Table<vector<u8>, u64>,
     used_nullifiers: Table<vector<u8>, address>,
-    used_blob_ids: Table<vector<u8>, bool>,
     admin_treasury: address,
     creator: address,
     status: u8,
@@ -127,12 +120,10 @@ public struct SurveyVault has key {
     gas_balance: Balance<SUI>,
     sponsor_address: address,
     gas_compensation_amount: u64,
-    storage_compensation_amount: u64,
     answers_count: u64,
     answers_purged: u64,
     purge_grace_ms: u64,
     max_inline_answer_bytes: u64,
-    max_blob_id_bytes: u64,
     fee_paid: bool,
     ticket_fee: u64,
     allowed_nft_type: Option<vector<u8>>,
@@ -150,14 +141,14 @@ public fun create_for_testing(
     gas_coin: Coin<SUI>,
     sponsor_address: address,
     gas_compensation_amount: u64,
-    storage_compensation_amount: u64,
+    _storage_compensation_amount: u64,
     ticket_fee: u64,
     allowed_nft_type: Option<vector<u8>>,
     ctx: &mut TxContext,
 ): SurveyVault {
     assert!(per_response >= 1, EInvalidRewardConfig);
     assert!(repeat_max_times >= 1, EInvalidRewardConfig);
-    let per_response_sui = gas_compensation_amount + storage_compensation_amount;
+    let per_response_sui = gas_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
         max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
     } else {
@@ -175,7 +166,6 @@ public fun create_for_testing(
         claimed_count: 0,
         claim_counts: table::new(ctx),
         used_nullifiers: table::new(ctx),
-        used_blob_ids: table::new(ctx),
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
@@ -183,12 +173,10 @@ public fun create_for_testing(
         gas_balance: coin::into_balance(gas_coin),
         sponsor_address,
         gas_compensation_amount,
-        storage_compensation_amount,
         answers_count: 0,
         answers_purged: 0,
         purge_grace_ms: DEFAULT_PURGE_GRACE_MS,
         max_inline_answer_bytes: DEFAULT_MAX_INLINE_ANSWER_BYTES,
-        max_blob_id_bytes: DEFAULT_MAX_BLOB_ID_BYTES,
         fee_paid: true,
         ticket_fee,
         allowed_nft_type,
@@ -428,7 +416,6 @@ public(package) fun apply_nullifiers_and_payout(
     vault: &mut SurveyVault,
     pass: &SurveyPass,
     encrypted_answers: Option<vector<u8>>,
-    answer_blob_id: Option<vector<u8>>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -436,7 +423,6 @@ public(package) fun apply_nullifiers_and_payout(
     let payout = process_claim_and_payout(
         vault,
         encrypted_answers,
-        answer_blob_id,
         clock,
         ctx,
     );
@@ -460,7 +446,6 @@ public fun claim<Nft: key>(
     ephemeral_nullifier: vector<u8>,
     ticket_expires_at: u64,
     encrypted_answers: Option<vector<u8>>,
-    answer_blob_id: Option<vector<u8>>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -508,7 +493,6 @@ public fun claim<Nft: key>(
     let payout = process_claim_and_payout(
         vault,
         encrypted_answers,
-        answer_blob_id,
         clock,
         ctx,
     );
@@ -563,49 +547,27 @@ public fun register_survey(
 }
 public struct RespondentPayout {
     reward: Option<Coin<STACKED_SURVEY_REWARD>>,
-    storage_compensation: Option<Coin<SUI>>,
 }
 fun deliver_respondent_payout(payout: RespondentPayout, recipient: address) {
-    let RespondentPayout { reward, storage_compensation } = payout;
+    let RespondentPayout { reward } = payout;
     if (option::is_some(&reward)) {
         transfer::public_transfer(option::destroy_some(reward), recipient);
     } else {
         option::destroy_none(reward);
     };
-    if (option::is_some(&storage_compensation)) {
-        transfer::public_transfer(option::destroy_some(storage_compensation), recipient);
-    } else {
-        option::destroy_none(storage_compensation);
-    };
 }
 fun process_claim_and_payout(
     vault: &mut SurveyVault,
     encrypted_answers: Option<vector<u8>>,
-    answer_blob_id: Option<vector<u8>>,
     clock: &Clock,
     ctx: &mut TxContext,
 ): RespondentPayout {
-    let kind: u8;
-    let payload: vector<u8>;
-    if (option::is_some(&encrypted_answers)) {
-        let bytes = option::borrow(&encrypted_answers);
-        assert!(!vector::is_empty(bytes), EEmptyAnswers);
-        kind = 0;
-        payload = *bytes;
-    } else if (option::is_some(&answer_blob_id)) {
-        let blob_id = option::borrow(&answer_blob_id);
-        assert!(!vector::is_empty(blob_id), EEmptyAnswers);
-        assert!(vector::length(blob_id) <= vault.max_blob_id_bytes, EBlobIdTooLarge);
-        assert!(!table::contains(&vault.used_blob_ids, *blob_id), EDuplicateBlobId);
-        table::add(&mut vault.used_blob_ids, *blob_id, true);
-        kind = 1;
-        payload = *blob_id;
-    } else {
-        abort EEmptyAnswers
-    };
-    if (kind == 0) {
-        assert!(vector::length(&payload) <= vault.max_inline_answer_bytes, EInlineAnswerTooLarge);
-    };
+    // 答卷一律 inline 上鏈;blob 路線已廢除,超過上限即拒(禁止大型答卷)。
+    assert!(option::is_some(&encrypted_answers), EEmptyAnswers);
+    let payload = option::destroy_some(encrypted_answers);
+    assert!(!vector::is_empty(&payload), EEmptyAnswers);
+    assert!(vector::length(&payload) <= vault.max_inline_answer_bytes, EInlineAnswerTooLarge);
+    let kind: u8 = 0;
     let key = bcs::to_bytes(&ctx.sender());
     let prior = if (table::contains(&vault.claim_counts, key)) {
         *table::borrow(&vault.claim_counts, key)
@@ -653,40 +615,22 @@ fun process_claim_and_payout(
     } else {
         option::none()
     };
+    // gas 補償只在「代付且 tx sponsor == vault.sponsor_address」時回流 sponsor;
+    // 自付路徑不補償(誠實大型答卷者的成本由 reward 吸收)。
     let sponsor_opt = tx_context::sponsor(ctx);
-    let storage_compensation_coin = if (std::option::is_some(&sponsor_opt)) {
+    if (std::option::is_some(&sponsor_opt)) {
         let sponsor = std::option::destroy_some(sponsor_opt);
-        if (sponsor == vault.sponsor_address) {
-            let mut total_compensation = 0;
-            if (balance::value(&vault.gas_balance) >= vault.gas_compensation_amount) {
-                total_compensation = total_compensation + vault.gas_compensation_amount;
-            };
-            if (option::is_some(&answer_blob_id) && balance::value(&vault.gas_balance) >= total_compensation + vault.storage_compensation_amount) {
-                total_compensation = total_compensation + vault.storage_compensation_amount;
-            };
-            if (total_compensation > 0) {
-                let compensation = coin::from_balance(
-                    balance::split(&mut vault.gas_balance, total_compensation),
-                    ctx,
-                );
-                transfer::public_transfer(compensation, sponsor);
-            };
+        if (sponsor == vault.sponsor_address
+            && balance::value(&vault.gas_balance) >= vault.gas_compensation_amount) {
+            let compensation = coin::from_balance(
+                balance::split(&mut vault.gas_balance, vault.gas_compensation_amount),
+                ctx,
+            );
+            transfer::public_transfer(compensation, sponsor);
         };
-        option::none()
-    } else if (
-        option::is_some(&answer_blob_id)
-            && balance::value(&vault.gas_balance) >= vault.storage_compensation_amount
-    ) {
-        option::some(coin::from_balance(
-            balance::split(&mut vault.gas_balance, vault.storage_compensation_amount),
-            ctx,
-        ))
-    } else {
-        option::none()
     };
     RespondentPayout {
         reward: reward_coin,
-        storage_compensation: storage_compensation_coin,
     }
 }
 public struct RealTimeTicketPayload has copy, drop {
@@ -802,7 +746,6 @@ public fun purge(
         claimed_count: _,
         claim_counts,
         used_nullifiers,
-        used_blob_ids,
         admin_treasury: _,
         creator,
         status: _,
@@ -810,12 +753,10 @@ public fun purge(
         mut gas_balance,
         sponsor_address: _,
         gas_compensation_amount: _,
-        storage_compensation_amount: _,
         answers_count: _,
         answers_purged: _,
         purge_grace_ms: _,
         max_inline_answer_bytes: _,
-        max_blob_id_bytes: _,
         fee_paid: _,
         ticket_fee: _,
         allowed_nft_type: _,
@@ -839,7 +780,6 @@ public fun purge(
     balance::destroy_zero(gas_balance);
     table::drop(claim_counts);
     table::drop(used_nullifiers);
-    table::drop(used_blob_ids);
     object::delete(id);
     survey_registry::remove_and_destroy(registry, survey);
     event::emit(VaultPurged {
@@ -881,7 +821,8 @@ public fun create_empty(
     // 上限(= 預設 92 天)防發起者事後延後平台的強制銷毀能力。
     assert!(purge_grace_ms >= MIN_PURGE_GRACE_MS, EGraceTooShort);
     assert!(purge_grace_ms <= DEFAULT_PURGE_GRACE_MS, EGraceTooLong);
-    let per_response_sui = gas_compensation_amount + storage_compensation_amount;
+    let _ = storage_compensation_amount;
+    let per_response_sui = gas_compensation_amount;
     let required_gas = if (repeat_reward > 0) {
         max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
     } else {
@@ -899,7 +840,6 @@ public fun create_empty(
         claimed_count: 0,
         claim_counts: table::new(ctx),
         used_nullifiers: table::new(ctx),
-        used_blob_ids: table::new(ctx),
         admin_treasury,
         creator: ctx.sender(),
         status: STATUS_OPEN,
@@ -907,12 +847,10 @@ public fun create_empty(
         gas_balance: coin::into_balance(gas_coin),
         sponsor_address,
         gas_compensation_amount,
-        storage_compensation_amount,
         answers_count: 0,
         answers_purged: 0,
         purge_grace_ms,
         max_inline_answer_bytes: DEFAULT_MAX_INLINE_ANSWER_BYTES,
-        max_blob_id_bytes: DEFAULT_MAX_BLOB_ID_BYTES,
         fee_paid: false,
         ticket_fee,
         allowed_nft_type,
@@ -1029,18 +967,8 @@ public fun set_max_inline_answer_bytes(vault: &mut SurveyVault, new_max: u64, ct
     assert!(new_max <= MAX_MAX_INLINE_ANSWER_BYTES, EMaxInlineOutOfRange);
     vault.max_inline_answer_bytes = new_max;
 }
-public fun set_max_blob_id_bytes(vault: &mut SurveyVault, new_max: u64, ctx: &TxContext) {
-    assert!(ctx.sender() == vault.creator, ENotCreator);
-    assert!(new_max >= MIN_MAX_BLOB_ID_BYTES, EMaxBlobIdOutOfRange);
-    assert!(new_max <= MAX_MAX_BLOB_ID_BYTES, EMaxBlobIdOutOfRange);
-    vault.max_blob_id_bytes = new_max;
-}
-public fun storage_compensation_amount(vault: &SurveyVault): u64 {
-    vault.storage_compensation_amount
-}
 public fun purge_grace_ms(vault: &SurveyVault): u64 { vault.purge_grace_ms }
 public fun max_inline_answer_bytes(vault: &SurveyVault): u64 { vault.max_inline_answer_bytes }
-public fun max_blob_id_bytes(vault: &SurveyVault): u64 { vault.max_blob_id_bytes }
 public fun fee_paid(vault: &SurveyVault): bool { vault.fee_paid }
 public fun survey_registered(vault: &SurveyVault): bool { vault.survey_registered }
 public fun answers_count(vault: &SurveyVault): u64 { vault.answers_count }

@@ -209,9 +209,6 @@ export async function runSponsorPipeline(
     const claimGasCompensationAmount = context.claimGasCompensationAmount
       ? BigInt(context.claimGasCompensationAmount)
       : null
-    const claimStorageCompensationAmount = context.claimStorageCompensationAmount
-      ? BigInt(context.claimStorageCompensationAmount)
-      : null
 
     if (!context.isPassSponsor) {
       if (context.isPlatformSponsor) {
@@ -247,11 +244,8 @@ export async function runSponsorPipeline(
           }
         }
       } else if (claimGasCompensationAmount !== null) {
-        const compensation =
-          claimGasCompensationAmount +
-          (context.claimHasBlob && claimStorageCompensationAmount !== null
-            ? claimStorageCompensationAmount
-            : 0n)
+        // 答卷一律 inline,補償只剩 gas 補償(storage 補償已廢除)。
+        const compensation = claimGasCompensationAmount
         const required = netGas + gasConfig.gasBudgetBufferMist
         if (required > compensation) {
           releaseAcquiredCoin(coinStore, acquiredCoin)

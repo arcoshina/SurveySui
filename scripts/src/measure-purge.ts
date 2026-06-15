@@ -262,7 +262,7 @@ async function findCeiling(ctx: Ctx, payload: { label: string; bytes: number }):
     const r = await probe(ctx, n, payload.bytes)
     const gasOk = r.upfrontGas <= MAX_GAS_BUDGET_MIST
     const pass = r.ok && gasOk
-    const reason = !r.ok ? r.error : !gasOk ? `gas>${MAX_GAS_BUDGET_MIST} (need ${r.upfrontGas})` : 'ok'
+    const reason = !r.ok ? (r.error ?? 'unknown error') : !gasOk ? `gas>${MAX_GAS_BUDGET_MIST} (need ${r.upfrontGas})` : 'ok'
     console.log(`  N=${n}: ${pass ? 'PASS' : 'FAIL'} upfront=${r.upfrontGas} net=${r.netGas} (${reason})`)
     if (pass) {
       lo = n; loOutcome = r; n *= 2
@@ -280,7 +280,7 @@ async function findCeiling(ctx: Ctx, payload: { label: string; bytes: number }):
     const r = await probe(ctx, mid, payload.bytes)
     const gasOk = r.upfrontGas <= MAX_GAS_BUDGET_MIST
     const pass = r.ok && gasOk
-    const reason = !r.ok ? r.error : !gasOk ? `gas>cap (need ${r.upfrontGas})` : 'ok'
+    const reason = !r.ok ? (r.error ?? 'unknown error') : !gasOk ? `gas>cap (need ${r.upfrontGas})` : 'ok'
     console.log(`  bisect N=${mid}: ${pass ? 'PASS' : 'FAIL'} upfront=${r.upfrontGas} (${reason})`)
     if (pass) { lo = mid; loOutcome = r } else { hi = mid; firstFailError = reason }
   }

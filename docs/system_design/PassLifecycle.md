@@ -45,7 +45,7 @@ flowchart LR
 | 3 / 6 / 7 | SOCIAL / GOOGLE / GITHUB | 90 天 |
 | 4 | SELF_PROTOCOL | 7 天（fallback） |
 | 5 | WORLD_ID | 365 天 |
-| 8 | ATTRIBUTES | 客群屬性槽（見 [V5_自我揭露](../V5_自我揭露.md)） |
+| 8 | ATTRIBUTES | 客群屬性槽（見 [改版_自我揭露](../改版_自我揭露.md)） |
 
 TTL 可由 `BFF_PASS_TTL_MS_EMAIL` / `_SOCIAL` / `_WORLDID`、全域 `BFF_PASS_TTL_MS` 覆寫（[`ticket.ts`](../../bff/src/auth/ticket.ts)）。
 

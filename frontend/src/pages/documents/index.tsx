@@ -198,6 +198,7 @@ export default function DocumentsPage() {
               className="prose prose-slate dark:prose-invert max-w-none
                 [&>h1]:text-3xl [&>h1]:font-normal [&>h1]:text-slate-900 dark:[&>h1]:text-white [&>h1]:mb-6
                 [&>h2]:text-xl [&>h2]:font-normal [&>h2]:text-slate-900 dark:[&>h2]:text-neutral-200 [&>h2]:mt-8 [&>h2]:mb-4 [&>h2]:scroll-mt-32
+                [&>h3]:text-lg [&>h3]:font-normal [&>h3]:text-slate-900 dark:[&>h3]:text-neutral-200 [&>h3]:mt-6 [&>h3]:mb-3
                 [&>p]:text-base [&>p]:leading-relaxed [&>p]:mb-4 [&>p]:text-slate-600 dark:[&>p]:text-neutral-400
                 [&>ul]:list-disc [&>ul]:pl-5 [&>ul]:space-y-2 [&>ul]:mb-6 [&>ul]:text-slate-600 dark:[&>ul]:text-neutral-400
                 [&>ul_strong]:text-slate-800 dark:[&>ul_strong]:text-neutral-200

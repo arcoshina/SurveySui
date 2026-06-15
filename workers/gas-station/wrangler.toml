@@ -16,6 +16,8 @@ binding = "DB"
 database_name = "surveysui-gas"
 database_id = "00000000-0000-0000-0000-000000000000"
 
+# CF Worker 執行期讀不到根 .env，故以下為 worker 專屬副本，
+# 須與根 .env「Sui 鏈」「Gas 贊助與 Coin 合併」段對應變數手動保持同步。
 [vars]
 SUI_RPC_URL = "https://fullnode.devnet.sui.io:443"
-COIN_MERGE_TRIGGER_COUNT = "20"
+COIN_MERGE_TRIGGER_COUNT = "50"

@@ -45,9 +45,6 @@ export default function GuidePage() {
               </div>
             </div>
             <div className="flex-1">
-              <div className="inline-block bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/20 text-blue-700 dark:text-blue-400 text-xs font-normal rounded-full px-3 py-1 mb-3">
-                {t.stepLabel} {index + 1}
-              </div>
               <h3 className="text-lg font-normal text-slate-900 dark:text-white mb-2">{step.title}</h3>
               <p className="text-slate-600 dark:text-neutral-400 text-sm leading-relaxed font-normal">
                 {step.desc}

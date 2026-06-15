@@ -25,7 +25,7 @@ import { fetchActivePass, fetchPassCredentials, SurveyPassData } from '../lib/su
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { formatSui } from '../lib/format'
-import { downloadFromDecentralizedStorage, uploadToDecentralizedStorage } from '../lib/storage'
+import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
 const ISSUER_CONFIG_ID = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
@@ -79,8 +79,8 @@ interface Survey {
   encryptAnswers?: boolean
   isDecentralized?: boolean
   allowedNftType: string | null
-  /** On-chain caps — authoritative for inline vs Walrus routing at submit time. */
-  vaultLimits: { maxInlineBytes: number; maxBlobIdBytes: number }
+  /** On-chain inline answer size cap — authoritative at submit time (答卷一律 inline). */
+  vaultLimits: { maxInlineBytes: number }
 }
 
 type Answers = Record<string, string | string[] | number | number[]>
@@ -129,12 +129,11 @@ export default function SurveyPage() {
   const suiClient = useSuiClient()
   const activeSigner = useActiveSigner()
   const [selfPaidMode, setSelfPaidMode] = useState(false)
-  const [isUploadingAnswer, setIsUploadingAnswer] = useState(false)
-  const [gasMode, setGasMode] = useState<'unknown' | 'sponsored' | 'self_paid_warning' | 'limit_reached_warning'>('unknown')
+  const [gasMode, setGasMode] = useState<'unknown' | 'sponsored' | 'self_paid_warning' | 'limit_reached_warning' | 'vault_empty_warning'>('unknown')
   const [selfPaidConfirm, setSelfPaidConfirm] = useState<{
     estSui: string
     resolve: (ok: boolean) => void
-    isLimitReached?: boolean
+    reason?: 'self_paid' | 'limit_reached' | 'vault_empty'
   } | null>(null)
 
   // SurveyPass SBT & Verification States
@@ -441,13 +440,7 @@ export default function SurveyPage() {
         }
 
         const maxInlineBytes = Number(vaultFields.max_inline_answer_bytes)
-        const maxBlobIdBytes = Number(vaultFields.max_blob_id_bytes)
-        if (
-          !Number.isFinite(maxInlineBytes) ||
-          maxInlineBytes <= 0 ||
-          !Number.isFinite(maxBlobIdBytes) ||
-          maxBlobIdBytes <= 0
-        ) {
+        if (!Number.isFinite(maxInlineBytes) || maxInlineBytes <= 0) {
           throw new Error(t.errLoadSurveyFailed)
         }
         const repeatRewardBase = Number(vaultFields.repeat_reward ?? 0)
@@ -619,7 +612,7 @@ export default function SurveyPage() {
           encryptAnswers: parsed.data.encryptAnswers !== false,
           isDecentralized: !!surveyBlobIdBytes,
           allowedNftType,
-          vaultLimits: { maxInlineBytes, maxBlobIdBytes },
+          vaultLimits: { maxInlineBytes },
         })
 
         // Count this wallet's prior claims on this vault (events filtered client-side).
@@ -877,60 +870,30 @@ export default function SurveyPage() {
           .join('')
       }
 
-      // Route small answers on-chain; larger payloads go to Walrus (chain-authoritative caps).
-      let answerBlobId: string | undefined = undefined
-      const { maxInlineBytes, maxBlobIdBytes } = survey.vaultLimits
-
+      // 答卷一律 inline 上鏈;超過鏈上上限即拒(禁止大型答卷,改貼雲端連結)。
+      const { maxInlineBytes } = survey.vaultLimits
       if (encryptedAnswersBytes.length > maxInlineBytes) {
-        setIsUploadingAnswer(true)
-        try {
-          const uploadRes = await uploadToDecentralizedStorage(encryptedAnswersBytes)
-          answerBlobId = uploadRes.blobId
-          const blobIdByteLen = new TextEncoder().encode(answerBlobId).length
-          if (blobIdByteLen > maxBlobIdBytes) {
-            throw new Error(
-              `Answer blob id exceeds on-chain limit (${blobIdByteLen} > ${maxBlobIdBytes} bytes)`
-            )
-          }
-        } catch (err) {
-          console.error('[SurveyPage] Failed to upload answer to decentralized storage:', err)
-          throw new Error(t.errEncryptSubmitFailed)
-        } finally {
-          setIsUploadingAnswer(false)
-        }
+        throw new Error('inline_answer_too_large')
       }
-
-      // 2. Build Claim PTB
-      let tx: Transaction
       const useNftRoute = hasNftLimit && isNftQualified && !isPassQualified
 
-      if (useNftRoute) {
-        tx = buildClaimPtb({
+      // Build the inline-answer claim PTB.
+      const buildClaimTx = (): Transaction => {
+        const common = {
           packageId: PACKAGE_ID,
           vaultId: survey.vaultObjectId,
           surveyId: survey.id,
-          nftId: selectedNftId!,
-          nftType: survey.allowedNftType!,
           issuerConfigId: ISSUER_CONFIG_ID,
-          encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
-          answerBlobId: answerBlobId,
-        })
-      } else {
-        tx = buildClaimPtb({
-          packageId: PACKAGE_ID,
-          vaultId: survey.vaultObjectId,
-          surveyId: survey.id,
-          passId: activePass!.objectId,
-          issuerConfigId: ISSUER_CONFIG_ID,
-          encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
-          answerBlobId: answerBlobId,
-        })
+          encryptedAnswers: encryptedAnswersHex,
+        }
+        return useNftRoute
+          ? buildClaimPtb({ ...common, nftId: selectedNftId!, nftType: survey.allowedNftType! })
+          : buildClaimPtb({ ...common, passId: activePass!.objectId })
       }
 
-      // 3. Try sponsored path; auto-fallback to self-paid if BFF unreachable.
-      // When fallback would charge the user, surface a confirm dialog first.
+      // Try sponsored path, auto-fallback to self-paid (with confirm).
       const fallbackResult = await executeTxWithFallback({
-        tx,
+        tx: buildClaimTx(),
         senderAddress: activeSigner.address,
         client: suiClient as any,
         signAndExecute: async (t) => activeSigner.signAndExecute(t as Transaction),
@@ -938,8 +901,13 @@ export default function SurveyPage() {
           new Promise<boolean>((resolve) => {
             lastBffError = bffError
             const estSui = formatSui(estMist)
-            const isLimitReached = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
-            setSelfPaidConfirm({ estSui, resolve, isLimitReached })
+            const reason: 'self_paid' | 'limit_reached' | 'vault_empty' =
+              bffError?.message?.startsWith('VAULT_GAS_INSUFFICIENT')
+                ? 'vault_empty'
+                : bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
+                  ? 'limit_reached'
+                  : 'self_paid'
+            setSelfPaidConfirm({ estSui, resolve, reason })
           }),
       })
 
@@ -989,9 +957,11 @@ export default function SurveyPage() {
       if (err?.message === USER_DECLINED_SELF_PAID) {
         // User cancelled the self-paid confirmation — keep their answers, surface the warning
         setGasMode(
-          lastBffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
-            ? 'limit_reached_warning'
-            : 'self_paid_warning'
+          lastBffError?.message?.startsWith('VAULT_GAS_INSUFFICIENT')
+            ? 'vault_empty_warning'
+            : lastBffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
+              ? 'limit_reached_warning'
+              : 'self_paid_warning'
         )
         setPhase('review')
         return
@@ -1215,6 +1185,12 @@ export default function SurveyPage() {
                 <span>{t.gasLimitReachedWarning}</span>
               </div>
             )}
+            {gasMode === 'vault_empty_warning' && (
+              <div role="alert" className="alert-error mt-3">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                <span>{t.gasVaultEmptyWarning}</span>
+              </div>
+            )}
             {survey.encryptAnswers === false && (
               <div className="warning-box rounded-2xl p-4 text-sm leading-relaxed mt-3 flex items-start gap-2.5">
                 <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600 dark:text-amber-500" />
@@ -1266,14 +1242,14 @@ export default function SurveyPage() {
               onClick={() => void handleSubmit()}
               disabled={phase === 'submitting'}
               className={
-                gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning'
+                gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning' || gasMode === 'vault_empty_warning'
                   ? 'btn-danger w-full sm:w-2/3 flex items-center justify-center gap-1.5 disabled:opacity-50'
                   : 'w-full sm:w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 text-sm shadow-md flex items-center justify-center gap-1.5'
               }
             >
               {phase === 'submitting'
                 ? t.submitting
-                : gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning'
+                : gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning' || gasMode === 'vault_empty_warning'
                   ? t.confirmSubmitSelfPaid
                   : t.confirmSubmit}
             </button>
@@ -1299,14 +1275,18 @@ export default function SurveyPage() {
                 </div>
                 <div className="flex-1">
                   <h2 className="text-base font-semibold text-slate-900 dark:text-neutral-100">
-                    {selfPaidConfirm.isLimitReached
+                    {selfPaidConfirm.reason === 'limit_reached'
                       ? t.gasLimitReachedConfirmTitle
-                      : t.gasSelfPaidConfirmTitle}
+                      : selfPaidConfirm.reason === 'vault_empty'
+                        ? t.gasVaultEmptyConfirmTitle
+                        : t.gasSelfPaidConfirmTitle}
                   </h2>
                   <p className="text-sm text-slate-600 dark:text-neutral-400 mt-1 leading-relaxed">
-                    {selfPaidConfirm.isLimitReached
+                    {selfPaidConfirm.reason === 'limit_reached'
                       ? t.gasLimitReachedConfirmDesc(selfPaidConfirm.estSui)
-                      : t.gasSelfPaidConfirmDesc(selfPaidConfirm.estSui)}
+                      : selfPaidConfirm.reason === 'vault_empty'
+                        ? t.gasVaultEmptyConfirmDesc(selfPaidConfirm.estSui)
+                        : t.gasSelfPaidConfirmDesc(selfPaidConfirm.estSui)}
                   </p>
                 </div>
               </div>
@@ -1332,19 +1312,6 @@ export default function SurveyPage() {
                   {t.gasSelfPaidContinue}
                 </button>
               </div>
-            </div>
-          </div>
-        )}
-        {isUploadingAnswer && (
-          <div className="glass-overlay">
-            <div className="glass-card space-y-4">
-              <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-              <h3 className="text-lg font-medium text-slate-800 dark:text-neutral-200 animate-pulse">
-                {t.encryptingSubmit}
-              </h3>
-              <p className="text-sm text-slate-500 dark:text-neutral-400">
-                {t.pleaseWait}
-              </p>
             </div>
           </div>
         )}

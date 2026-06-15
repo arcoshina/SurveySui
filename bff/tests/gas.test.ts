@@ -243,6 +243,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     delete process.env.GAS_SPONSOR_PRIV_2
     delete process.env.GAS_SPONSOR_PUBKEY_3
     delete process.env.MIN_PLATFORM_SPONSOR_TIER
+    delete process.env.PLATFORM_CLAIM_SPONSOR_ENABLED
     delete process.env.SUI_PACKAGE_ID
   })
 
@@ -275,6 +276,9 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
 
   // 2. 限流：當金庫 Gas 不足時，限制同一錢包每日平台墊付最多 3 次
   it('should restrict daily platform sponsorships to 3 times per wallet when first-layer gas is insufficient', async () => {
+    // 平台墊付 fallback 預設關閉,本測試針對開啟情境
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    __resetGasConfigCache()
     // 模擬金庫 Gas 餘額不足 (例如為 0)，同時保留 Pass 的憑證欄位
     mockSuiClient.getObject.mockImplementation(async ({ id }: { id: string }) => {
       if (id === '0x000000000000000000000000000000000000000000000000000000000000000a') {

@@ -196,8 +196,7 @@ describe('validateSponsorTransaction', () => {
     }
   })
 
-  // F46: blob 領取的鏈上負債為 gas_comp + storage_comp，重分類門檻須含 storage_comp。
-  function buildBlobClaimTx(): Transaction {
+  it('rejects vault-insufficient claim with 409 when platformClaimEnabled is false', async () => {
     const tx = new Transaction()
     tx.moveCall({
       target: `${PKG}::survey_vault::claim`,
@@ -215,22 +214,14 @@ describe('validateSponsorTransaction', () => {
         tx.pure.vector('u8', []),
         tx.pure.u64(0),
         tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
-        // arg[13] answer_blob_id = Some(...) → claimHasBlob
-        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize([1, 2, 3]).toBytes()),
+        tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(null).toBytes()),
         tx.object('0x6'),
       ],
     })
     tx.setSender(USER)
-    return tx
-  }
-
-  it('treats blob claim as platform sponsor when gas_balance < gas_comp + storage_comp', async () => {
-    const tx = buildBlobClaimTx()
-    // gas_comp=5M ≤ gas_balance=7M < gas_comp+storage_comp=10M：舊門檻會誤判為 vault-claim
     const mockClient = mockSuiClient({
-      gas_balance: '7000000',
+      gas_balance: '0',
       gas_compensation_amount: '5000000',
-      storage_compensation_amount: '5000000',
       max_inline_answer_bytes: '6144',
     }) as any
     const txBytes = Buffer.from(
@@ -244,46 +235,14 @@ describe('validateSponsorTransaction', () => {
       sponsorAddress: sponsorAddress(),
       suiClient: mockClient,
       ticketIssuerKeypair: issuerKeypair(),
-      options: { enforcePlatformQuota: false, enforcePlatformTier: false },
-    })
-
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      expect(result.isPlatformSponsor).toBe(true)
-    }
-  })
-
-  it('rejects underfunded blob claim when platform daily limit reached', async () => {
-    const tx = buildBlobClaimTx()
-    const mockClient = mockSuiClient({
-      gas_balance: '7000000',
-      gas_compensation_amount: '5000000',
-      storage_compensation_amount: '5000000',
-      max_inline_answer_bytes: '6144',
-    }) as any
-    const txBytes = Buffer.from(
-      await tx.build({ client: mockClient, onlyTransactionKind: true })
-    ).toString('base64')
-
-    const result = await validateSponsorTransaction({
-      txBytes,
-      senderAddress: USER,
-      packageId: PKG,
-      sponsorAddress: sponsorAddress(),
-      suiClient: mockClient,
-      ticketIssuerKeypair: issuerKeypair(),
-      hooks: {
-        getPlatformSponsorDailyCount: async () => 3,
-        platformSponsorDailyLimit: () => 3,
-        todayUtcDate: () => '2026-06-11',
-      },
-      options: { enforcePlatformQuota: true, enforcePlatformTier: false },
+      options: { platformClaimEnabled: false, enforcePlatformQuota: false, enforcePlatformTier: false },
     })
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error).toBe('PLATFORM_SPONSOR_LIMIT_REACHED')
-      expect(result.status).toBe(403)
+      expect(result.status).toBe(409)
+      expect(result.error).toBe('vault_gas_insufficient')
     }
   })
+
 })

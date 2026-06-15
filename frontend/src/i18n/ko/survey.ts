@@ -67,6 +67,9 @@ const survey: SurveyDict = {
   gasLimitReachedConfirmTitle: '대납 한도 초과',
   gasLimitReachedConfirmDesc: (estSui: string) => `오늘의 플랫폼 무료 대납 한도(최대 3회)를 모두 소모하였습니다. 계속하려면 온체인 수수료(예상 ${estSui} SUI)를 본인 부담하셔야 합니다. 계속하시겠습니까?`,
   gasLimitReachedWarning: '오늘의 플랫폼 대납 한도(3회)를 소모하였습니다. 답변을 전송하려면 본인 부담이 필요합니다.',
+  gasVaultEmptyConfirmTitle: '이 설문의 Gas 풀이 소진되었습니다',
+  gasVaultEmptyConfirmDesc: (estSui: string) => `이 설문의 발기인이 예치한 Gas 풀이 소진되었습니다. 보상을 받으려면 온체인 수수료(예상 ${estSui} SUI)를 본인 부담하셔야 합니다. 계속하시겠습니까?`,
+  gasVaultEmptyWarning: '이 설문의 Gas 풀이 소진되었습니다. 보상을 받으려면 본인 부담으로 제출해 주세요.',
   gasSelfPaidContinue: '본인 부담 제출',
   gasSelfPaidCancel: '취소',
   confirmSubmitSelfPaid: '본인 부담으로 답변 전송 ➡',
@@ -122,7 +125,7 @@ const survey: SurveyDict = {
   locale: 'ko',
   errEncryptSubmitFailed: '답변 암호화 및 제출 실패',
   errInlineAnswerTooLarge:
-    '답변이 너무 커서 온체인 직접 저장이 불가합니다. 내용을 줄이거나 다시 시도하세요(큰 데이터는 Walrus로 저장됩니다).',
+    '답변이 너무 길어 온체인 1건당 한도를 초과했습니다. 내용을 줄여 주세요. 큰 파일을 첨부하려면 답변에 클라우드 드라이브 링크를 붙여넣으세요.',
   errGasExceedsCompensation:
     '예상 가스비가 설문 보상 한도를 초과하여 스폰서 대납이 거부되었습니다. 직접 가스를 지불하거나 생성자에게 문의하세요.',
   encryptingSubmit: '답변을 암호화하여 전송하는 중...',

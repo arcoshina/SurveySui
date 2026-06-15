@@ -26,7 +26,7 @@ fun claim_with_pass(
     pass: &SurveyPass,
     attribute_nullifiers: vector<vector<u8>>,
     encrypted_answers: Option<vector<u8>>,
-    answer_blob_id: Option<vector<u8>>,
+    _answer_blob_id: Option<vector<u8>>,
     clock: &clock::Clock,
     ctx: &mut TxContext,
 ) {
@@ -46,7 +46,6 @@ fun claim_with_pass(
         vector[],
         0,
         encrypted_answers,
-        answer_blob_id,
         clock,
         ctx,
     );
@@ -60,7 +59,7 @@ fun claim_with_nft(
     nft: &DummyNFT,
     attribute_nullifiers: vector<vector<u8>>,
     encrypted_answers: Option<vector<u8>>,
-    answer_blob_id: Option<vector<u8>>,
+    _answer_blob_id: Option<vector<u8>>,
     clock: &clock::Clock,
     ctx: &mut TxContext,
 ) {
@@ -80,7 +79,6 @@ fun claim_with_nft(
         vector[],
         0,
         encrypted_answers,
-        answer_blob_id,
         clock,
         ctx,
     );
@@ -789,18 +787,18 @@ fun test_claim_nullifier_scoped_per_vault() {
 }
 
 #[test]
-fun test_claim_with_storage_compensation_success() {
+fun test_claim_sponsored_gas_compensation_success() {
     let creator = @0x1111;
     let sponsor = @0x2222;
     let respondent = @0x3333;
-    
+
     let mut scenario = test_scenario::begin(creator);
     let ctx = test_scenario::ctx(&mut scenario);
-    
+
     let ssr_coin = coin::mint_for_testing<STACKED_SURVEY_REWARD>(1000, ctx);
-    // 預提 = 5,000,000 Gas + 10,000,000 Storage = 15,000,000 MIST。給予 500,000,000 MIST。
+    // 代付只回 gas 補償 5,000,000 MIST(已無 storage 補償)。給予 500,000,000 MIST。
     let gas_coin = coin::mint_for_testing<SUI>(500_000_000, ctx);
-    
+
     let vault = survey_vault::create_for_testing(
         ssr_coin,
         10,
@@ -812,27 +810,27 @@ fun test_claim_with_storage_compensation_success() {
         gas_coin,
         sponsor,
         5_000_000,
-        10_000_000, // 儲存補貼 10,000,000 MIST
+        0, // storage 補償已廢除(vestigial 參數)
         0,
         option::none(),
         ctx
     );
     survey_vault::share_vault(vault);
-    
+
     let pass = survey_pass::create_for_testing(respondent, 200000, ctx);
-    
-    // 模擬 respondent 填答交易，使用去中心化儲存 answer_blob_id
+
+    // 模擬 respondent 填答交易(inline 答卷),sponsor 代付
     let mut builder = test_scenario::ctx_builder_from_sender(respondent);
     let current_rgp = test_scenario::ctx(&mut scenario).reference_gas_price();
     builder = test_scenario::set_reference_gas_price(builder, current_rgp);
     builder = test_scenario::set_sponsor(builder, sponsor);
     test_scenario::next_with_context(&mut scenario, builder);
-    
+
     let mut vault = test_scenario::take_shared<SurveyVault>(&scenario);
     let vault_id = sui::object::id(&vault);
     let ctx = test_scenario::ctx(&mut scenario);
     let clock = clock::create_for_testing(ctx);
-    
+
     let survey = survey_registry::create_survey_for_testing(
         vault_id,
         creator,
@@ -850,25 +848,25 @@ fun test_claim_with_storage_compensation_success() {
         &survey,
         &pass,
         vector[],
-        option::none(),
         option::some(vector[100, 101, 102]),
+        option::none(),
         &clock,
         ctx,
     );
-    
-    // 驗證金庫的 Gas 基金是否減少了 15,000,000 MIST (5M gas + 10M storage)
-    assert!(survey_vault::gas_balance_value(&vault) == 485_000_000, 0);
-    
+
+    // 金庫的 Gas 基金只減少 5,000,000 MIST(gas 補償),不再含 storage 補償
+    assert!(survey_vault::gas_balance_value(&vault) == 495_000_000, 0);
+
     clock::destroy_for_testing(clock);
     survey_pass::delete_pass_for_testing(pass);
     survey_registry::destroy_survey_for_testing(survey);
     test_scenario::return_shared(vault);
-    
-    // 驗證 sponsor 是否收到了 15,000,000 MIST 的 SUI Coin
+
+    // sponsor 只收到 5,000,000 MIST 的 gas 補償
     test_scenario::next_tx(&mut scenario, sponsor);
     let reward_coin = test_scenario::take_from_address<Coin<SUI>>(&scenario, sponsor);
-    assert!(coin::value(&reward_coin) == 15_000_000, 1);
-    
+    assert!(coin::value(&reward_coin) == 5_000_000, 1);
+
     coin::burn_for_testing(reward_coin);
     test_scenario::end(scenario);
 }
@@ -1022,7 +1020,6 @@ fun test_claim_nft_invalid_type_aborts() {
             vector[],
             0,
             option::some(vector[1, 2, 3]),
-            option::none(),
             &clock,
             ctx,
         );
@@ -1373,78 +1370,6 @@ fun test_inline_answer_exceeds_max_bytes_fails() {
 }
 
 #[test]
-fun test_blob_answer_not_bounded_by_inline_max() {
-    let creator = @0x1111;
-    let sponsor = @0x2222;
-    let respondent = @0x3333;
-    let max_bytes = 1024u64;
-
-    let mut scenario = test_scenario::begin(creator);
-    let ctx = test_scenario::ctx(&mut scenario);
-
-    let ssr_coin = coin::mint_for_testing<STACKED_SURVEY_REWARD>(1000, ctx);
-    let gas_coin = coin::mint_for_testing<SUI>(500_000_000, ctx);
-
-    let mut vault = survey_vault::create_for_testing(
-        ssr_coin,
-        10,
-        0,
-        1,
-        100,
-        100000,
-        @0xEEEE,
-        gas_coin,
-        sponsor,
-        5_000_000,
-        0,
-        0,
-        option::none(),
-        ctx
-    );
-    survey_vault::set_max_inline_answer_bytes(&mut vault, max_bytes, ctx);
-    let vault_id = sui::object::id(&vault);
-    survey_vault::share_vault(vault);
-
-    let pass = survey_pass::create_for_testing(respondent, 200000, ctx);
-
-    test_scenario::next_tx(&mut scenario, respondent);
-    {
-        let mut vault = test_scenario::take_shared<SurveyVault>(&scenario);
-        let ctx = test_scenario::ctx(&mut scenario);
-        let clock = clock::create_for_testing(ctx);
-        let survey = survey_registry::create_survey_for_testing(
-            vault_id,
-            creator,
-            vector[1, 2, 3],
-            option::some(vector[1, 2, 3]),
-            option::none(),
-            vector[1, 2, 3],
-            vector[],
-            vector[2],
-            ctx
-        );
-
-        claim_with_pass(
-            &mut vault,
-            &survey,
-            &pass,
-            vector[],
-            option::none(),
-            option::some(make_payload(64)),
-            &clock,
-            ctx,
-        );
-
-        clock::destroy_for_testing(clock);
-        survey_registry::destroy_survey_for_testing(survey);
-        test_scenario::return_shared(vault);
-    };
-
-    survey_pass::delete_pass_for_testing(pass);
-    test_scenario::end(scenario);
-}
-
-#[test]
 fun test_split_fee_on_reward_budget() {
     let deployer = @0xAD;
     let treasury = @0xEE;
@@ -1682,8 +1607,8 @@ fun test_share_vault_requires_fee_paid() {
 }
 
 #[test]
-#[expected_failure(abort_code = surveysui::survey_vault::EBlobIdTooLarge)]
-fun test_blob_id_exceeds_max_bytes_aborts() {
+#[expected_failure(abort_code = surveysui::survey_vault::EInlineAnswerTooLarge)]
+fun test_inline_answer_exceeds_max_bytes_aborts() {
     let creator = @0x1111;
     let respondent = @0x3333;
 
@@ -1707,7 +1632,8 @@ fun test_blob_id_exceeds_max_bytes_aborts() {
         option::none(),
         ctx,
     );
-    survey_vault::set_max_blob_id_bytes(&mut vault, 64, ctx);
+    // 收緊 inline 上限至 1024,使 1025 bytes 的答卷超限被拒(禁止大型答卷)。
+    survey_vault::set_max_inline_answer_bytes(&mut vault, 1024, ctx);
     let vault_id = sui::object::id(&vault);
     survey_vault::share_vault(vault);
     let pass = survey_pass::create_for_testing(respondent, 200000, ctx);
@@ -1728,10 +1654,10 @@ fun test_blob_id_exceeds_max_bytes_aborts() {
             vector[2],
             ctx,
         );
-        let mut oversized_blob = vector<u8>[];
+        let mut oversized_answer = vector<u8>[];
         let mut i = 0u64;
-        while (i < 65) {
-            vector::push_back(&mut oversized_blob, 97);
+        while (i < 1025) {
+            vector::push_back(&mut oversized_answer, 97);
             i = i + 1;
         };
         claim_with_pass(
@@ -1739,8 +1665,8 @@ fun test_blob_id_exceeds_max_bytes_aborts() {
             &survey,
             &pass,
             vector[],
+            option::some(oversized_answer),
             option::none(),
-            option::some(oversized_blob),
             &clock,
             ctx,
         );

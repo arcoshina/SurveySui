@@ -19,7 +19,7 @@
 
 | 文件 | 範圍 |
 |------|------|
-| [V5_自我揭露](../V5_自我揭露.md) | 兩階段受眾篩選（Stage1 自填 → Stage2 allowlist 比對） |
+| [改版_自我揭露](../改版_自我揭露.md) | 兩階段受眾篩選（Stage1 自填 → Stage2 allowlist 比對） |
 | [安全指引](../安全指引.md) | 金鑰/秘密四層分層、輪換 Runbook、上線檢查清單 |
 | [託管架構](../託管架構.md) | CF Pages / Worker / D1 部署拓樸 |
 | [Reset_SOP](../Reset/Reset_SOP.md) | devnet reset 重部署流程 |

@@ -5,7 +5,6 @@ const guide: GuideDict = {
   title: 'Getting Started: Set Up Your Sui Wallet',
   intro:
     'SurveySui is a survey platform built on the public Sui blockchain. All you need is a free Sui wallet to connect, claim your SurveyPass, and start answering — filling is completely free, with gas fees sponsored by survey creators. The five steps below get you up and running with Slush wallet’s zkLogin (Google sign-in): no seed phrase, no cryptocurrency required.',
-  stepLabel: 'Step',
   steps: [
     {
       title: 'Install the Slush wallet extension',

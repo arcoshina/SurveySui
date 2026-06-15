@@ -20,6 +20,7 @@ export interface GasStationEnv {
   GAS_BUDGET_CAP_MIST?: string
   GAS_BUDGET_BUFFER_MIST?: string
   MAX_PLATFORM_CLAIM_GAS_MIST?: string
+  PLATFORM_CLAIM_SPONSOR_ENABLED?: string
   COIN_QUEUE_LOCK_TTL_MS?: string
   COIN_INVENTORY_REFRESH_MS?: string
 }

@@ -7,8 +7,8 @@
 
 自 **V0** 起，產品設計即為 **reserve-ratio 單向 mint 池**：
 
-- 池內 **SR**（`survey_reward`）與 **SUI** 形成儲備比率，決定邊際 mint 價格。
-- 流通 **SSR**（`stacked_survey_reward`）與 SR **1:1** 發行；`sr_reserve` 為 SSR 總發行的鏈上背書帳。
+- 底層資產 **SR**（`survey_reward`）：發起者花 **SUI** 向池鑄造，鑄出即**自動質押進 `sr_reserve`**；投入的 SUI 同時留在 `sui_reserve` 作為儲備，兩者形成比率決定邊際 mint 價格。
+- 流通 **SSR**（`stacked_survey_reward`）：**SR 的可自由交易權利憑證**，與池內 SR **1:1** 發行（`sr_reserve` 即 SSR 全額的鏈上背書）。發起者鑄造取得 SSR、作為填答獎勵發出，故**受訪者領到的是 SR 的權利憑證（SSR）**。
 - **pool.admin**（項目方）具受信任的貨幣政策權限（提 SUI、銷毀配對、通膨調節）。
 
 本文件為單一來源規格；[`專案願景.md`](../專案願景.md)、[`History/V1_TDD.md`](../History/V1_TDD.md) 中 bonding curve / 舊 SSR·sSSR 敘述視為文案或實作漂移，**不以之為準**。鏈上／前端／`scripts/src/admin-pool.ts` 已對齊；**需 fresh package publish** 後 devnet 才生效。
@@ -19,8 +19,8 @@
 
 | 名詞 | Move 模組 | 位置／用途 |
 |------|-----------|------------|
-| **SR** | `survey_reward` | 存於 canonical `Pool.sr_reserve`；池內背書 |
-| **SSR** | `stacked_survey_reward` | 流通：發起者 vault 預算、受訪者 claim 等 |
+| **SR** | `survey_reward` | 底層資產；鑄造時自動質押入 canonical `Pool.sr_reserve`，為 SSR 之鏈上背書 |
+| **SSR** | `stacked_survey_reward` | SR 的可自由交易權利憑證；流通於發起者 vault 預算、受訪者 claim 等 |
 | **Canonical Pool** | `amm_pool::Pool` | 經 `ProtocolConfig` 登記；唯一合法 mint 池 |
 | **pool.admin** | — | 項目方地址；SUI 出池與銷毀配對之執行者 |
 
@@ -53,7 +53,7 @@ flowchart TB
 2. **SUI 出池**：僅 `pool.admin` 可呼叫 `admin_withdraw_sui`——防非 admin 冒領，亦為公開儲備與控價工具。
 3. **銷毀**：須 **`split` 池內 `sr_reserve`** 的 SR，並 **銷毀 admin 持有的等量 SSR**；與提 SUI **無需同 tx、可獨立執行**。
 
-**鎖死恆等式**：合法 mint 路徑維持 **SR : SSR = 1 : 1**（base units）。`sr_reserve` 在設計上對應 SSR 總發行量的鏈上背書（非無用鎖倉）。
+**鎖死恆等式**：合法 mint 路徑維持 **SR : SSR = 1 : 1**（base units）。每枚 SSR 都是池內一份等量質押 SR 的權利憑證——`sr_reserve` 即 SSR 全額流通的鏈上背書（非無用鎖倉）。
 
 ---
 
@@ -151,8 +151,8 @@ admin 可執行：`invest_and_mint` → `admin_withdraw_sui`（同額 SUI）。
 
 ## 與問卷金流（高層）
 
-- **發起者**：原子 PTB 中 `invest_and_mint` 取得 SSR → 注入 [`survey_vault`](../../contracts/sources/survey_vault.move)（建立鏈與協議費規格見 [SurveyLifecycle.md](SurveyLifecycle.md)；歷史紀錄 [`History/V2_改版目標.md`](../History/V2_改版目標.md)）。
-- **受訪者**：`survey_vault::claim` 自 vault 餘額取得 SSR；不經 AMM swap。
+- **發起者**：原子 PTB 中 `invest_and_mint` 取得 SSR（SR 權利憑證）→ 注入 [`survey_vault`](../../contracts/sources/survey_vault.move)（建立鏈與協議費規格見 [SurveyLifecycle.md](SurveyLifecycle.md)；歷史紀錄 [`History/V2_改版目標.md`](../History/V2_改版目標.md)）。
+- **受訪者**：`survey_vault::claim` 自 vault 餘額取得 SSR（SR 權利憑證）；不經 AMM swap。
 - **不恢復** V1 `amm_pool::redeem`（見 [`V4_Tasks.md`](../V4_Tasks.md)）。
 
 ---
@@ -181,7 +181,7 @@ admin 可執行：`invest_and_mint` → `admin_withdraw_sui`（同額 SUI）。
 | **F27** | **Partial → 待實作對齊後重評** | 比率定價 + `min_ssr_out` 後，一般使用者路徑之排序風險可接受或降級；bonding curve 為實作偏差；admin 政策操作不屬 F27 |
 | **F28 / F66** | **Mitigated + Governance** | Canonical pool 已限制 mint 池；admin invest→withdraw 列 trusted-admin 能力，非 permissionless 免費 mint |
 
-回覆草稿可自本節複製；待鏈上對齊後更新 [`CertiK_1_Task.md`](../CertiK/CertiK_1_Task.md) 複測狀態。
+回覆草稿可自本節複製；待鏈上對齊後更新 [`CertiK_1_Task.md`](../History/CertiK_1_Task.md) 複測狀態。
 
 ---
 
@@ -195,3 +195,4 @@ admin 可執行：`invest_and_mint` → `admin_withdraw_sui`（同額 SUI）。
 | 2026-06-10 | `DECIMALS` 7→6；bootstrap 匯率改回 1000 SR/SSR per SUI；人類可讀 cap 10¹³ 枚 |
 | 2026-06-10 | 現貨錨範例與 1:1 背書恆等式對齊；操作表計價錨方向修正 |
 | 2026-06-11 | 補 SurveyLifecycle 交叉連結；內容不變 |
+| 2026-06-14 | 概念框架對齊：SR＝底層資產(鑄造即自動質押)、SSR＝SR 之可自由交易權利憑證；公式／不變量／數值不變 |

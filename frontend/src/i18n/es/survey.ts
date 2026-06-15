@@ -67,6 +67,9 @@ const survey: SurveyDict = {
   gasLimitReachedConfirmTitle: 'Límite de gas delegado alcanzado',
   gasLimitReachedConfirmDesc: (estSui: string) => `Has agotado tu límite de gas gratuito diario (máximo 3 veces). Para responder debes pagar la tarifa de gas (estimado ${estSui} SUI). ¿Deseas continuar?`,
   gasLimitReachedWarning: 'Has alcanzado tu límite diario de pago delegado (3 veces). Si deseas responder, debes pagar el gas.',
+  gasVaultEmptyConfirmTitle: 'El fondo de gas de esta encuesta está agotado',
+  gasVaultEmptyConfirmDesc: (estSui: string) => `El fondo de gas que el creador de esta encuesta había prefinanciado está agotado. Para reclamar tu recompensa debes pagar la tarifa de gas (estimado ${estSui} SUI). ¿Deseas continuar?`,
+  gasVaultEmptyWarning: 'El fondo de gas de esta encuesta está agotado. Para reclamar, envía pagando el gas tú mismo.',
   gasSelfPaidContinue: 'Confirmar pago propio',
   gasSelfPaidCancel: 'Cancelar',
   confirmSubmitSelfPaid: 'Pagar gas y enviar respuestas ➡',
@@ -122,7 +125,7 @@ const survey: SurveyDict = {
   locale: 'es',
   errEncryptSubmitFailed: 'Fallo al cifrar y enviar las respuestas',
   errInlineAnswerTooLarge:
-    'La respuesta es demasiado grande para almacenamiento en cadena. Acorte el contenido o reintente (las respuestas grandes deben ir a Walrus).',
+    'Tu respuesta es demasiado larga y supera el límite por envío en cadena. Acórtala; si necesitas adjuntar un archivo grande, pega en la respuesta un enlace a un almacenamiento en la nube.',
   errGasExceedsCompensation:
     'El gas estimado supera la compensación del cuestionario; se denegó el patrocinio. Pague el gas usted mismo o contacte al creador.',
   encryptingSubmit: 'Cifrando y enviando respuestas...',

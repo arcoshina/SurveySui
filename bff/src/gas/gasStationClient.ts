@@ -81,6 +81,33 @@ export async function forwardSponsorToGasStation(
   }
 }
 
+/**
+ * Best-effort release of spent gas coins on the Gas Station DO after broadcast,
+ * so the per-coin lock is freed immediately instead of waiting for its TTL.
+ * Failures are non-fatal: the DO still releases on TTL expiry.
+ */
+export async function releaseGasStationCoins(coinObjectIds: string[]): Promise<void> {
+  if (coinObjectIds.length === 0) return
+  const baseUrl = process.env.GAS_STATION_URL
+  const secret = process.env.GAS_STATION_SHARED_SECRET?.trim()
+  if (!baseUrl || !secret) return
+
+  const url = new URL('/release', baseUrl.replace(/\/$/, ''))
+  const bodyJson = canonicalJsonStringify({ coinObjectIds })
+  const timestamp = String(Date.now())
+  const signature = signGasStationBody(secret, timestamp, bodyJson)
+
+  await fetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-gas-station-timestamp': timestamp,
+      'x-gas-station-signature': signature,
+    },
+    body: bodyJson,
+  })
+}
+
 export async function fetchGasStationHealth(): Promise<Record<string, unknown> | null> {
   const baseUrl = process.env.GAS_STATION_URL
   if (!baseUrl) return null

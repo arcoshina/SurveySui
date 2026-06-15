@@ -20,8 +20,6 @@ export interface SponsorPipelineContext {
   isPassSponsor: boolean
   isPlatformSponsor: boolean
   claimGasCompensationAmount: string | null
-  claimStorageCompensationAmount: string | null
-  claimHasBlob: boolean
 }
 
 export interface SponsorPipelineResult {

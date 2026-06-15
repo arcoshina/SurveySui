@@ -116,11 +116,10 @@ export function registerTicketRoutes(app: FastifyInstance, deps: { suiClient: Su
         const allowedNftTypeOpt = fields.allowed_nft_type
         const ticketFee = BigInt(fields.ticket_fee ?? '0')
         const gasCompensation = BigInt(fields.gas_compensation_amount ?? '0')
-        const storageCompensation = BigInt(fields.storage_compensation_amount ?? '0')
         const gasBalance = BigInt(fields.gas_balance ?? '0')
 
-        // 5. 餘額預檢 (Sponsorship Pool)
-        const requiredMinSui = gasCompensation + storageCompensation + ticketFee
+        // 5. 餘額預檢 (Sponsorship Pool):storage 補償已廢除,只需 gas 補償 + ticket fee
+        const requiredMinSui = gasCompensation + ticketFee
         if (gasBalance < requiredMinSui) {
           return reply.status(422).send({
             error: 'insufficient_sponsor_balance',
