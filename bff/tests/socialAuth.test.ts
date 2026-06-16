@@ -6,15 +6,16 @@ import {
   signTicket,
 } from '../src/auth/ticket.js'
 import { oauthStore } from '../src/auth/oauthStore.js'
+import { setupFakeD1 } from './helpers/fakeD1.js'
 
 const OWNER = '0xa11ce00000000000000000000000000000000000000000000000000000000000'
 
 describe('Social Auth — Tier 1', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.SURVEY_PASS_ISSUER_SALT = 'test_salt_tier1'
     process.env.SURVEY_PASS_ISSUER_PRIV =
       '0101010101010101010101010101010101010101010101010101010101010101'
-    oauthStore.clear()
+    await setupFakeD1() // 全新空 D1（取代 oauthStore.clear()）
   })
 
   afterEach(() => {
@@ -104,22 +105,22 @@ describe('Social Auth — Tier 1', () => {
   // ── OAuthStore ─────────────────────────────────────────────────────────────
 
   describe('OAuthStore', () => {
-    it('should store and retrieve state entry', () => {
-      oauthStore.set('state123', { verifier: 'abc', provider: 'google', owner: OWNER })
-      const entry = oauthStore.get('state123')
+    it('should store and retrieve state entry', async () => {
+      await oauthStore.set('state123', { verifier: 'abc', provider: 'google', owner: OWNER })
+      const entry = await oauthStore.get('state123')
       expect(entry?.provider).toBe('google')
       expect(entry?.verifier).toBe('abc')
       expect(entry?.owner).toBe(OWNER)
     })
 
-    it('should return null for unknown state', () => {
-      expect(oauthStore.get('nonexistent')).toBeNull()
+    it('should return null for unknown state', async () => {
+      expect(await oauthStore.get('nonexistent')).toBeNull()
     })
 
-    it('should return null after invalidation', () => {
-      oauthStore.set('state456', { verifier: 'xyz', provider: 'github', owner: OWNER })
-      oauthStore.invalidate('state456')
-      expect(oauthStore.get('state456')).toBeNull()
+    it('should return null after invalidation', async () => {
+      await oauthStore.set('state456', { verifier: 'xyz', provider: 'github', owner: OWNER })
+      await oauthStore.invalidate('state456')
+      expect(await oauthStore.get('state456')).toBeNull()
     })
   })
 })

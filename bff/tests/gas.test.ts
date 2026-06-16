@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
+import { Hono } from 'hono'
 import { Transaction } from '@mysten/sui/transactions'
 import { bcs } from '@mysten/sui/bcs'
 
@@ -39,7 +38,7 @@ import { registerGasRoutes, __resetDynamicGasCache, __useInMemoryPassReservation
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
 import { __resetGasConfigCache } from '../src/gas/gasConfig.js'
 import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
-import { initializeDb } from '../src/security/db.js'
+import { setupFakeD1 } from './helpers/fakeD1.js'
 
 describe('BFF Gas Sponsor Endpoint Tests', () => {
   let server: any
@@ -55,13 +54,24 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
   let userKeypair: Ed25519Keypair
   let userAddress: string
 
+  // Hono app.request 配接成 Fastify-like inject（保留 statusCode/payload/json 介面以降低改動）
+  async function inject(opts: { method: string; url: string; payload?: unknown }) {
+    const res = await server.request(opts.url, {
+      method: opts.method,
+      headers: opts.payload !== undefined ? { 'content-type': 'application/json' } : undefined,
+      body: opts.payload !== undefined ? JSON.stringify(opts.payload) : undefined,
+    })
+    const payload = await res.text()
+    return { statusCode: res.status, payload, json: () => JSON.parse(payload) }
+  }
+
   async function gasSponsorPayload(txBytes: string) {
     return { txBytes, senderAddress: userAddress }
   }
 
   // 完整單簽流程:/sponsor → 使用者簽交易 → /execute(額度在此扣)。
   async function sponsorThenExecute(txBytes: string) {
-    const sponsorRes = await server.inject({
+    const sponsorRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -71,7 +81,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     const { signature: userSignature } = await userKeypair.signTransaction(
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
-    return server.inject({
+    return inject({
       method: 'POST',
       url: '/api/gas/execute',
       payload: { sponsoredTxBytes, userSignature, sponsorSignature },
@@ -84,6 +94,10 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     process.env.GAS_SPONSOR_PRIV_2 = sponsorPriv2
     process.env.GAS_SPONSOR_PUBKEY_3 = coldPubkey3
     process.env.SUI_PACKAGE_ID = '0x0000000000000000000000000000000000000000000000000000000000000007'
+    // 解除 HTTP/錢包速率限制（本套件測平台日額度與審查邏輯，非限流；正式環境限流照常）。
+    // 註：原 Fastify 測試未註冊 rate-limit plugin 故無效；Hono middleware 一律啟用，需在此放寬。
+    process.env.GAS_SPONSOR_RATE_LIMIT_MAX = '100000'
+    process.env.GAS_SPONSOR_RATE_LIMIT_MAX_PER_WALLET = '100000'
     delete process.env.GAS_STATION_MODE
     delete process.env.GAS_STATION_URL
     __resetGasConfigCache()
@@ -92,11 +106,10 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     __resetSponsorState()
     __useInMemoryPassReservationsForTests()
 
-    initializeDb()
+    await setupFakeD1()
     await __resetPlatformSponsorLedger()
 
-    server = Fastify()
-    await server.register(cors, { origin: true })
+    server = new Hono()
 
     // Mock SuiClient
     mockSuiClient = {
@@ -236,7 +249,6 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
   })
 
   afterEach(async () => {
-    await server.close()
     __resetGasConfigCache()
     delete process.env.SURVEY_PASS_ISSUER_PRIV
     delete process.env.GAS_SPONSOR_PRIV_1
@@ -245,6 +257,8 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     delete process.env.MIN_PLATFORM_SPONSOR_TIER
     delete process.env.PLATFORM_CLAIM_SPONSOR_ENABLED
     delete process.env.SUI_PACKAGE_ID
+    delete process.env.GAS_SPONSOR_RATE_LIMIT_MAX
+    delete process.env.GAS_SPONSOR_RATE_LIMIT_MAX_PER_WALLET
   })
 
   // 1. 審查：只允許 claim 呼叫
@@ -262,7 +276,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     // 傳入 mockSuiClient 作為 build 參數
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -348,7 +362,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
     it('should fallback to default minimum of 0.1 SUI (100000000 MIST) when no on-chain txs found', async () => {
       mockSuiClient.queryTransactionBlocks = vi.fn().mockResolvedValue({ data: [] })
 
-      const response = await server.inject({
+      const response = await inject({
         method: 'GET',
         url: '/api/gas/health',
       })
@@ -363,7 +377,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
       __resetGasConfigCache()
       mockSuiClient.queryTransactionBlocks = vi.fn().mockResolvedValue({ data: [] })
       
-      const response = await server.inject({
+      const response = await inject({
         method: 'GET',
         url: '/api/gas/health',
       })
@@ -378,7 +392,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
       __resetGasConfigCache()
       mockSuiClient.queryTransactionBlocks = vi.fn().mockResolvedValue({ data: [] })
       
-      const response = await server.inject({
+      const response = await inject({
         method: 'GET',
         url: '/api/gas/health',
       })
@@ -430,7 +444,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
         ],
       })
 
-      const response = await server.inject({
+      const response = await inject({
         method: 'GET',
         url: '/api/gas/health',
       })
@@ -459,7 +473,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
       })
 
       // First call
-      const response1 = await server.inject({
+      const response1 = await inject({
         method: 'GET',
         url: '/api/gas/health',
       })
@@ -467,7 +481,7 @@ describe('BFF Gas Sponsor Endpoint Tests', () => {
       expect(mockSuiClient.queryTransactionBlocks).toHaveBeenCalledTimes(1)
 
       // Second call should hit cache and not invoke queryTransactionBlocks again
-      const response2 = await server.inject({
+      const response2 = await inject({
         method: 'GET',
         url: '/api/gas/health',
       })

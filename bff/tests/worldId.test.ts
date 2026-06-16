@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import Fastify from 'fastify'
+import { Hono } from 'hono'
 
 // signRequest 為純 JS ECDSA 簽名,測試以 mock 取代以求確定性
 vi.mock('@worldcoin/idkit-core/signing', () => ({
@@ -99,23 +99,26 @@ describe('World ID — Tier 2 (Orb only)', () => {
 
   // ── Fastify 端點 ─────────────────────────────────────────────────────────────
   describe('World ID endpoints', () => {
-    let server: any
+    let server: Hono
 
-    beforeEach(async () => {
-      server = Fastify()
+    beforeEach(() => {
+      server = new Hono()
       registerAuthRoutes(server)
     })
 
-    afterEach(async () => {
-      await server.close()
-    })
+    const post = (url: string, payload?: unknown) =>
+      server.request(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload ?? {}),
+      })
 
     // T-W2
     describe('POST /auth/worldid/sign-request', () => {
       it('returns rp_context built from signing_key + action', async () => {
-        const res = await server.inject({ method: 'POST', url: '/auth/worldid/sign-request' })
-        expect(res.statusCode).toBe(200)
-        const data = JSON.parse(res.payload)
+        const res = await post('/auth/worldid/sign-request')
+        expect(res.status).toBe(200)
+        const data = (await res.json()) as any
         expect(signRequest).toHaveBeenCalledWith({ signingKeyHex: 'aa'.repeat(32), action: 'verify-account' })
         expect(data.rp_context).toMatchObject({
           rp_id: 'rp_test123',
@@ -130,8 +133,8 @@ describe('World ID — Tier 2 (Orb only)', () => {
 
       it('returns 503 when env is not configured', async () => {
         delete process.env.WORLDCOIN_SIGNING_KEY
-        const res = await server.inject({ method: 'POST', url: '/auth/worldid/sign-request' })
-        expect(res.statusCode).toBe(503)
+        const res = await post('/auth/worldid/sign-request')
+        expect(res.status).toBe(503)
       })
     })
 
@@ -140,14 +143,10 @@ describe('World ID — Tier 2 (Orb only)', () => {
       it('signs a Tier 2 ticket (source=5) for a valid Orb proof', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 })))
 
-        const res = await server.inject({
-          method: 'POST',
-          url: '/auth/worldid/verify',
-          payload: { owner: OWNER, payload: orbPayload('0xnull-orb') },
-        })
+        const res = await post('/auth/worldid/verify', { owner: OWNER, payload: orbPayload('0xnull-orb') })
 
-        expect(res.statusCode).toBe(200)
-        const data = JSON.parse(res.payload)
+        expect(res.status).toBe(200)
+        const data = (await res.json()) as any
         expect(data.source).toBe(5)
         expect(data.bff_sig).toBeDefined()
         expect(data.expires_at).toBeDefined()
@@ -160,13 +159,9 @@ describe('World ID — Tier 2 (Orb only)', () => {
         const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }))
         vi.stubGlobal('fetch', fetchMock)
 
-        const res = await server.inject({
-          method: 'POST',
-          url: '/auth/worldid/verify',
-          payload: { owner: OWNER, payload: devicePayload() },
-        })
+        const res = await post('/auth/worldid/verify', { owner: OWNER, payload: devicePayload() })
 
-        expect(res.statusCode).toBe(403)
+        expect(res.status).toBe(403)
         // Orb 不通過時不應呼叫 World API,也不發 ticket
         expect(fetchMock).not.toHaveBeenCalled()
       })
@@ -174,22 +169,14 @@ describe('World ID — Tier 2 (Orb only)', () => {
       it('returns 401 when the World API rejects the proof', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => new Response('bad', { status: 400 })))
 
-        const res = await server.inject({
-          method: 'POST',
-          url: '/auth/worldid/verify',
-          payload: { owner: OWNER, payload: orbPayload() },
-        })
+        const res = await post('/auth/worldid/verify', { owner: OWNER, payload: orbPayload() })
 
-        expect(res.statusCode).toBe(401)
+        expect(res.status).toBe(401)
       })
 
       it('returns 400 when owner or payload is missing', async () => {
-        const res = await server.inject({
-          method: 'POST',
-          url: '/auth/worldid/verify',
-          payload: { owner: OWNER },
-        })
-        expect(res.statusCode).toBe(400)
+        const res = await post('/auth/worldid/verify', { owner: OWNER })
+        expect(res.status).toBe(400)
       })
     })
   })

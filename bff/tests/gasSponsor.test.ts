@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
+import { Hono } from 'hono'
 import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { bcs } from '@mysten/sui/bcs'
@@ -10,7 +9,7 @@ import { __resetGasConfigCache, getGasConfig } from '../src/gas/gasConfig.js'
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
 import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
 import { signTicket } from '../src/auth/ticket.js'
-import { initializeDb } from '../src/security/db.js'
+import { setupFakeD1 } from './helpers/fakeD1.js'
 
 const ISSUER_CONFIG_ID = '0x000000000000000000000000000000000000000000000000000000000000000b'
 const VOID_NFT_ID = '0x000000000000000000000000000000000000000000000000000000000000000d'
@@ -66,13 +65,24 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   let userAddress: string
   const registryId = '0x000000000000000000000000000000000000000000000000000000000000000a'
 
+  // Hono app.request 配接成 Fastify-like inject（可指定 app，支援第二個 server2）
+  async function inject(opts: { method: string; url: string; payload?: unknown }, app: Hono = server) {
+    const res = await app.request(opts.url, {
+      method: opts.method,
+      headers: opts.payload !== undefined ? { 'content-type': 'application/json' } : undefined,
+      body: opts.payload !== undefined ? JSON.stringify(opts.payload) : undefined,
+    })
+    const payload = await res.text()
+    return { statusCode: res.status, payload, json: () => JSON.parse(payload) }
+  }
+
   async function gasSponsorPayload(txBytes: string) {
     return { txBytes, senderAddress: userAddress }
   }
 
   // 走完整單簽流程:/sponsor 取得代付 bytes → 使用者簽交易(同意憑證)→ /execute 扣額度並廣播。
   async function sponsorThenExecute(txBytes: string) {
-    const sponsorRes = await server.inject({
+    const sponsorRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -82,7 +92,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     const { signature: userSignature } = await userKeypair.signTransaction(
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
-    return server.inject({
+    return inject({
       method: 'POST',
       url: '/api/gas/execute',
       payload: { sponsoredTxBytes, userSignature, sponsorSignature },
@@ -108,6 +118,9 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     process.env.GAS_SPONSOR_PRIV_2 = sponsorPriv2
     process.env.GAS_SPONSOR_PUBKEY_3 = coldPubkey3
     process.env.SUI_PACKAGE_ID = packageId
+    // 放寬 HTTP/錢包速率限制（本套件測審查/額度/簽章邏輯，非限流）。
+    process.env.GAS_SPONSOR_RATE_LIMIT_MAX = '100000'
+    process.env.GAS_SPONSOR_RATE_LIMIT_MAX_PER_WALLET = '100000'
     delete process.env.GAS_STATION_MODE
     delete process.env.GAS_STATION_URL
     delete process.env.GAS_STATION_SHARED_SECRET
@@ -117,11 +130,10 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     userAddress = userKeypair.toSuiAddress()
     __resetSponsorState()
     __useInMemoryPassReservationsForTests()
-    initializeDb()
+    await setupFakeD1()
     await __resetPlatformSponsorLedger()
 
-    server = Fastify()
-    await server.register(cors, { origin: true })
+    server = new Hono()
 
     mockSuiClient = {
       queryTransactionBlocks: vi.fn().mockResolvedValue({ data: [], hasNextPage: false }),
@@ -282,10 +294,11 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   })
 
   afterEach(async () => {
-    await server.close()
     __resetSponsorState()
     await __resetPlatformSponsorLedger()
     __resetGasConfigCache()
+    delete process.env.GAS_SPONSOR_RATE_LIMIT_MAX
+    delete process.env.GAS_SPONSOR_RATE_LIMIT_MAX_PER_WALLET
     delete process.env.SURVEY_PASS_ISSUER_PRIV
     delete process.env.GAS_SPONSOR_PRIV_1
     delete process.env.GAS_SPONSOR_PRIV_2
@@ -349,7 +362,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -439,7 +452,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     tx.setSender(userAddress)
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    const sponsorRes = await server.inject({
+    const sponsorRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: { txBytes, senderAddress: userAddress },
@@ -455,7 +468,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
 
-    const execRes = await server.inject({
+    const execRes = await inject({
       method: 'POST',
       url: '/api/gas/execute',
       payload: { sponsoredTxBytes, userSignature: forgedSig, sponsorSignature },
@@ -492,7 +505,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     })
     tx.setSender(userAddress)
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
-    const sponsorRes = await server.inject({
+    const sponsorRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: { txBytes, senderAddress: userAddress },
@@ -508,7 +521,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     const { signature: fakeSponsorSig } = await fakeSponsor.signTransaction(
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
-    const execRes = await server.inject({
+    const execRes = await inject({
       method: 'POST',
       url: '/api/gas/execute',
       payload: { sponsoredTxBytes, userSignature, sponsorSignature: fakeSponsorSig },
@@ -543,7 +556,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     tx.setSender(userAddress)
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    const res = await server.inject({
+    const res = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -613,7 +626,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await buildBatchMintExtraTx().then((tx) => tx.build({ client: mockSuiClient, onlyTransactionKind: true }))
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -630,7 +643,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       )
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -687,7 +700,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -698,7 +711,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   })
 
   it('should report count 0 / remaining 2 when there is no on-chain history', async () => {
-    const res = await server.inject({
+    const res = await inject({
       method: 'GET',
       url: `/api/gas/sponsor-count?address=${userAddress}`,
     })
@@ -713,7 +726,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     // One sponsored pass tx already landed on chain → count 1, remaining 1
     mockSuiClient.queryTransactionBlocks.mockResolvedValue(sponsoredTxPage(1))
 
-    const res = await server.inject({
+    const res = await inject({
       method: 'GET',
       url: `/api/gas/sponsor-count?address=${userAddress}`,
     })
@@ -728,7 +741,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     // A sponsored pass tx that aborted on chain still consumed gas → must count.
     mockSuiClient.queryTransactionBlocks.mockResolvedValue(sponsoredTxPage(1, 'failure'))
 
-    const res = await server.inject({
+    const res = await inject({
       method: 'GET',
       url: `/api/gas/sponsor-count?address=${userAddress}`,
     })
@@ -783,7 +796,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     mockSuiClient.dryRunTransactionBlock
       .mockResolvedValueOnce(dryRunFailure)
       .mockResolvedValueOnce(dryRunFailure)
-    const failRes = await server.inject({
+    const failRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -792,7 +805,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     // 2. A subsequent valid request (dry-run succeeds again per beforeEach mock)
     //    must still be allowed — the rejected one left no phantom count.
-    const okRes = await server.inject({
+    const okRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -822,7 +835,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -855,7 +868,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -898,7 +911,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -962,7 +975,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -1005,7 +1018,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -1020,8 +1033,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   it('/execute releases the spent gas coin lock after broadcast (local mode)', async () => {
     const spyQueue = InMemoryCoinLockStore.fromGasConfig(getGasConfig())
     const invalidateSpy = vi.spyOn(spyQueue, 'invalidateCoin')
-    const server2 = Fastify()
-    await server2.register(cors, { origin: true })
+    const server2 = new Hono()
     registerGasRoutes(server2, { suiClient: mockSuiClient as any, packageId, coinQueue: spyQueue })
 
     const tx = new Transaction()
@@ -1039,25 +1051,22 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const sponsorRes = await server2.inject({
-      method: 'POST',
-      url: '/api/gas/sponsor',
-      payload: { txBytes, senderAddress: userAddress },
-    })
+    const sponsorRes = await inject(
+      { method: 'POST', url: '/api/gas/sponsor', payload: { txBytes, senderAddress: userAddress } },
+      server2
+    )
     expect(sponsorRes.statusCode).toBe(200)
     const { sponsoredTxBytes, sponsorSignature } = JSON.parse(sponsorRes.payload)
     const { signature: userSignature } = await userKeypair.signTransaction(
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
-    const execRes = await server2.inject({
-      method: 'POST',
-      url: '/api/gas/execute',
-      payload: { sponsoredTxBytes, userSignature, sponsorSignature },
-    })
+    const execRes = await inject(
+      { method: 'POST', url: '/api/gas/execute', payload: { sponsoredTxBytes, userSignature, sponsorSignature } },
+      server2
+    )
 
     expect(execRes.statusCode).toBe(200)
     expect(invalidateSpy).toHaveBeenCalled()
-    await server2.close()
   })
 
   it('should reject PTB mixing survey_pass and survey_vault::claim', async () => {
@@ -1104,7 +1113,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -1162,7 +1171,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       )
     )
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),

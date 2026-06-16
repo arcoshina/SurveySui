@@ -543,18 +543,8 @@ export default function FundPage() {
                   createdAt: Date.now(),
                 })
               )
-              if (surveyBlobIdStr) {
-                try {
-                  const bffUrl = import.meta.env.VITE_BFF_URL || 'http://localhost:3100'
-                  await fetch(`${bffUrl}/api/cache/survey`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ surveyId, blobId: surveyBlobIdStr })
-                  })
-                } catch (e) {
-                  console.warn('Failed to notify BFF to cache survey:', e)
-                }
-              }
+              // BFF storage/cache 層已移除：前端直連 Walrus 並以鏈上 content_hash 自驗，
+              // 無需再通知 BFF 暖機快取。
             }
             window.localStorage.removeItem(`${DRAFT_KEY_PREFIX}${draftId}`)
 

@@ -36,40 +36,22 @@ export class SqlitePassReservationStore implements PassReservationStore {
     const sender = normalizeAddress(senderAddress)
     const sponsor = normalizeAddress(sponsorAddress)
     const minCreated = now - RESERVATION_TTL_MS
-    const expireBefore = now - RESERVATION_TTL_MS
 
-    await db.execute('BEGIN IMMEDIATE')
-    try {
-      await db.execute({
-        sql: `DELETE FROM pass_sponsor_reservation WHERE created_at <= ?`,
-        args: [expireBefore],
-      })
-      const countResult = await db.execute({
-        sql: `SELECT COUNT(*) AS c FROM pass_sponsor_reservation
-              WHERE sender_address = ? AND sponsor_address = ? AND created_at > ?`,
-        args: [sender, sponsor, minCreated],
-      })
-      const row = countResult.rows[0] as unknown as { c: number | bigint }
-      const pending = Number(row?.c ?? 0)
-      if (onChainBaseline + pending >= maxLimit) {
-        await db.execute('ROLLBACK')
-        return false
-      }
-      await db.execute({
-        sql: `INSERT INTO pass_sponsor_reservation (sender_address, sponsor_address, created_at)
-              VALUES (?, ?, ?)`,
-        args: [sender, sponsor, now],
-      })
-      await db.execute('COMMIT')
-      return true
-    } catch (err) {
-      try {
-        await db.execute('ROLLBACK')
-      } catch {
-        /* ignore rollback failure */
-      }
-      throw err
-    }
+    // 單句原子預留：D1/SQLite 全域序列化寫入，整句（含 live-count 子查詢 + 條件）為一個
+    // 原子單位，無需 app 級鎖或 BEGIN IMMEDIATE（原 SQLite 版兩者都要，是因 Node 事件迴圈
+    // 會在 await 間交錯；Workers 多 isolate 並發下，正確性改由 D1 的寫入序列化保證）。
+    // 僅當 onChainBaseline + 未過期預留數 < maxLimit 時才插入；以 created_at > minCreated
+    // 過濾過期列（實體清理交給 pruneExpired，由 cron 觸發）。
+    const res = await db.execute({
+      sql: `INSERT INTO pass_sponsor_reservation (sender_address, sponsor_address, created_at)
+            SELECT ?, ?, ?
+            WHERE ? + (
+              SELECT COUNT(*) FROM pass_sponsor_reservation
+              WHERE sender_address = ? AND sponsor_address = ? AND created_at > ?
+            ) < ?`,
+      args: [sender, sponsor, now, onChainBaseline, sender, sponsor, minCreated, maxLimit],
+    })
+    return Number(res.rowsAffected ?? 0) > 0
   }
 
   async releaseOldest(

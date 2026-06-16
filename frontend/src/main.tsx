@@ -11,17 +11,24 @@ import { ThemeProvider, useTheme, darkTheme } from './context/ThemeContext'
 
 const queryClient = new QueryClient()
 
-// Failover RPC endpoints — official devnet first, community mirror as backup.
+// 連線網路由 VITE_NETWORK 決定（預設 testnet），日後切網不必改 code。
+const NETWORK = (import.meta.env.VITE_NETWORK as 'testnet' | 'devnet' | 'mainnet') ?? 'testnet'
+
+// Failover RPC endpoints — official fullnode first, community mirror as backup.
 // Browser may hit intermittent CORS / rate-limit on the official endpoint;
 // the wrapped fetch transparently retries the request against the next URL.
-const DEVNET_RPC_ENDPOINTS = [
-  getFullnodeUrl('devnet'),
-  'https://rpc-devnet.suiscan.xyz/',
-]
+const SUISCAN_MIRROR: Record<string, string | undefined> = {
+  testnet: 'https://rpc-testnet.suiscan.xyz/',
+  devnet: 'https://rpc-devnet.suiscan.xyz/',
+  mainnet: 'https://rpc-mainnet.suiscan.xyz/',
+}
+const RPC_ENDPOINTS = [getFullnodeUrl(NETWORK), SUISCAN_MIRROR[NETWORK]].filter(
+  (url): url is string => Boolean(url)
+)
 
 const failoverFetch: typeof fetch = async (_input, init) => {
   let lastError: unknown = null
-  for (const endpoint of DEVNET_RPC_ENDPOINTS) {
+  for (const endpoint of RPC_ENDPOINTS) {
     try {
       const response = await fetch(endpoint, init)
       if (response.ok) return response
@@ -36,13 +43,13 @@ const failoverFetch: typeof fetch = async (_input, init) => {
 }
 
 const networks = {
-  devnet: { url: DEVNET_RPC_ENDPOINTS[0] },
+  [NETWORK]: { url: RPC_ENDPOINTS[0] },
 }
 
 const createSuiClient = (_name: string, _config: { url: string }) =>
   new SuiClient({
     transport: new SuiHTTPTransport({
-      url: DEVNET_RPC_ENDPOINTS[0],
+      url: RPC_ENDPOINTS[0],
       fetch: failoverFetch,
     }),
   })
@@ -65,7 +72,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <SuiClientProvider
         networks={networks}
-        defaultNetwork="devnet"
+        defaultNetwork={NETWORK}
         createClient={createSuiClient as any}
       >
         <ThemeProvider>

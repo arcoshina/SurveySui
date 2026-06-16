@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
+import { Hono } from 'hono'
 import { otpStore } from '../src/auth/otpStore.js'
+import { setupFakeD1 } from './helpers/fakeD1.js'
 
 vi.mock('../src/email/sender.js', () => ({
   sendOtpEmail: vi.fn().mockResolvedValue(undefined),
@@ -11,8 +11,8 @@ import { computeNullifierHash, computeEmailSecondaryNullifier, signTicket, getPa
 import { registerAuthRoutes } from '../src/auth/handler.js'
 
 describe('BFF Authentication & Ticket Tests', () => {
-  beforeEach(() => {
-    otpStore.clear()
+  beforeEach(async () => {
+    await setupFakeD1() // 全新空 D1（取代 otpStore.clear()）
     process.env.SURVEY_PASS_ISSUER_SALT = 'test_salt_123456'
     process.env.SURVEY_PASS_ISSUER_PRIV =
       '0101010101010101010101010101010101010101010101010101010101010101' // 32 bytes hex
@@ -25,28 +25,32 @@ describe('BFF Authentication & Ticket Tests', () => {
 
   // 1. OTP Store Tests
   describe('OTP Store', () => {
-    it('should save and retrieve OTP code', () => {
-      otpStore.set('alice@test.com', '123456')
-      expect(otpStore.get('alice@test.com')).toBe('123456')
+    it('should save and retrieve OTP code', async () => {
+      await otpStore.set('alice@test.com', '123456')
+      expect(await otpStore.get('alice@test.com')).toBe('123456')
     })
 
-    it('should normalize email to lowercase and trim', () => {
-      otpStore.set(' Alice@Test.com ', '123456')
-      expect(otpStore.get('alice@test.com')).toBe('123456')
+    it('should normalize email to lowercase and trim', async () => {
+      await otpStore.set(' Alice@Test.com ', '123456')
+      expect(await otpStore.get('alice@test.com')).toBe('123456')
     })
 
-    it('should return null for expired OTP', () => {
-      vi.useFakeTimers()
-      otpStore.set('alice@test.com', '123456', 5000) // 5 seconds
-      vi.advanceTimersByTime(6000) // advance 6 seconds
-      expect(otpStore.get('alice@test.com')).toBeNull()
-      vi.useRealTimers()
+    it('should return null for expired OTP', async () => {
+      // 以顯式 now 控制過期（避免假計時器與 libsql async 互卡）
+      const base = Date.now()
+      await otpStore.set('alice@test.com', '123456', 5000) // expires_at = now+5s
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(base + 6000)
+      try {
+        expect(await otpStore.get('alice@test.com')).toBeNull()
+      } finally {
+        nowSpy.mockRestore()
+      }
     })
 
-    it('should invalidate OTP after use', () => {
-      otpStore.set('alice@test.com', '123456')
-      otpStore.invalidate('alice@test.com')
-      expect(otpStore.get('alice@test.com')).toBeNull()
+    it('should invalidate OTP after use', async () => {
+      await otpStore.set('alice@test.com', '123456')
+      await otpStore.invalidate('alice@test.com')
+      expect(await otpStore.get('alice@test.com')).toBeNull()
     })
   })
 
@@ -85,29 +89,27 @@ describe('BFF Authentication & Ticket Tests', () => {
   })
 
   // 4. Fastify Endpoints Tests
-  describe('Fastify Auth Endpoints', () => {
-    let server: any
+  describe('Auth Endpoints', () => {
+    let server: Hono
 
-    beforeEach(async () => {
+    beforeEach(() => {
       vi.clearAllMocks()
-      server = Fastify()
-      await server.register(cors, { origin: true })
+      server = new Hono()
       registerAuthRoutes(server)
     })
 
-    afterEach(async () => {
-      await server.close()
-    })
-
-    it('should send OTP email without returning code in response', async () => {
-      const response = await server.inject({
+    const post = (url: string, payload: unknown) =>
+      server.request(url, {
         method: 'POST',
-        url: '/auth/email/otp',
-        payload: { email: 'alice@test.com' },
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
       })
 
-      expect(response.statusCode).toBe(200)
-      const data = JSON.parse(response.payload)
+    it('should send OTP email without returning code in response', async () => {
+      const response = await post('/auth/email/otp', { email: 'alice@test.com' })
+
+      expect(response.status).toBe(200)
+      const data = (await response.json()) as any
       expect(data.message).toBe('OTP sent successfully')
       expect(data.code).toBeUndefined()
       expect(sendOtpEmail).toHaveBeenCalledTimes(1)
@@ -120,28 +122,16 @@ describe('BFF Authentication & Ticket Tests', () => {
 
     it('should verify OTP and return signed ticket', async () => {
       // Step 1: Request OTP
-      const otpResponse = await server.inject({
-        method: 'POST',
-        url: '/auth/email/otp',
-        payload: { email: 'alice@test.com' },
-      })
-      expect(otpResponse.statusCode).toBe(200)
+      const otpResponse = await post('/auth/email/otp', { email: 'alice@test.com' })
+      expect(otpResponse.status).toBe(200)
       const code = vi.mocked(sendOtpEmail).mock.calls[0][1] as string
 
       // Step 2: Verify OTP
       const owner = '0xa11ce00000000000000000000000000000000000000000000000000000000000'
-      const verifyResponse = await server.inject({
-        method: 'POST',
-        url: '/auth/email/verify',
-        payload: {
-          email: 'alice@test.com',
-          code,
-          owner,
-        },
-      })
+      const verifyResponse = await post('/auth/email/verify', { email: 'alice@test.com', code, owner })
 
-      expect(verifyResponse.statusCode).toBe(200)
-      const ticketData = JSON.parse(verifyResponse.payload)
+      expect(verifyResponse.status).toBe(200)
+      const ticketData = (await verifyResponse.json()) as any
       expect(ticketData.bff_sig).toBeDefined()
       expect(ticketData.expires_at).toBeDefined()
       expect(Array.isArray(ticketData.nullifiers)).toBe(true)
@@ -151,21 +141,17 @@ describe('BFF Authentication & Ticket Tests', () => {
 
     it('should fail with incorrect OTP code', async () => {
       // Set OTP manually
-      otpStore.set('alice@test.com', '123456')
+      await otpStore.set('alice@test.com', '123456')
 
       const owner = '0xa11ce00000000000000000000000000000000000000000000000000000000000'
-      const verifyResponse = await server.inject({
-        method: 'POST',
-        url: '/auth/email/verify',
-        payload: {
-          email: 'alice@test.com',
-          code: '654321', // incorrect
-          owner,
-        },
+      const verifyResponse = await post('/auth/email/verify', {
+        email: 'alice@test.com',
+        code: '654321', // incorrect
+        owner,
       })
 
-      expect(verifyResponse.statusCode).toBe(401)
-      const errData = JSON.parse(verifyResponse.payload)
+      expect(verifyResponse.status).toBe(401)
+      const errData = (await verifyResponse.json()) as any
       expect(errData.error).toBe('Invalid or expired OTP code')
     })
   })
