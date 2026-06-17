@@ -10,7 +10,11 @@ export function canonicalJsonStringify(value: unknown): string {
     return `[${value.map((item) => canonicalJsonStringify(item)).join(',')}]`
   }
   const obj = value as Record<string, unknown>
-  const keys = Object.keys(obj).sort()
+  // 略過值為 undefined 的 key（對齊 JSON.stringify 語意），否則會產出字面
+  // `"k":undefined` 這種非法 JSON，導致接收端 JSON.parse 失敗。
+  const keys = Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort()
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJsonStringify(obj[k])}`).join(',')}}`
 }
 

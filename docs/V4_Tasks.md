@@ -19,45 +19,35 @@
  - Sui 的 Passkey 不適合做為防女巫/KYC用途  
  - Walrus 儲存的單位是 63 MB 的整數  
  - 放棄自架 zkLogin，有託管資產的法律問題 
+ - serverless 拆分後，前端所有 BFF 呼叫必須帶絕對 VITE_BFF_URL（dev 靠 vite proxy 的相對路徑在 prod 會打到 Pages 404，且代付失敗會靜默回退自付，難察覺）。
+ - 入口 Worker 轉送到 DO 時必須原樣轉送 rawBody + HMAC 標頭（/health 免驗章會綠燈，掩蓋 /sponsor 的 401）。
 
+## 代辦事項
+- [ ] 量尺 UI 問題
+- [ ] 公開問卷評分題統計問題
 
-## 待辦清單
+## 語法
 
-- [ ] 完成前端說明文件，注意要遵守 ./docs/Style_Guide.md
-- [ ] Ticket issuer 改 threshold multisig / KMS（Phase 3+）  
-- [x] Gas 代付 2-of-3 multisig ；見 /安全指引.md、/託管架構.md  
-- [x] 秘密及金鑰的輪換及管理準則  ./安全指引.md  
-- [x] 檢查代幣經濟已對齊 ./system_design/TokenEconomics.md 
+### 部屬 Gas station
+cd workers/gas-station
+npx wrangler deploy
 
-
-## 收尾檢查
-- [x] Env 集中在一個檔案，加註解
-- [x] 檢查前端說明文案：引導、防護、設計、代付及退回機制、儲存及銷毀機制
-- [x] 再次確認答卷上鏈的格式問題  
-- [x] 應對私鑰洩漏問題：錢包持有者可以完全銷毀錢包內的 SurveyPass，認證資訊從一個地址中刪除後，能綁到另一個地址  
-- [x] 確認 OAuth JWT 有驗簽
-- [x] 檢查 Gas 補助的計算邏輯_opus（答卷改 inline-only、廢除 answer blob 與 storage 補償）
-- [x] 檢查防女巫抽乾補助池的機制: 刪除 Pass 及問卷時的押金處理_opus
-- [ ] **上線前重設所有 Secrets** ./安全指引.md  
-- [ ] 確認佈署時的提示  
-- [ ] 文件完整說明運作方式，特別是安全措施及利用的 Sui 特性
-- [ ] 銷毀 Pass時的提示 message
+### 部屬前端
+cd frontend
+pnpm build
+npx wrangler pages deploy dist --project-name surveysui-frontend-testnet
 
 ## 進度紀錄  
 
 ### 2026/6/16
-- [ ] 實際部屬前後端 + testnet
-    - [x] 產生新 admin 地址
-    - [x] 產生新金鑰
-    - [ ] 輪換 google API
-    - [ ] 輪換 Github API
-    - [ ] 輪換 Resend API
-    - [ ] 輪換 world coin API
-    - [ ] 
-- [ ] 線上測試功能完整性
-- [ ] 實際部屬前後端 + devnet
-
-修復提密洩漏、關閉大答卷、補足文件、MD渲染h3
+- [x] 實際部屬前後端 + testnet 到 Cloudflare_opus  
+- [x] 綁網址 surveysui.com _opus  
+- [x] 實際部屬前後端 + testnet _opus  
+- [x] Auth頁連線問題_opus  
+- [x] 代付失效(Pass)_opus  
+- [x] 修復注資頁不能發布_opus
+- [ ] 公開填答頁的問題寬度問題  
+- [ ] 結束後不能立刻銷毀問卷 (沒有立刻更新)
 
 ### 2026/6/15
 - [x] 確認文件內容_手動+opus  

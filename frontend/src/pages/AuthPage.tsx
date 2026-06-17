@@ -28,6 +28,7 @@ import { ConnectButton } from '@mysten/dapp-kit'
 import { useOAuthResult } from '../lib/useOAuthResult'
 import { bcs } from '@mysten/sui/bcs'
 import { DIRECT_OAUTH_PROVIDERS } from '../lib/authProviders'
+import { bffUrl } from '../lib/bffUrl'
 import { useActiveSigner } from '../lib/useActiveSigner'
 import type { ActiveSigner } from '../lib/useActiveSigner'
 import { IDKitRequestWidget, proofOfHuman } from '@worldcoin/idkit'
@@ -157,7 +158,7 @@ export default function AuthPage() {
       return null
     }
     try {
-      const res = await fetch(`/api/gas/sponsor-count?address=${activeAddress}`)
+      const res = await fetch(bffUrl(`/api/gas/sponsor-count?address=${activeAddress}`))
       if (res.ok) {
         const data = (await res.json()) as SponsorQuota
         setSponsorQuota(data)
@@ -205,10 +206,12 @@ export default function AuthPage() {
     isSponsored: boolean,
     limitReachedHint: boolean
   ) {
+    const backendUrl = import.meta.env.VITE_BFF_URL ?? ''
     const fallbackResult = await executeTxWithFallback({
       tx,
       senderAddress: owner,
       client: suiClient as any,
+      backendUrl,
       signAndExecute: async (t) => signer.signAndExecute(t as Transaction),
       // 代付鑄造/升級（deposit_payer=sponsor）不可自付回退：代付失敗即顯示「暫時不可用」，
       // 避免把 deposit_payer=sponsor 的交易自付送出而雙重收費。自付路徑（deposit_payer=owner）維持回退。
@@ -231,6 +234,7 @@ export default function AuthPage() {
         sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
         userSignature,
         sponsorSignature: fallbackResult.sponsorSignature,
+        backendUrl,
       })
       digest = txResult.digest
     } else {
@@ -275,8 +279,9 @@ export default function AuthPage() {
     setCanReturnToSurvey(false)
 
     try {
+      const backendUrl = import.meta.env.VITE_BFF_URL ?? ''
       const resolvedPass = activePass ?? (await fetchActivePass(suiClient, owner, registryId))
-      const health = await probeGasSponsorHealth({})
+      const health = await probeGasSponsorHealth({ backendUrl })
       // 在 mint 當下重抓額度，避免用過期 state（例如銷毀 Pass 後 count 不會下降，
       // 舊 state 仍顯示有額度而誤走代付路徑、被後端拒絕後撞死路）。前端與後端共用
       // 同一鏈上快取，當下重抓即可讓 willSelfPay 與後端代付決策一致。拿不到才退回 state。
@@ -333,6 +338,7 @@ export default function AuthPage() {
             tx: txDraft,
             senderAddress: owner,
             client: suiClient as any,
+            backendUrl,
           })
           const rebuilt = new Transaction()
           const passObjFinal = rebuilt.object(resolvedPass.objectId)
@@ -387,6 +393,7 @@ export default function AuthPage() {
             tx: txDraft,
             senderAddress: owner,
             client: suiClient as any,
+            backendUrl,
           })
           const primary = ticketFieldsFromFinalized(finalized[0])
           const rebuiltBase = {
@@ -453,7 +460,7 @@ export default function AuthPage() {
     setCanReturnToSurvey(false)
 
     try {
-      const res = await fetch('/auth/email/otp', {
+      const res = await fetch(bffUrl('/auth/email/otp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, lang }),
@@ -489,7 +496,7 @@ export default function AuthPage() {
     setOtpSentNotice(null)
 
     try {
-      const res = await fetch('/auth/email/verify', {
+      const res = await fetch(bffUrl('/auth/email/verify'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, code: otpCode, owner: account.address }),
@@ -519,7 +526,7 @@ export default function AuthPage() {
 
   function handleSocialLogin(providerId: string) {
     if (!account) return
-    window.location.href = `/auth/${providerId}/authorize?owner=${account.address}`
+    window.location.href = bffUrl(`/auth/${providerId}/authorize?owner=${account.address}`)
   }
 
   // ── World ID 4.0 (Tier 2, Orb only) ───────────────────────────────────────
@@ -604,7 +611,7 @@ export default function AuthPage() {
 
     let res: Response
     try {
-      res = await fetch('/api/pass/delete', {
+      res = await fetch(bffUrl('/api/pass/delete'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ passId, signedTimestamp, signature }),

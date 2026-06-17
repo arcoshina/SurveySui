@@ -8,7 +8,6 @@ import {
   runSponsorPipeline,
   validateSponsorTransaction,
   verifyGasStationSignature,
-  type SponsorPipelineContext,
   type SponsorSigner,
 } from '@surveysui/gas-station-core'
 import { toGasConfigEnv, toSponsorSignerEnv, type GasStationEnv } from './env.js'
@@ -18,9 +17,6 @@ import { ensureD1Schema } from './d1Stores.js'
 export interface SponsorRequestBody {
   txBytes: string
   senderAddress: string
-  requestId?: string
-  /** Ignored — DO re-derives from txBytes via validateSponsorTransaction. */
-  pipelineContext?: SponsorPipelineContext
 }
 
 type DoMetrics = {
@@ -235,7 +231,6 @@ export class GasStationDO implements DurableObject {
       coinStore: this.coinStore,
       gasConfig,
       context: validation.pipelineContext,
-      requestId: body.requestId,
     })
 
     this.metrics.lastOutcome = outcome.metrics.outcome
@@ -245,7 +240,6 @@ export class GasStationDO implements DurableObject {
       console.log(
         JSON.stringify({
           event: 'gas_sponsor',
-          requestId: body.requestId,
           sender: body.senderAddress,
           outcome: outcome.metrics.outcome,
           queueWaitMs: outcome.metrics.queueWaitMs,
@@ -262,7 +256,6 @@ export class GasStationDO implements DurableObject {
     console.log(
       JSON.stringify({
         event: 'gas_sponsor',
-        requestId: body.requestId,
         sender: body.senderAddress,
         outcome: 'success',
         queueWaitMs: outcome.metrics.queueWaitMs,

@@ -93,7 +93,7 @@
 1. 彙整真實網址：BFF URL、Pages URL。
 2. 註冊正式外部憑證（用真實網址）：
    - OAuth：redirect URI = `<BFF URL>/...callback`，取正式 client id/secret。
-   - World ID：`WORLDCOIN_RP_ID=<Pages 網域>`、`WORLDCOIN_APP_ID=app_prod_…`、signing key、action。
+   - World ID：`WORLDCOIN_RP_ID=<rp_…>`、`WORLDCOIN_APP_ID=app_prod_…`、signing key、action。
    - Resend：API key、`EMAIL_FROM`。
 3. 回填並 redeploy：
    - BFF：`[vars]` 補 `FRONTEND_URL=<Pages URL>`（CORS）、`BFF_URL=<BFF URL>`、`WORLDCOIN_RP_ID`；OAuth/Resend/WorldID secrets 換正式值 → `npx wrangler deploy`。

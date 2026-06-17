@@ -1,7 +1,6 @@
 import {
   canonicalJsonStringify,
   signGasStationBody,
-  type SponsorPipelineContext,
 } from '@surveysui/gas-station-core'
 import { getGasStationFetch, hasGasStationBinding } from './gasStationBinding.js'
 
@@ -19,8 +18,6 @@ export interface GasStationSponsorRequest {
   txBytes: string
   senderAddress: string
   sponsorAddress: string
-  requestId?: string
-  pipelineContext: SponsorPipelineContext
 }
 
 export interface GasStationSponsorSuccess {

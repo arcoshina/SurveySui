@@ -348,7 +348,7 @@ export default function SurveyPage() {
   useEffect(() => {
     if (phase !== 'review' || gasMode !== 'unknown') return
     let cancelled = false
-    void probeGasSponsorHealth().then((res) => {
+    void probeGasSponsorHealth({ backendUrl: import.meta.env.VITE_BFF_URL ?? '' }).then((res) => {
       if (cancelled) return
       setGasMode(res.available ? 'sponsored' : 'self_paid_warning')
     })
@@ -892,9 +892,11 @@ export default function SurveyPage() {
       }
 
       // Try sponsored path, auto-fallback to self-paid (with confirm).
+      const backendUrl = import.meta.env.VITE_BFF_URL ?? ''
       const fallbackResult = await executeTxWithFallback({
         tx: buildClaimTx(),
         senderAddress: activeSigner.address,
+        backendUrl,
         client: suiClient as any,
         signAndExecute: async (t) => activeSigner.signAndExecute(t as Transaction),
         onSelfPaidFallback: (estMist, bffError) =>
@@ -921,6 +923,7 @@ export default function SurveyPage() {
           sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
           userSignature,
           sponsorSignature: fallbackResult.sponsorSignature,
+          backendUrl,
         })
         digest = txResult.digest
       } else {

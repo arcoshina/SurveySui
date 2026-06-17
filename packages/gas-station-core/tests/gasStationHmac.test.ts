@@ -12,6 +12,12 @@ describe('gasStationHmac', () => {
     expect(a).toBe(b)
   })
 
+  it('canonicalJsonStringify omits undefined values and stays valid JSON', () => {
+    const out = canonicalJsonStringify({ a: 1, requestId: undefined, b: 2 })
+    expect(out).toBe('{"a":1,"b":2}')
+    expect(() => JSON.parse(out)).not.toThrow()
+  })
+
   it('signs and verifies request bodies', () => {
     const secret = 'unit-test-secret'
     const timestamp = String(Date.now())

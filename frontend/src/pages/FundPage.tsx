@@ -33,6 +33,7 @@ import {
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
+import { useGasCompensationAmount } from '../hooks/useGasCompensationAmount'
 import { uploadToDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
@@ -183,10 +184,7 @@ export default function FundPage() {
     })
   }, [])
 
-  const gasCompensationAmount = useMemo(() => {
-    if (!gasHealth?.available) return 0n
-    return BigInt(gasHealth.gasCompensationAmount ?? '0')
-  }, [gasHealth])
+  const { gasCompensationAmount, ready: gasCompReady } = useGasCompensationAmount(gasHealth)
 
   // 答卷一律 inline、storage 補償已廢除:不再向 gas 池預存 storage 補償,避免過度鎖倉。
   const storageCompensationAmountMIST = 0n
@@ -972,6 +970,7 @@ export default function FundPage() {
                         disabled={
                           (isKeyRequired && !keypair) ||
                           suiToSpend == null ||
+                          !gasCompReady ||
                           status === 'tx-signing' ||
                           status === 'submitting' ||
                           status === 'uploading' ||

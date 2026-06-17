@@ -15,6 +15,7 @@ import { getTicketFeeMist } from '../lib/ticketFee'
 import { formatSsr, formatSui, formatFullPrecision, formatSuiFullPrecision } from '../lib/format'
 import { useT } from '../i18n'
 import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
+import { useGasCompensationAmount } from '../hooks/useGasCompensationAmount'
 
 const DRAFT_KEY_PREFIX = 'surveysui:draft:'
 
@@ -176,10 +177,7 @@ export default function CreatePage() {
     })
   }, [])
 
-  const gasCompensationAmount = useMemo(() => {
-    if (!gasHealth?.available) return 0n
-    return BigInt(gasHealth.gasCompensationAmount ?? '0')
-  }, [gasHealth])
+  const { gasCompensationAmount } = useGasCompensationAmount(gasHealth)
 
   const ticketFeeMist = useMemo(() => getTicketFeeMist(), [])
 

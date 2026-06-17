@@ -54,3 +54,6 @@ bff/data/
 
 # Local agent settings
 .claude/settings.local.json
+
+# Documentation
+docs/

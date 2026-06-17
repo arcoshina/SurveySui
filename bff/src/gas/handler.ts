@@ -333,8 +333,6 @@ export function registerGasRoutes(
           txBytes,
           senderAddress,
           sponsorAddress,
-          requestId,
-          pipelineContext,
         })
         if (!forwarded.ok) {
           return c.json({ error: forwarded.error, message: forwarded.message }, forwarded.status as any)
