@@ -2,7 +2,7 @@ import type { ResultsDict } from '../zh/results'
 
 const results: ResultsDict = {
   title: 'アンケート集計結果',
-  subtitle: '集計結果グラフ',
+  subtitle: '回答の進捗',
   loading: 'アンケート集計データを読み込んでいます...',
   errLoadFailed: 'アンケートの読み込みに失敗しました。Vault IDが正しいか確認してください。',
   errEncrypted: 'このアンケートは「回答暗号化」が有効に設定されています。回答データはチェーン上で暗号化保護されており、アンケートの主催者のみがウォレットの署名を用いて復号し、結果を表示できます。一般には公開されません。',
