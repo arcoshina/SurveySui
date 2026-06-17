@@ -47,7 +47,7 @@ Después obtendrás un enlace de la encuesta que puedes compartir directamente.
 
 Consejo: si las preguntas de la encuesta también están cifradas, la parte de la URL después del `#` es la clave de descifrado; ten cuidado de no filtrarla.
 
-## Paso 5: cerrar y finalizar
+## Paso 4: cerrar y finalizar
 
 El panel muestra en tiempo real: número de respuestas, tasa de finalización, recompensas pagadas, presupuesto restante y la cuenta atrás hasta la fecha límite.
 

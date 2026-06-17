@@ -69,7 +69,7 @@ The gas a respondent needs to answer is first sponsored by the backend, with the
 
 ### 1. Atomic fund flow with PTBs
 
-Multi-step fund flows such as create, claim, and purge are each compressed into a single PTB, so verification, payout, reimbursement, and burning complete atomically within one transaction, with no intermediate inconsistent state. The vault remains a single-owner object until funding is complete, becoming a shared object and publicly reachable only after funding; during that window it is unreachable from the outside. Eligibility authorization for claim is enforced on-chain by the Pass type and nullifier, not by backend rules. Combined with Sponsored Transactions, the respondent has a 0 balance the entire time and only needs to sign once.
+Multi-step fund flows are compressed to complete atomically within a single transaction, with no intermediate inconsistent state. The vault remains a single-owner object until funding is complete, becoming a shared object and publicly reachable only after funding; during that window it is unreachable from the outside. Eligibility authorization for claim is enforced on-chain by the Pass type and nullifier, not by backend rules. Combined with Sponsored Transactions, the respondent has a 0 balance the entire time and only needs to sign once.
 
 ### 2. Soulbound Pass + nullifier sybil resistance
 

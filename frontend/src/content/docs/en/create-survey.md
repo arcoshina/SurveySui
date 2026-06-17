@@ -47,7 +47,7 @@ After this you'll get a survey link that you can share directly.
 
 Tip: if the survey questions are also encrypted, the part of the URL after the `#` is the decryption key — be careful not to leak it.
 
-## Step 5: Close and wrap up
+## Step 4: Close and wrap up
 
 The dashboard shows in real time: number answered, completion rate, rewards paid out, remaining budget, and the countdown to the deadline.
 

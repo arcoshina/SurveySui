@@ -69,7 +69,7 @@ El gas que necesita un encuestado para responder lo patrocina primero el backend
 
 ### 1. Flujo de fondos atómico con PTB
 
-Los flujos de fondos de varios pasos como crear, claim y purge se comprimen cada uno en un único PTB, de modo que la verificación, el pago, el reembolso y la quema se completan de forma atómica en una sola transacción, sin estados intermedios inconsistentes. La bóveda permanece como objeto de un solo propietario hasta que se completa la financiación, convirtiéndose en un shared object y volviéndose alcanzable públicamente solo después de financiarse; durante esa ventana es inalcanzable desde el exterior. La autorización de elegibilidad para el claim la imponen en cadena el tipo del Pass y el nullifier, no las reglas del backend. Combinado con Sponsored Transactions, el encuestado tiene saldo 0 todo el tiempo y solo necesita firmar una vez.
+Los flujos de fondos de varios pasos se comprimen para completarse de forma atómica en una sola transacción, sin estados intermedios inconsistentes. La bóveda permanece como objeto de un solo propietario hasta que se completa la financiación, convirtiéndose en un shared object y volviéndose alcanzable públicamente solo después de financiarse; durante esa ventana es inalcanzable desde el exterior. La autorización de elegibilidad para el claim la imponen en cadena el tipo del Pass y el nullifier, no las reglas del backend. Combinado con Sponsored Transactions, el encuestado tiene saldo 0 todo el tiempo y solo necesita firmar una vez.
 
 ### 2. Pass soulbound + nullifier para anti-sybil
 

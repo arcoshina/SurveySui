@@ -179,6 +179,10 @@ export default function DashboardPage() {
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
   const t = useT('dashboard')
 
+  const [refreshCounter, setRefreshCounter] = useState(0)
+  const triggerRefresh = () => setRefreshCounter((prev) => prev + 1)
+
+
   const contentKeyB64 = useMemo(() => {
     let key = location.hash.startsWith('#') ? location.hash.slice(1) : ''
     if (!key && vaultId) {
@@ -448,7 +452,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
     return () => {
       cancelled = true
     }
-  }, [account?.address, suiClient])
+  }, [account?.address, suiClient, refreshCounter])
 
   useEffect(() => {
     if (creatorSurveys.length === 0 || !suiClient) {
@@ -600,7 +604,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
     return () => {
       cancelled = true
     }
-  }, [creatorSurveys, suiClient])
+  }, [creatorSurveys, suiClient, refreshCounter])
 
   useEffect(() => {
     if (!surveyData) return
@@ -917,9 +921,15 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { transaction: tx as any },
       {
-        onSuccess: () => {
+        onSuccess: async (result) => {
           setCloseStatus('success')
+          try {
+            await suiClient.waitForTransaction({ digest: result.digest })
+          } catch (e) {
+            console.warn('[DashboardPage] waitForTransaction failed:', e)
+          }
           void refetchVault()
+          triggerRefresh()
         },
         onError: (err) => {
           setCloseError(err.message)
@@ -945,8 +955,15 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { transaction: tx as any },
         {
-          onSuccess: () => {
+          onSuccess: async (result) => {
             setExtendStatus('success')
+            try {
+              await suiClient.waitForTransaction({ digest: result.digest })
+            } catch (e) {
+              console.warn('[DashboardPage] waitForTransaction failed:', e)
+            }
+            void refetchVault()
+            triggerRefresh()
           },
           onError: (err) => {
             setExtendError(err.message)
@@ -1002,8 +1019,14 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { transaction: tx as any },
       {
-        onSuccess: () => {
+        onSuccess: async (result) => {
           setPurgeStatus('success')
+          try {
+            await suiClient.waitForTransaction({ digest: result.digest })
+          } catch (e) {
+            console.warn('[DashboardPage] waitForTransaction failed:', e)
+          }
+          triggerRefresh()
           setTimeout(() => navigate('/dashboard'), 1200)
         },
         onError: (err) => {

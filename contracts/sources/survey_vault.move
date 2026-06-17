@@ -60,8 +60,6 @@ const EGasCompTooLow: u64 = 31;
 const EVaultAlreadyHasSurvey: u64 = 32;
 const EDeadlineTooFar: u64 = 33;
 const EGraceTooLong: u64 = 34;
-/// Measurement-only entry guard (see bulk_add_answers_for_measurement). Never on mainnet.
-const EMeasurementNotAdmin: u64 = 35;
 const AUTH_PASS: u8 = 0;
 const AUTH_TICKET: u8 = 1;
 const CLAIM_MODE_PASS_AUDIENCE: u8 = 0;
@@ -1002,37 +1000,4 @@ public fun add_answer_for_testing(vault: &mut SurveyVault, payload: vector<u8>) 
     vault.answers_count = idx + 1;
 }
 
-/// MEASUREMENT ONLY — bulk-insert `count` real AnswerRecord dynamic fields, each
-/// carrying a `payload_size`-byte payload, to profile how many answers a single
-/// `purge` transaction can destroy. Admin-gated. This entry must live only on the
-/// `measurement` git branch / localnet and MUST NOT be merged to main or published
-/// to any public network: it lets the admin inflate `answers_count` arbitrarily.
-public fun bulk_add_answers_for_measurement(
-    vault: &mut SurveyVault,
-    count: u64,
-    payload_size: u64,
-    config: &ProtocolConfig,
-    ctx: &TxContext,
-) {
-    assert!(ctx.sender() == amm_pool::config_admin(config), EMeasurementNotAdmin);
-    // Build the payload template once; vector<u8> is copyable, so each record copies it.
-    let mut payload = vector<u8>[];
-    let mut b = 0;
-    while (b < payload_size) {
-        vector::push_back(&mut payload, 0u8);
-        b = b + 1;
-    };
-    let mut i = 0;
-    while (i < count) {
-        let idx = vault.answers_count;
-        df::add(&mut vault.id, idx, AnswerRecord {
-            kind: 0,
-            payload,
-            respondent: @0x0,
-            sub_hash: vector[],
-            claimed_at_ms: 0,
-        });
-        vault.answers_count = idx + 1;
-        i = i + 1;
-    };
-}
+

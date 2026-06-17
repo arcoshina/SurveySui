@@ -39,15 +39,21 @@ npx wrangler pages deploy dist --project-name surveysui-frontend-testnet
 
 ## 進度紀錄  
 
+
+
+### 2026/6/17
+- [x] 代付失效(Pass)_opus  
+- [x] 修復注資頁不能發布_opus
+- [x] 公開填答頁的問題寬度問題_Gemini    
+- [x] 結束後不能立刻銷毀問卷_Gemini  
+- [x] 刪除 bulk add answers 測試碼_Gemini  
+- [x] 投影片草稿
+
 ### 2026/6/16
 - [x] 實際部屬前後端 + testnet 到 Cloudflare_opus  
 - [x] 綁網址 surveysui.com _opus  
 - [x] 實際部屬前後端 + testnet _opus  
 - [x] Auth頁連線問題_opus  
-- [x] 代付失效(Pass)_opus  
-- [x] 修復注資頁不能發布_opus
-- [ ] 公開填答頁的問題寬度問題  
-- [ ] 結束後不能立刻銷毀問卷 (沒有立刻更新)
 
 ### 2026/6/15
 - [x] 確認文件內容_手動+opus  
@@ -55,6 +61,8 @@ npx wrangler pages deploy dist --project-name surveysui-frontend-testnet
 - [x] 刪除新手教學中的步驟徽章_opus  
 - [x] 補足多語文件_opus  
 - [x] 暫停接收大型答卷_opus  
+
+## 早期紀錄
 
 ### 2026/6/14
 - [~] 確認文件內容_手動
