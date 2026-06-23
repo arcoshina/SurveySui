@@ -13,6 +13,10 @@ interface UnrevokeRequestBody {
   source: number
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 /** 驗證 admin bearer token；通過回 null，否則回應錯誤 Response。 */
 function adminAuthError(c: Context): Response | null {
   const adminSecret = process.env.ADMIN_SECRET
@@ -41,9 +45,9 @@ export function registerAdminRevocationRoutes(app: Hono): void {
     try {
       await insertRevokedNullifier(nullifier, source, passId, reason)
       return c.json({ success: true, message: `Nullifier ${nullifier} has been revoked successfully` })
-    } catch (err: any) {
+    } catch (err) {
       console.error('[Revocation] revoke failed', err)
-      return c.json({ error: 'revocation_failed', message: err.message }, 500)
+      return c.json({ error: 'revocation_failed', message: errorMessage(err) }, 500)
     }
   })
 
@@ -61,9 +65,9 @@ export function registerAdminRevocationRoutes(app: Hono): void {
     try {
       await deleteRevokedNullifier(nullifier, source)
       return c.json({ success: true, message: `Nullifier ${nullifier} has been unrevoked successfully` })
-    } catch (err: any) {
+    } catch (err) {
       console.error('[Revocation] unrevoke failed', err)
-      return c.json({ error: 'unrevocation_failed', message: err.message }, 500)
+      return c.json({ error: 'unrevocation_failed', message: errorMessage(err) }, 500)
     }
   })
 }

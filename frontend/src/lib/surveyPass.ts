@@ -1,3 +1,6 @@
+// dapp-kit 綁定的 @mysten/sui 版本與 app 主版本不同（#private 成員不相容），
+// 故 client 型別取自 dapp-kit useSuiClient 的回傳，與呼叫端（useSuiClient()）一致。
+type SuiReadClient = ReturnType<typeof import('@mysten/dapp-kit').useSuiClient>
 
 export interface SurveyPassData {
   objectId: string
@@ -64,7 +67,7 @@ export const SRC_ATTRIBUTES = 8
  * @returns Array of CredentialInfo (順序未排序；呼叫端自行排序)
  */
 export async function fetchPassCredentials(
-  suiClient: any,
+  suiClient: SuiReadClient,
   passId: string
 ): Promise<CredentialInfo[]> {
   if (!passId) {
@@ -77,7 +80,7 @@ export async function fetchPassCredentials(
 
     // 列舉 Pass 的所有 dynamic field（即各 CredentialKey），支援分頁
     do {
-      const page: any = await suiClient.getDynamicFields({ parentId: passId, cursor })
+      const page = await suiClient.getDynamicFields({ parentId: passId, cursor })
       for (const df of page.data ?? []) {
         const fieldObj = await suiClient.getDynamicFieldObject({
           parentId: passId,
@@ -85,7 +88,9 @@ export async function fetchPassCredentials(
         })
         const content = fieldObj?.data?.content
         if (content && 'fields' in content) {
-          const slot = (content.fields as any).value?.fields ?? (content.fields as any).value
+          const wrapped = content.fields as { value?: { fields?: Record<string, unknown> } | Record<string, unknown> }
+          const slot = ((wrapped.value as { fields?: Record<string, unknown> })?.fields ??
+            wrapped.value) as Record<string, unknown> | undefined
           // source 改存於 slot body（key 現為 nullifier）；非 CredentialSlot 的 df 略過
           const source = Number(slot?.source)
           if (slot && Number.isFinite(source)) {
@@ -127,7 +132,7 @@ export async function fetchPassCredentials(
  * @returns The SurveyPass data if found, or null
  */
 export async function fetchActivePass(
-  suiClient: any,
+  suiClient: SuiReadClient,
   userAddress: string,
   registryId: string
 ): Promise<SurveyPassData | null> {
@@ -151,7 +156,9 @@ export async function fetchActivePass(
       return null
     }
 
-    const registryFields = registryRes.data.content.fields as any
+    const registryFields = registryRes.data.content.fields as {
+      passes?: { fields?: { id?: { id?: string } } }
+    }
     const tableId = registryFields.passes?.fields?.id?.id
 
     if (!tableId) {
@@ -182,7 +189,7 @@ export async function fetchActivePass(
     // 3. Extract the SurveyPass object ID from the dynamic field value
     const content = tableRes.data.content
     if (content && 'fields' in content) {
-      const passId = (content.fields as any).value
+      const passId = (content.fields as { value?: string }).value
       if (passId) {
         // 4. Fetch the SurveyPass object itself
         const passRes = await suiClient.getObject({
@@ -193,7 +200,14 @@ export async function fetchActivePass(
         })
 
         if (passRes.data && passRes.data.content && 'fields' in passRes.data.content) {
-          const fields = passRes.data.content.fields as any
+          const fields = passRes.data.content.fields as {
+            owner: string
+            deposit_payer?: string
+            status?: string | number
+            credential_sources?: number[]
+            created_at?: string | number
+            escape_clawback_mist?: string | number
+          }
           const result = {
             objectId: passId,
             owner: fields.owner,

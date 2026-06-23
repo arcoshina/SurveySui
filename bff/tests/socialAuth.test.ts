@@ -105,12 +105,18 @@ describe('Social Auth — Tier 1', () => {
   // ── OAuthStore ─────────────────────────────────────────────────────────────
 
   describe('OAuthStore', () => {
-    it('should store and retrieve state entry', async () => {
-      await oauthStore.set('state123', { verifier: 'abc', provider: 'google', owner: OWNER })
+    it('should store and retrieve state entry (incl. sidHash)', async () => {
+      await oauthStore.set('state123', {
+        verifier: 'abc',
+        provider: 'google',
+        owner: OWNER,
+        sidHash: 'deadbeef',
+      })
       const entry = await oauthStore.get('state123')
       expect(entry?.provider).toBe('google')
       expect(entry?.verifier).toBe('abc')
       expect(entry?.owner).toBe(OWNER)
+      expect(entry?.sidHash).toBe('deadbeef')
     })
 
     it('should return null for unknown state', async () => {
@@ -118,7 +124,12 @@ describe('Social Auth — Tier 1', () => {
     })
 
     it('should return null after invalidation', async () => {
-      await oauthStore.set('state456', { verifier: 'xyz', provider: 'github', owner: OWNER })
+      await oauthStore.set('state456', {
+        verifier: 'xyz',
+        provider: 'github',
+        owner: OWNER,
+        sidHash: 'cafe',
+      })
       await oauthStore.invalidate('state456')
       expect(await oauthStore.get('state456')).toBeNull()
     })

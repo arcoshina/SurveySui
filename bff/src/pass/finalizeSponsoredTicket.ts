@@ -6,9 +6,10 @@ import {
   minEscapeClawbackFromGasUsed,
   normalizeAddress,
   getPureBytes,
+  verifyPassTicketSignature,
   type PassTicketFields,
 } from '@surveysui/gas-station-core'
-import { signTicket } from '../auth/ticket.js'
+import { signTicket, loadTicketIssuerKeypair } from '../auth/ticket.js'
 import { loadSponsorSigner } from '../gas/sponsorSigner.js'
 import { getGasConfig } from '../gas/gasConfig.js'
 
@@ -121,6 +122,47 @@ type TicketSlot = {
   isSponsoredPrimary: boolean
 }
 
+// 驗證原始交易裡每一張 ticket（primary + extras）的既有 bff_sig 皆為發行者對
+// 該身分欄位（含其原始 escape_clawback_mist，/auth 簽出時為 0）的合法簽章。
+// 任一張驗章失敗即拋 400，阻止 finalize 對未經身分驗證的欄位重簽。
+async function assertOriginTicketsAuthentic(tx: Transaction, senderAddress: string): Promise<void> {
+  const issuerKeypair = loadTicketIssuerKeypair()
+  const data = tx.getData()
+  for (const command of data.commands) {
+    if (command.$kind !== 'MoveCall') {
+      throw Object.assign(new Error('Only survey_pass MoveCall commands are allowed'), {
+        statusCode: 400,
+      })
+    }
+    const call = command.MoveCall
+    if (!call || call.module !== 'survey_pass' || !ALLOWED_FNS.has(call.function)) {
+      throw Object.assign(
+        new Error('Only mint_pass, mint_pass_with_extra_credentials, or update_pass_credential allowed'),
+        { statusCode: 400 }
+      )
+    }
+    const tickets = extractPassTicketsFromMoveCall(
+      (arg) => getPureBytes(tx, arg),
+      call.function,
+      call.arguments
+    )
+    if (!tickets) {
+      throw Object.assign(new Error('Failed to extract ticket fields from transaction'), {
+        statusCode: 400,
+      })
+    }
+    for (const ticket of tickets) {
+      const verifyRes = await verifyPassTicketSignature(issuerKeypair, senderAddress, ticket)
+      if (!verifyRes.ok) {
+        throw Object.assign(
+          new Error('Ticket was not issued by the identity verification flow; refusing to re-sign'),
+          { statusCode: 400, code: 'invalid_origin_ticket' }
+        )
+      }
+    }
+  }
+}
+
 export async function finalizeSponsoredPassTickets(input: {
   suiClient: SuiClient
   txBytes: string
@@ -132,14 +174,17 @@ export async function finalizeSponsoredPassTickets(input: {
   }
   const sponsorAddress = sponsorSigner.getSponsorAddress()
 
+  const originalTx = Transaction.fromKind(Buffer.from(input.txBytes, 'base64'))
+
+  // H1 防護：在重簽前，先驗證使用者交易裡「既有」的原始 bff_sig 確實出自 /auth。
+  // 發行者私鑰只能對自己已簽過的身分欄位重簽，攻擊者偽造不出原始簽章即被擋下。
+  // 必須以原始 txBytes 驗證——applySignedPlaceholders 會把 bff_sig 換成 placeholder 重簽版。
+  await assertOriginTicketsAuthentic(originalTx, input.senderAddress)
+
   // 先以重建方式注入「已重簽的 placeholder ticket」（clawback + 對應 bff_sig），
   // 讓量 gas 的 dry-run 同時通過 verify_ticket 與 apply_*_escape_clawback。
   // getData() 為唯讀快照不可就地 mutate，故 applySignedPlaceholders 回傳新交易；再設 sender / gasOwner。
-  const tx = await applySignedPlaceholders(
-    Transaction.fromKind(Buffer.from(input.txBytes, 'base64')),
-    sponsorAddress,
-    input.senderAddress
-  )
+  const tx = await applySignedPlaceholders(originalTx, sponsorAddress, input.senderAddress)
   tx.setSender(input.senderAddress)
   tx.setGasOwner(sponsorAddress)
 

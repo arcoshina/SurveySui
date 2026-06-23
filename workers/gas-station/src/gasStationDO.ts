@@ -12,6 +12,7 @@ import {
 } from '@surveysui/gas-station-core'
 import { toGasConfigEnv, toSponsorSignerEnv, type GasStationEnv } from './env.js'
 import { DurableObjectCoinLockStore } from './durableObjectCoinLockStore.js'
+import { DurableObjectNonceStore } from './durableObjectNonceStore.js'
 import { ensureD1Schema } from './d1Stores.js'
 
 export interface SponsorRequestBody {
@@ -33,6 +34,7 @@ export class GasStationDO implements DurableObject {
     resolve: (res: Response) => void
   }> = []
   private coinStore: DurableObjectCoinLockStore
+  private nonceStore: DurableObjectNonceStore
   private metrics: DoMetrics = { queueDepth: 0, lockedCoinCount: 0, unlockedCoinCount: 0 }
 
   constructor(
@@ -46,8 +48,10 @@ export class GasStationDO implements DurableObject {
       gasConfig.coinQueueAcquireRetries,
       gasConfig.coinInventoryRefreshMs
     )
+    this.nonceStore = new DurableObjectNonceStore(this.state.storage)
     void this.state.blockConcurrencyWhile(async () => {
       await this.coinStore.load()
+      await this.nonceStore.load()
       if (this.env.DB) await ensureD1Schema(this.env.DB)
       const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
       const intervalMs = gasConfig.coinMergeIntervalMs
@@ -66,7 +70,7 @@ export class GasStationDO implements DurableObject {
 
     if (request.method === 'POST' && url.pathname === '/release') {
       const rawBody = await request.text()
-      const authError = this.verifyRequestAuth(request, rawBody)
+      const authError = await this.verifyRequestAuth(request, rawBody)
       if (authError) {
         return Response.json({ error: 'unauthorized', message: authError }, { status: 401 })
       }
@@ -91,7 +95,7 @@ export class GasStationDO implements DurableObject {
     }
 
     const rawBody = await request.text()
-    const authError = this.verifyRequestAuth(request, rawBody)
+    const authError = await this.verifyRequestAuth(request, rawBody)
     if (authError) {
       return Response.json({ error: 'unauthorized', message: authError }, { status: 401 })
     }
@@ -110,19 +114,25 @@ export class GasStationDO implements DurableObject {
     })
   }
 
-  private verifyRequestAuth(request: Request, rawBody: string): string | null {
+  private async verifyRequestAuth(request: Request, rawBody: string): Promise<string | null> {
     const secret = this.env.GAS_STATION_SHARED_SECRET?.trim()
     if (!secret) {
       return 'GAS_STATION_SHARED_SECRET is not configured'
     }
     const timestamp = request.headers.get('x-gas-station-timestamp')
+    const nonce = request.headers.get('x-gas-station-nonce')
     const signature = request.headers.get('x-gas-station-signature')
-    if (!timestamp || !signature) {
+    if (!timestamp || !nonce || !signature) {
       return 'Missing HMAC headers'
     }
-    if (!verifyGasStationSignature(secret, timestamp, rawBody, signature)) {
+    if (!verifyGasStationSignature(secret, timestamp, nonce, rawBody, signature)) {
       return 'Invalid or expired HMAC signature'
     }
+    // 驗章通過後才消費 nonce，並 await 寫入確保 DO 重啟也擋得住重放。
+    if (!this.nonceStore.consume(nonce, Number(timestamp))) {
+      return 'Replayed request'
+    }
+    await this.nonceStore.persist()
     return null
   }
 

@@ -1,4 +1,6 @@
 import type { Hono } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { randomBytes, createHash } from 'node:crypto'
 import { rateLimit } from '../http/rateLimit.js'
 import { sendOtpEmail } from '../email/sender.js'
@@ -52,9 +54,34 @@ function base64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 }
 
+/** 以 CSPRNG 產生 6 位數 OTP；rejection sampling 去除模偏差（允許前導零）。 */
+function generateOtpCode(): string {
+  let n: number
+  do {
+    n = randomBytes(3).readUIntBE(0, 3) // 0 .. 16_777_215 (2^24-1)
+  } while (n >= 16_000_000) // 16_000_000 是 1_000_000 的最大整數倍上界
+  return (n % 1_000_000).toString().padStart(6, '0')
+}
+
 function generateState(): string {
   return base64url(randomBytes(32))
 }
+
+// OAuth session 綁定：sid 存於發起者瀏覽器的 HttpOnly cookie，DB 僅存 sha256(sid)。
+// callback 比對 cookie 的 sha256 與 DB 紀錄，確保「完成 OAuth 的瀏覽器 == 發起 authorize 的瀏覽器」。
+const OAUTH_SID_COOKIE = 'oauth_sid'
+const OAUTH_SID_MAX_AGE = 600 // 秒，與 oauth_state TTL 對齊
+
+function sha256Hex(input: string): string {
+  return createHash('sha256').update(input).digest('hex')
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** signTicket 回傳 + 附帶的 source 欄位（callback 累積待回傳的票券）。 */
+type IssuedTicket = Awaited<ReturnType<typeof signTicket>> & { source: number }
 
 function generateVerifier(): string {
   return base64url(randomBytes(32))
@@ -92,7 +119,7 @@ export function registerAuthRoutes(app: Hono): void {
       return c.json({ error: 'Invalid email address' }, 400)
     }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString()
+    const code = generateOtpCode()
     await otpStore.set(email, code)
 
     await sendOtpEmail(email, code, lang)
@@ -100,55 +127,67 @@ export function registerAuthRoutes(app: Hono): void {
     return c.json({ message: 'OTP sent successfully' })
   })
 
-  app.post('/auth/email/verify', async (c) => {
-    const { email, code, owner } = await c.req
-      .json<VerifyRequestBody>()
-      .catch(() => ({}) as VerifyRequestBody)
-    if (!email || !code || !owner) {
-      return c.json({ error: 'Missing required fields' }, 400)
-    }
-
-    const storedCode = await otpStore.get(email)
-    if (!storedCode || storedCode !== code) {
-      return c.json({ error: 'Invalid or expired OTP code' }, 401)
-    }
-
-    await otpStore.invalidate(email)
-
-    try {
-      const emailNullifier = computeNullifierHash(email)
-
-      if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
-        if (await isNullifierRevoked(emailNullifier, SRC_EMAIL)) {
-          return c.json(
-            { error: 'nullifier_revoked', message: 'This email account is revoked and cannot be minted' },
-            403
-          )
-        }
-        if (!(await checkMintRateLimit(emailNullifier, SRC_EMAIL))) {
-          return c.json(
-            { error: 'rate_limited', message: 'Ticket request is too frequent. Please retry later.' },
-            429
-          )
-        }
+  app.post(
+    '/auth/email/verify',
+    rateLimit({
+      max: 5,
+      windowMs: 60_000,
+      key: 'otp_verify',
+      identifier: async (c) => {
+        const body = await c.req.json<VerifyRequestBody>().catch(() => null)
+        return body?.email?.toLowerCase().trim() || undefined
+      },
+    }),
+    async (c) => {
+      const { email, code, owner } = await c.req
+        .json<VerifyRequestBody>()
+        .catch(() => ({}) as VerifyRequestBody)
+      if (!email || !code || !owner) {
+        return c.json({ error: 'Missing required fields' }, 400)
       }
 
-      const nullifiers = [emailNullifier]
-      const commitment = new Uint8Array(0)
-      const expiresAtMs = Date.now() + getPassTtlMs(SRC_EMAIL)
-
-      const ticket = await signTicket(owner, SRC_EMAIL, nullifiers, commitment, expiresAtMs)
-
-      if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
-        await recordMintSuccess(emailNullifier, SRC_EMAIL)
+      const storedCode = await otpStore.get(email)
+      if (!storedCode || storedCode !== code) {
+        return c.json({ error: 'Invalid or expired OTP code' }, 401)
       }
 
-      return c.json({ ...ticket, source: SRC_EMAIL })
-    } catch (err: any) {
-      console.error('[Auth] email verify failed', err)
-      return c.json({ error: err.message || 'Failed to sign ticket' }, 500)
+      await otpStore.invalidate(email)
+
+      try {
+        const emailNullifier = computeNullifierHash(email)
+
+        if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+          if (await isNullifierRevoked(emailNullifier, SRC_EMAIL)) {
+            return c.json(
+              { error: 'nullifier_revoked', message: 'This email account is revoked and cannot be minted' },
+              403
+            )
+          }
+          if (!(await checkMintRateLimit(emailNullifier, SRC_EMAIL))) {
+            return c.json(
+              { error: 'rate_limited', message: 'Ticket request is too frequent. Please retry later.' },
+              429
+            )
+          }
+        }
+
+        const nullifiers = [emailNullifier]
+        const commitment = new Uint8Array(0)
+        const expiresAtMs = Date.now() + getPassTtlMs(SRC_EMAIL)
+
+        const ticket = await signTicket(owner, SRC_EMAIL, nullifiers, commitment, expiresAtMs)
+
+        if (process.env.REVOCATION_MINT_GUARD_ENABLED === 'true') {
+          await recordMintSuccess(emailNullifier, SRC_EMAIL)
+        }
+
+        return c.json({ ...ticket, source: SRC_EMAIL })
+      } catch (err) {
+        console.error('[Auth] email verify failed', err)
+        return c.json({ error: errorMessage(err) || 'Failed to sign ticket' }, 500)
+      }
     }
-  })
+  )
 
   // ── Social OAuth ───────────────────────────────────────────────────────────
 
@@ -171,11 +210,23 @@ export function registerAuthRoutes(app: Hono): void {
 
     const state = generateState()
     const verifier = generateVerifier()
+    const sid = base64url(randomBytes(32))
 
     await oauthStore.set(state, {
       verifier,
       provider,
       owner: owner || '',
+      sidHash: sha256Hex(sid),
+    })
+
+    // 種 session cookie（第一方 top-level 導頁，Set-Cookie 正常生效）。
+    // SameSite=Lax：Google→BFF callback 為 top-level GET 導頁時會送出；阻擋跨站 fetch/POST 帶入。
+    setCookie(c, OAUTH_SID_COOKIE, sid, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      path: '/auth',
+      maxAge: OAUTH_SID_MAX_AGE,
     })
 
     const redirectUri = `${process.env.BFF_URL || 'http://localhost:3100'}/auth/${provider}/callback`
@@ -223,6 +274,17 @@ export function registerAuthRoutes(app: Hono): void {
     if (!stateEntry || stateEntry.provider !== provider) {
       return c.redirect(`${frontendUrl}/auth?oauth_error=invalid_state`)
     }
+
+    // Session 綁定：完成 OAuth 的瀏覽器必須是發起 authorize 的同一個（cookie 內 sid 的 sha256 == DB 紀錄）。
+    // 阻擋 login-CSRF：攻擊者於自己瀏覽器以 owner=攻擊者 發起、誘使受害者完成 OAuth 時，
+    // 受害者瀏覽器無對應 cookie → 此處拒絕。
+    const sid = getCookie(c, OAUTH_SID_COOKIE)
+    deleteCookie(c, OAUTH_SID_COOKIE, { path: '/auth' })
+    if (!sid || !stateEntry.sidHash || sha256Hex(sid) !== stateEntry.sidHash) {
+      await oauthStore.invalidate(state)
+      return c.redirect(`${frontendUrl}/auth?oauth_error=invalid_session`)
+    }
+
     await oauthStore.invalidate(state)
 
     const config = OAUTH_PROVIDERS[provider]
@@ -306,7 +368,7 @@ export function registerAuthRoutes(app: Hono): void {
       const commitment = new Uint8Array(0)
       const oauthExpiresAtMs = Date.now() + getPassTtlMs(socialSource)
 
-      const tickets: any[] = []
+      const tickets: IssuedTicket[] = []
 
       // 1. Google / GitHub OAuth Ticket
       const oauthTicket = await signTicket(owner, socialSource, [primaryNullifier], commitment, oauthExpiresAtMs)
@@ -328,10 +390,11 @@ export function registerAuthRoutes(app: Hono): void {
 
       const oauthResult = Buffer.from(JSON.stringify({ tickets, provider })).toString('base64url')
 
-      return c.redirect(`${frontendUrl}/auth?oauth_result=${oauthResult}`)
-    } catch (err: any) {
+      // 放 URL fragment（#）而非 query：不進伺服器 access log、不帶 Referer，且僅由完成 OAuth 的瀏覽器讀取。
+      return c.redirect(`${frontendUrl}/auth#oauth_result=${oauthResult}`)
+    } catch (err) {
       console.error('[OAuth] callback failed', err)
-      return c.redirect(`${frontendUrl}/auth?oauth_error=${encodeURIComponent(err.message)}`)
+      return c.redirect(`${frontendUrl}/auth?oauth_error=${encodeURIComponent(errorMessage(err))}`)
     }
   }
 
@@ -366,7 +429,10 @@ export function registerAuthRoutes(app: Hono): void {
     try {
       const result = await verifyWorldIdProof(payload)
       if (!result.ok || !result.nullifier) {
-        return c.json({ error: result.error || 'Verification failed' }, (result.status ?? 400) as any)
+        return c.json(
+          { error: result.error || 'Verification failed' },
+          (result.status ?? 400) as ContentfulStatusCode
+        )
       }
 
       const primary = computeWorldIdPrimaryNullifier(result.nullifier)
@@ -397,9 +463,9 @@ export function registerAuthRoutes(app: Hono): void {
       }
 
       return c.json({ ...ticket, source: SRC_WORLD_ID })
-    } catch (err: any) {
+    } catch (err) {
       console.error('[Auth] worldid verify failed', err)
-      return c.json({ error: err.message || 'Failed to sign ticket' }, 500)
+      return c.json({ error: errorMessage(err) || 'Failed to sign ticket' }, 500)
     }
   })
 }

@@ -7,7 +7,8 @@ import { createMultisigSponsorSigner, keypairFromHex, InMemoryCoinLockStore } fr
 import { registerGasRoutes, __useInMemoryPassReservationsForTests } from '../src/gas/handler.js'
 import { __resetGasConfigCache, getGasConfig } from '../src/gas/gasConfig.js'
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
-import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
+import { __resetPlatformSponsorLedger, getPlatformSponsorCount } from '../src/gas/platformSponsorLedger.js'
+import { tryReserveVaultGasSlot, __resetVaultGasLedger } from '../src/gas/vaultGasLedger.js'
 import { signTicket } from '../src/auth/ticket.js'
 import { setupFakeD1 } from './helpers/fakeD1.js'
 
@@ -129,6 +130,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     userKeypair = keypairFromHex(userPriv)
     userAddress = userKeypair.toSuiAddress()
     __resetSponsorState()
+    __resetVaultGasLedger()
     __useInMemoryPassReservationsForTests()
     await setupFakeD1()
     await __resetPlatformSponsorLedger()
@@ -1185,11 +1187,85 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     })
     const headers = init?.headers as Record<string, string>
     expect(headers['x-gas-station-timestamp']).toBeTruthy()
+    expect(headers['x-gas-station-nonce']).toBeTruthy()
     expect(headers['x-gas-station-signature']).toBeTruthy()
     expect(JSON.parse(response.payload)).toEqual({
       sponsoredTxBytes: 'c3BvbnNvcmVk',
       sponsorSignature: 'sig',
     })
+  })
+
+  // ---- M5: vault 補償額度預留鎖（分類於 /execute 原子決定，杜絕併發漏計）----
+
+  const M5_VAULT_ID = '0x0000000000000000000000000000000000000000000000000000000000000008'
+
+  function buildClaimTxBytes() {
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: M5_VAULT_ID,
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId: '0x000000000000000000000000000000000000000000000000000000000000000c',
+      }),
+    })
+    tx.setSender(userAddress)
+    return tx.build({ client: mockSuiClient, onlyTransactionKind: true }).then(
+      (b) => Buffer.from(b).toString('base64')
+    )
+  }
+
+  function mockVault(gasBalance: string, gasCompensationAmount: string) {
+    mockSuiClient.getObject.mockResolvedValue({
+      data: {
+        objectId: M5_VAULT_ID,
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            gas_balance: gasBalance,
+            gas_compensation_amount: gasCompensationAmount,
+            storage_compensation_amount: '0',
+            max_inline_answer_bytes: '6144',
+          },
+        },
+      },
+    })
+  }
+
+  it('M5: vault-funded claim does not consume platform daily quota', async () => {
+    // 預設 vault（gas_balance 100M / compensation 5M = 20 槽）→ vault 代付。
+    const res = await sponsorThenExecute(await buildClaimTxBytes())
+    expect(res.statusCode).toBe(200)
+    expect(await getPlatformSponsorCount(userAddress)).toBe(0)
+  })
+
+  it('M5: overflow claim (vault slots exhausted by in-flight) is classified platform and counted', async () => {
+    // vault 僅 1 槽（gas_balance == compensation）；/sponsor 仍判 vault 代付並簽出。
+    mockVault('5000000', '5000000')
+    // 模擬另一筆併發 claim 已佔走唯一的 vault 槽。
+    expect(await tryReserveVaultGasSlot(M5_VAULT_ID, 1)).toBe(true)
+
+    const res = await sponsorThenExecute(await buildClaimTxBytes())
+    expect(res.statusCode).toBe(200)
+    // 該筆溢出 → 平台代付 → 計入平台每日額度（race 不漏計）。
+    expect(await getPlatformSponsorCount(userAddress)).toBe(1)
+  })
+
+  it('M5: platform overflow whose signed budget exceeds platform cap is rejected (422)', async () => {
+    // 平台單筆上限壓在 dry-run 淨 gas(1.4M) 之下；簽出的 vault 寬預算必定超標。
+    process.env.MAX_PLATFORM_CLAIM_GAS_MIST = '1000000'
+    __resetGasConfigCache()
+    // vault 1 槽且 compensation 夠大讓 /sponsor 以 vault 寬預算簽出。
+    mockVault('50000000', '50000000')
+    expect(await tryReserveVaultGasSlot(M5_VAULT_ID, 1)).toBe(true)
+
+    const res = await sponsorThenExecute(await buildClaimTxBytes())
+    expect(res.statusCode).toBe(422)
+    expect(JSON.parse(res.payload).error).toBe('gas_exceeds_compensation')
+    // 被斷言擋下：不廣播、不計平台額度。
+    expect(mockSuiClient.executeTransactionBlock).not.toHaveBeenCalled()
+    expect(await getPlatformSponsorCount(userAddress)).toBe(0)
   })
 })
 

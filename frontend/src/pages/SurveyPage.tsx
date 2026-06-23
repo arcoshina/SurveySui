@@ -7,6 +7,7 @@ import {
   useSuiClient,
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
+import type { SuiClient, EventId, SuiEvent } from '@mysten/sui/client'
 import { fromBase64 } from '@mysten/sui/utils'
 import { PURGE_GRACE_MS } from '../lib/ptb'
 import { useActiveSigner } from '../lib/useActiveSigner'
@@ -21,13 +22,20 @@ import { decryptSurveyContent, encryptAnswers, base64urlToBytes, parseContentBlo
 import { parseFullSurveyMarkdown, type QuestionType, sanitizeQuestionIds } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
-import { fetchActivePass, fetchPassCredentials, SurveyPassData } from '../lib/surveyPass'
+import { fetchActivePass, fetchPassCredentials, SurveyPassData, type CredentialInfo } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { formatSui } from '../lib/format'
 import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
+
+/** SurveyRegistered 事件 parsedJson 中本頁用到的欄位。 */
+type RegisteredEvent = { vault_id?: string; survey_id?: string }
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 const ISSUER_CONFIG_ID = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
 
 function normalizeSuiId(id: string): string {
@@ -141,7 +149,7 @@ export default function SurveyPage() {
     import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
 
   const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
-  const [passCredentials, setPassCredentials] = useState<any[]>([])
+  const [passCredentials, setPassCredentials] = useState<CredentialInfo[]>([])
   const [isPassLoading, setIsPassLoading] = useState(true)
 
   /** How many times the connected wallet has already claimed for this survey. */
@@ -184,9 +192,9 @@ export default function SurveyPage() {
           setSelectedNftId('')
           setNftError(t.nftNotOwnedError(survey!.allowedNftType!))
         }
-      } catch (err: any) {
+      } catch (err) {
         if (cancelled) return
-        setNftError(err.message || t.nftQueryFailed)
+        setNftError(errMsg(err) || t.nftQueryFailed)
       } finally {
         if (!cancelled) setIsNftsLoading(false)
       }
@@ -382,8 +390,8 @@ export default function SurveyPage() {
           (obj.data.content.type.endsWith('::survey_vault::SurveyVault') ||
             obj.data.content.type.includes('::survey_vault::SurveyVault'))
         ) {
-          let cursor: any = null
-          let hit: any = null
+          let cursor: EventId | null | undefined = null
+          let hit: SuiEvent | undefined = undefined
           let pageCount = 0
           do {
             const res = await suiClient.queryEvents({
@@ -394,11 +402,10 @@ export default function SurveyPage() {
               limit: 50,
               order: 'descending',
             })
-            hit = res.data.find(
-              (e: any) =>
-                e.parsedJson &&
-                normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(finalSurveyId)
-            )
+            hit = res.data.find((e) => {
+              const pj = e.parsedJson as RegisteredEvent | undefined
+              return !!pj && normalizeSuiId(pj.vault_id ?? '') === normalizeSuiId(finalSurveyId)
+            })
             if (hit) break
             cursor = res.hasNextPage ? res.nextCursor : null
             pageCount++
@@ -406,7 +413,7 @@ export default function SurveyPage() {
           if (!hit) {
             throw new Error(t.errNoSurveyRegistry)
           }
-          finalSurveyId = hit.parsedJson.survey_id
+          finalSurveyId = (hit.parsedJson as RegisteredEvent).survey_id ?? ''
           console.log('[SurveyPage] Resolved surveyId from on-chain event:', finalSurveyId)
 
           // Re-fetch the true Survey object
@@ -420,8 +427,8 @@ export default function SurveyPage() {
           throw new Error(t.errNoSurveyObject)
         }
 
-        const fields = obj.data.content.fields as any
-        const vault_id = fields.vault_id
+        const fields = obj.data.content.fields as Record<string, unknown>
+        const vault_id = String(fields.vault_id)
         const status = fields.status // 0 = ACTIVE, 1 = ARCHIVED
 
         // 加查 vault 狀態，作為「是否關閉」的權威來源
@@ -433,7 +440,7 @@ export default function SurveyPage() {
         if (!vaultObj.data?.content || vaultObj.data.content.dataType !== 'moveObject') {
           throw new Error(t.errLoadSurveyFailed)
         }
-        const vaultFields = vaultObj.data.content.fields as Record<string, any>
+        const vaultFields = vaultObj.data.content.fields as Record<string, unknown>
         if (Number(vaultFields.status) === 1) {
           setPhase('closed')
           return
@@ -449,9 +456,9 @@ export default function SurveyPage() {
         const repeatRewardHuman = Math.floor(repeatRewardBase / 1_000_000)
 
         // Extract encrypted content
-        const getOptionVec = (opt: any): Uint8Array | null => {
+        const getOptionVec = (opt: unknown): Uint8Array | null => {
           if (!opt) return null
-          
+
           // Support direct raw array (new Sui RPC Option format)
           if (Array.isArray(opt)) {
             if (opt.length === 0) return null
@@ -465,15 +472,14 @@ export default function SurveyPage() {
           }
 
           // Support legacy Option wrapping
-          const vec = opt.fields?.vec || opt.vec
+          const o = opt as { fields?: { vec?: unknown }; vec?: unknown }
+          const vec = o.fields?.vec || o.vec
           if (!Array.isArray(vec) || vec.length === 0) return null
           const first = vec[0]
           if (Array.isArray(first)) {
             return new Uint8Array(first.map(Number))
           } else if (typeof first === 'string') {
             return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
-          } else if (typeof (vec as any) === 'string') {
-            return new Uint8Array((vec as any).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
           }
           return new Uint8Array(vec.map(Number))
         }
@@ -619,7 +625,7 @@ export default function SurveyPage() {
         if (activeSigner?.address) {
           try {
             const myAddrNorm = normalizeSuiId(activeSigner.address)
-            let evCursor: any = null
+            let evCursor: EventId | null | undefined = null
             let evPages = 0
             let count = 0
             do {
@@ -629,11 +635,11 @@ export default function SurveyPage() {
                 limit: 50,
               })
               for (const ev of res.data) {
-                const j: any = ev.parsedJson
+                const j = ev.parsedJson as { vault_id?: string; respondent?: string } | null
                 if (!j) continue
                 if (
-                  normalizeSuiId(j.vault_id) === normalizeSuiId(vault_id) &&
-                  normalizeSuiId(j.respondent) === myAddrNorm
+                  normalizeSuiId(j.vault_id ?? '') === normalizeSuiId(vault_id) &&
+                  normalizeSuiId(j.respondent ?? '') === myAddrNorm
                 ) {
                   count++
                 }
@@ -652,7 +658,7 @@ export default function SurveyPage() {
         // Answer encryption uses the hybrid (X25519 + ML-KEM-768) pubkey published
         // on-chain in creator_pub_key, NOT the 32B X25519 header in the content blob.
         setCreatorPubKey(normalizeBytes(fields.creator_pub_key))
-        setSurveyAllowedSources(fields.allowed_sources || [2])
+        setSurveyAllowedSources((fields.allowed_sources as number[] | undefined) || [2])
         // 還原導向 /auth 領 Pass 前暫存的作答
         try {
           const saved = sessionStorage.getItem(ANSWERS_KEY)
@@ -662,9 +668,9 @@ export default function SurveyPage() {
         }
         // survey 已 set，使用者按「繼續填答」時即有資料可渲染。
         setPhase(contentHashMismatch ? 'hash-mismatch' : 'filling')
-      } catch (err: any) {
+      } catch (err) {
         console.error('Failed to load survey:', err)
-        setSubmitError(err.message || t.errLoadSurveyFailed)
+        setSubmitError(errMsg(err) || t.errLoadSurveyFailed)
         setPhase('error')
       }
     }
@@ -811,7 +817,7 @@ export default function SurveyPage() {
     setPhase('submitting')
     setSubmitError(null)
 
-    let lastBffError: any = undefined
+    let lastBffError: Error | undefined = undefined
 
     try {
       // 0. 前端 Schema 邊界校驗（防範選項注入與非法提交）
@@ -897,7 +903,7 @@ export default function SurveyPage() {
         tx: buildClaimTx(),
         senderAddress: activeSigner.address,
         backendUrl,
-        client: suiClient as any,
+        client: suiClient as unknown as SuiClient,
         signAndExecute: async (t) => activeSigner.signAndExecute(t as Transaction),
         onSelfPaidFallback: (estMist, bffError) =>
           new Promise<boolean>((resolve) => {
@@ -956,20 +962,20 @@ export default function SurveyPage() {
         sessionStorage.removeItem(ANSWERS_KEY)
       } catch { /* ignore */ }
       setPhase('success')
-    } catch (err: any) {
-      if (err?.message === USER_DECLINED_SELF_PAID) {
+    } catch (err) {
+      if (errMsg(err) === USER_DECLINED_SELF_PAID) {
         // User cancelled the self-paid confirmation — keep their answers, surface the warning
         setGasMode(
-          lastBffError?.message?.startsWith('VAULT_GAS_INSUFFICIENT')
+          (lastBffError as Error | undefined)?.message?.startsWith('VAULT_GAS_INSUFFICIENT')
             ? 'vault_empty_warning'
-            : lastBffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
+            : (lastBffError as Error | undefined)?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
               ? 'limit_reached_warning'
               : 'self_paid_warning'
         )
         setPhase('review')
         return
       }
-      const rawMsg = err?.message ?? ''
+      const rawMsg = errMsg(err)
       let friendly: string | null = null
       if (rawMsg.includes('inline_answer_too_large')) {
         friendly = t.errInlineAnswerTooLarge

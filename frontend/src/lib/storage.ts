@@ -36,7 +36,7 @@ export async function uploadToDecentralizedStorage(
 ): Promise<UploadResult> {
   const res = await fetch(`${WALRUS_PUBLISHER}/v1/blobs?epochs=${WALRUS_STORAGE_EPOCHS}`, {
     method: 'PUT',
-    body: data as any,
+    body: data as BodyInit,
     signal: options?.signal,
   })
   if (!res.ok) {

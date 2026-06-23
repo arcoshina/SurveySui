@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { signGasStationBody, keypairFromHex, canonicalJsonStringify } from '@surveysui/gas-station-core'
+import {
+  signGasStationBody,
+  generateGasStationNonce,
+  keypairFromHex,
+  canonicalJsonStringify,
+} from '@surveysui/gas-station-core'
 import worker from '../src/index.js'
 import type { GasStationEnv } from '../src/env.js'
 
@@ -35,27 +40,32 @@ function makeEnv(): { env: GasStationEnv; captured: { request: Request | null } 
   return { env, captured }
 }
 
-function signedRequest(path: string, body: unknown): { request: Request; rawBody: string; timestamp: string; signature: string } {
+function signedRequest(
+  path: string,
+  body: unknown
+): { request: Request; rawBody: string; timestamp: string; nonce: string; signature: string } {
   // BFF signs over the canonical body string — the entry Worker must forward it byte-for-byte.
   const rawBody = canonicalJsonStringify(body)
   const timestamp = String(Date.now())
-  const signature = signGasStationBody(SHARED_SECRET, timestamp, rawBody)
+  const nonce = generateGasStationNonce()
+  const signature = signGasStationBody(SHARED_SECRET, timestamp, nonce, rawBody)
   const request = new Request(`https://gas-station${path}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'x-gas-station-timestamp': timestamp,
+      'x-gas-station-nonce': nonce,
       'x-gas-station-signature': signature,
     },
     body: rawBody,
   })
-  return { request, rawBody, timestamp, signature }
+  return { request, rawBody, timestamp, nonce, signature }
 }
 
 describe('entry Worker forwarding preserves HMAC auth', () => {
   it('/sponsor forwards rawBody and HMAC headers unchanged', async () => {
     const { env, captured } = makeEnv()
-    const { request, rawBody, timestamp, signature } = signedRequest('/sponsor', {
+    const { request, rawBody, timestamp, nonce, signature } = signedRequest('/sponsor', {
       txBytes: 'aa',
       senderAddress: '0x1',
       sponsorAddress: '0x43e4',
@@ -68,6 +78,7 @@ describe('entry Worker forwarding preserves HMAC auth', () => {
     expect(forwarded).not.toBeNull()
     expect(new URL(forwarded.url).pathname).toBe('/sponsor')
     expect(forwarded.headers.get('x-gas-station-timestamp')).toBe(timestamp)
+    expect(forwarded.headers.get('x-gas-station-nonce')).toBe(nonce)
     expect(forwarded.headers.get('x-gas-station-signature')).toBe(signature)
     // Body must be byte-identical, otherwise the DO's HMAC check fails.
     expect(await forwarded.text()).toBe(rawBody)
@@ -84,7 +95,7 @@ describe('entry Worker forwarding preserves HMAC auth', () => {
 
   it('/release forwards rawBody and HMAC headers, routing via env sponsor', async () => {
     const { env, captured } = makeEnv()
-    const { request, rawBody, timestamp, signature } = signedRequest('/release', {
+    const { request, rawBody, timestamp, nonce, signature } = signedRequest('/release', {
       coinObjectIds: ['0xabc'],
     })
 
@@ -95,6 +106,7 @@ describe('entry Worker forwarding preserves HMAC auth', () => {
     expect(forwarded).not.toBeNull()
     expect(new URL(forwarded.url).pathname).toBe('/release')
     expect(forwarded.headers.get('x-gas-station-timestamp')).toBe(timestamp)
+    expect(forwarded.headers.get('x-gas-station-nonce')).toBe(nonce)
     expect(forwarded.headers.get('x-gas-station-signature')).toBe(signature)
     expect(await forwarded.text()).toBe(rawBody)
   })

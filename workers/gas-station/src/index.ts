@@ -17,7 +17,12 @@ function resolveSponsorAddress(env: GasStationEnv): string | null {
 
 // HMAC 標頭一律原樣轉送：DO 的驗章是對 BFF 送來的 rawBody 位元組計算的，
 // 入口 Worker 不可重新序列化 body，也不可漏帶這些標頭，否則 DO 必回 401。
-const FORWARD_HEADERS = ['content-type', 'x-gas-station-timestamp', 'x-gas-station-signature']
+const FORWARD_HEADERS = [
+  'content-type',
+  'x-gas-station-timestamp',
+  'x-gas-station-nonce',
+  'x-gas-station-signature',
+]
 
 /** 把已驗路由的請求原樣（rawBody + HMAC 標頭）轉送到指定 sponsor 的 DO。 */
 function forwardToDO(

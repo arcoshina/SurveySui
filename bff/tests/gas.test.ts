@@ -33,7 +33,7 @@ function unifiedClaimArgs(
   ]
 }
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
-import { createMultisigSponsorSigner, keypairFromHex } from '@surveysui/gas-station-core'
+import { keypairFromHex } from '@surveysui/gas-station-core'
 import { registerGasRoutes, __resetDynamicGasCache, __useInMemoryPassReservationsForTests } from '../src/gas/handler.js'
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
 import { __resetGasConfigCache } from '../src/gas/gasConfig.js'

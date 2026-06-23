@@ -279,11 +279,11 @@ export async function executeTxWithFallback(params: {
         backendUrl,
       })
       return { mode: 'sponsored', sponsoredTxBytes, sponsorSignature }
-    } catch (err: any) {
-      if (err.message?.startsWith('DRY_RUN_REJECTED')) {
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('DRY_RUN_REJECTED')) {
         throw err
       }
-      bffError = err
+      bffError = err instanceof Error ? err : new Error(String(err))
     }
 
     if (!allowSelfPaidFallback) {

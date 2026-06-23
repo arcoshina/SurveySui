@@ -6,8 +6,10 @@ import {
   useSignAndExecuteTransaction,
   useSignPersonalMessage,
   useSuiClient,
+  useSuiClientContext,
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
+import type { SuiClient } from '@mysten/sui/client'
 import { parseFrontmatter, parseFullSurveyMarkdown, serializeFullSurveyToMarkdown, type QuestionType } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import {
@@ -83,6 +85,9 @@ export default function FundPage() {
   const suiClient = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
+  const { network } = useSuiClientContext()
+  // 顯式鎖定目標鏈，避免錢包停在其他網路時把交易送錯鏈。
+  const chain = `sui:${network}` as `${string}:${string}`
   const t = useT('fund')
 
   const typeLabel = (type: QuestionType): string => {
@@ -148,7 +153,11 @@ export default function FundPage() {
     if (poolData?.data?.content?.dataType !== 'moveObject') {
       return { totalFeeBps: 2000n, discountBps: 5000n }
     }
-    const fields = (poolData.data.content as { fields: Record<string, any> }).fields
+    const fields = (
+      poolData.data.content as {
+        fields: { fee_config?: { fields?: { total_fee_bps?: string | number; discount_bps?: string | number } } }
+      }
+    ).fields
     const feeFields = fields?.fee_config?.fields
     if (!feeFields) {
       return { totalFeeBps: 2000n, discountBps: 5000n }
@@ -367,7 +376,6 @@ export default function FundPage() {
 
     let surveyBlobId: Uint8Array | undefined = undefined
     let surveyBlobObjectId: string | undefined = undefined
-    let surveyBlobIdStr = ''
     if (encryptedBlob.length > SURVEY_SIZE_THRESHOLD_KB * 1024) {
       setStatus('uploading')
       try {
@@ -375,7 +383,6 @@ export default function FundPage() {
         if (uploadRes.provider !== 'walrus' || !uploadRes.blobObjectId) {
           throw new Error('Walrus upload did not return a blob object ID')
         }
-        surveyBlobIdStr = uploadRes.blobId
         surveyBlobObjectId = uploadRes.blobObjectId
         surveyBlobId = new TextEncoder().encode(uploadRes.blobId)
       } catch (err) {
@@ -429,10 +436,8 @@ export default function FundPage() {
     // 但 build / RPC 自己出錯時降級放行，讓後續 signAndExecute 的 onError 處理。
     try {
       const dryRunTx = buildTx()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ; (dryRunTx as any).setSender(account.address)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const dryRunBytes = await (dryRunTx as any).build({ client: suiClient })
+      dryRunTx.setSender(account.address)
+      const dryRunBytes = await dryRunTx.build({ client: suiClient as unknown as SuiClient })
       const dryRunResult = await suiClient.dryRunTransactionBlock({
         transactionBlock: dryRunBytes,
       })
@@ -450,16 +455,18 @@ export default function FundPage() {
     setStatus('submitting')
     const actualTx = buildTx()
     signAndExecute(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       {
-        transaction: actualTx as any,
+        transaction: actualTx as unknown as Parameters<typeof signAndExecute>[0]['transaction'],
+        chain,
       },
       {
         onSuccess: async (result) => {
           console.log('E2E Debug: signAndExecute onSuccess result:', JSON.stringify(result))
           try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            let txResult = (window as any).mockLastExecutedTransactionResult
+            type TxBlockResult = Awaited<ReturnType<typeof suiClient.getTransactionBlock>>
+            let txResult: TxBlockResult | undefined = (
+              window as unknown as { mockLastExecutedTransactionResult?: TxBlockResult }
+            ).mockLastExecutedTransactionResult
             if (!txResult) {
               try {
                 await suiClient.waitForTransaction({
@@ -497,19 +504,20 @@ export default function FundPage() {
               throw new Error(friendly ?? t.errTxOnchainFailed(rawErr))
             }
 
-            let vaultId = null
-            let surveyId = null
+            let vaultId: string | null = null
+            let surveyId: string | null = null
 
             // 1. Try to extract from on-chain events (primary)
             if (txResult.events && txResult.events.length > 0) {
               const hit = txResult.events.find(
-                (e: any) =>
+                (e) =>
                   e.type.endsWith('::survey_registry::SurveyRegistered') ||
                   e.type.includes('::survey_registry::SurveyRegistered')
               )
               if (hit && hit.parsedJson) {
-                vaultId = (hit.parsedJson as any).vault_id
-                surveyId = (hit.parsedJson as any).survey_id
+                const pj = hit.parsedJson as { vault_id?: string; survey_id?: string }
+                vaultId = pj.vault_id ?? null
+                surveyId = pj.survey_id ?? null
                 console.log(
                   '[FundPage] Successfully extracted vaultId and surveyId from events:',
                   vaultId,
@@ -549,9 +557,9 @@ export default function FundPage() {
             const fragment = contentKey.length > 0 ? bytesToBase64url(contentKey) : ''
             setStatus('success')
             navigate(`/dashboard/${vaultId}${fragment ? `#${fragment}` : ''}`)
-          } catch (err: any) {
+          } catch (err) {
             console.error('E2E Debug: onSuccess query error:', err)
-            setErrorMsg(err.message || t.errQueryTxFailed)
+            setErrorMsg((err instanceof Error ? err.message : '') || t.errQueryTxFailed)
             setStatus('error')
           }
         },
@@ -606,7 +614,7 @@ export default function FundPage() {
                 )}
               </div>
 
-              {fullSurvey.questions.map((q: any, i: number) => (
+              {fullSurvey.questions.map((q, i: number) => (
                 <div
                   key={q.id}
                   className="bg-white dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800/80 rounded-2xl p-5 space-y-4 shadow-sm hover:bg-slate-50/30 dark:hover:bg-neutral-800/30 transition-colors"

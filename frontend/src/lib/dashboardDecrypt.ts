@@ -107,7 +107,9 @@ export async function fetchClaimedEvents(
     const batch = fieldIds.slice(i, i + 50)
     const objs = await client.multiGetObjects({ ids: batch, options: { showContent: true } })
     for (const o of objs) {
-      const content = o.data?.content as any
+      const content = o.data?.content as
+        | { dataType?: string; fields?: { value?: { fields?: Record<string, unknown> } } }
+        | undefined
       if (!content || content.dataType !== 'moveObject') continue
       const rec = content.fields?.value?.fields
       if (!rec) continue

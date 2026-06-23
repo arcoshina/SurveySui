@@ -1,6 +1,11 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
-const DEFAULT_MAX_SKEW_MS = 5 * 60 * 1000
+export const GAS_STATION_MAX_SKEW_MS = 5 * 60 * 1000
+
+/** 產生 per-request nonce（128-bit hex），供簽署端帶入並由 DO 去重防重放。 */
+export function generateGasStationNonce(): string {
+  return randomBytes(16).toString('hex')
+}
 
 export function canonicalJsonStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') {
@@ -18,23 +23,29 @@ export function canonicalJsonStringify(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJsonStringify(obj[k])}`).join(',')}}`
 }
 
-export function signGasStationBody(secret: string, timestamp: string, bodyJson: string): string {
-  const payload = `${timestamp}.${bodyJson}`
+export function signGasStationBody(
+  secret: string,
+  timestamp: string,
+  nonce: string,
+  bodyJson: string
+): string {
+  const payload = `${timestamp}.${nonce}.${bodyJson}`
   return createHmac('sha256', secret).update(payload).digest('hex')
 }
 
 export function verifyGasStationSignature(
   secret: string,
   timestamp: string,
+  nonce: string,
   bodyJson: string,
   signatureHex: string,
   nowMs = Date.now(),
-  maxSkewMs = DEFAULT_MAX_SKEW_MS
+  maxSkewMs = GAS_STATION_MAX_SKEW_MS
 ): boolean {
   const ts = Number(timestamp)
   if (!Number.isFinite(ts)) return false
   if (Math.abs(nowMs - ts) > maxSkewMs) return false
-  const expected = signGasStationBody(secret, timestamp, bodyJson)
+  const expected = signGasStationBody(secret, timestamp, nonce, bodyJson)
   try {
     const a = Buffer.from(expected, 'hex')
     const b = Buffer.from(signatureHex, 'hex')

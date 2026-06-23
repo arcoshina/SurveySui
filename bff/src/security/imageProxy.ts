@@ -183,13 +183,16 @@ export function registerImageProxyRoutes(app: Hono): void {
         'X-Content-Type-Options': 'nosniff',
         'Cache-Control': 'public, max-age=86400',
       })
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
         return c.json({ error: 'gateway_timeout', message: 'Fetching external image timed out' }, 504)
       }
       console.error('[ImageProxy] failed', err)
       return c.json(
-        { error: 'image_processing_failed', message: err?.message || 'Failed to process image' },
+        {
+          error: 'image_processing_failed',
+          message: err instanceof Error ? err.message : 'Failed to process image',
+        },
         500
       )
     }

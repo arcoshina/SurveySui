@@ -12,6 +12,7 @@ describe('useOAuthResult Hook', () => {
     window.location = {
       ...originalLocation,
       search: '',
+      hash: '',
       pathname: '/auth',
     } as any
 
@@ -24,7 +25,7 @@ describe('useOAuthResult Hook', () => {
     window.history.replaceState = originalHistory.replaceState
   })
 
-  it('should parse raw ticket from oauth_result parameter (even without padding)', () => {
+  it('should parse raw ticket from oauth_result fragment (even without padding)', () => {
     const ticketData = {
       bff_sig: 'abcd',
       expires_at: '123456',
@@ -35,13 +36,13 @@ describe('useOAuthResult Hook', () => {
       tickets: [ticketData],
       provider: 'google',
     }
-    
+
     // Convert to unpadded base64url
     const jsonStr = JSON.stringify(oauthResultData)
     const base64 = btoa(jsonStr)
     const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 
-    window.location.search = `?oauth_result=${base64url}`
+    window.location.hash = `#oauth_result=${base64url}`
 
     const { result } = renderHook(() => useOAuthResult())
 
@@ -50,13 +51,24 @@ describe('useOAuthResult Hook', () => {
   })
 
   it('should return null when oauth_result is missing', () => {
-    window.location.search = ''
+    window.location.hash = ''
     const { result } = renderHook(() => useOAuthResult())
     expect(result.current.oauthResult).toBeNull()
   })
 
   it('should ignore malformed JSON silently', () => {
-    window.location.search = '?oauth_result=not_a_valid_json_base64url'
+    window.location.hash = '#oauth_result=not_a_valid_json_base64url'
+    const { result } = renderHook(() => useOAuthResult())
+    expect(result.current.oauthResult).toBeNull()
+  })
+
+  it('should NOT parse oauth_result from query string (must be fragment only)', () => {
+    const oauthResultData = { tickets: [{ bff_sig: 'x', expires_at: '1', nullifiers: [], source: 3 }], provider: 'google' }
+    const base64url = btoa(JSON.stringify(oauthResultData))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '')
+    window.location.search = `?oauth_result=${base64url}`
     const { result } = renderHook(() => useOAuthResult())
     expect(result.current.oauthResult).toBeNull()
   })

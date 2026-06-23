@@ -14,8 +14,26 @@ interface TicketIssueRequestBody {
   signature: string
 }
 
+/** SurveyVault Move 物件中本流程用到的欄位（RPC 解析後的動態 fields 子集）。 */
+interface SurveyVaultFields {
+  allowed_nft_type?: number[][] | { fields?: { vec?: number[] } } | null
+  ticket_fee?: string | number
+  gas_compensation_amount?: string | number
+  gas_balance?: string | number
+}
+
+/** Survey Move 物件中本流程用到的欄位。 */
+interface SurveyMoveFields {
+  vault_id?: string
+  claim_mode?: string | number
+}
+
 // 授權時間窗口 5 分鐘
 const SIGNATURE_TTL_MS = 5 * 60_000
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
 
 // 生成授權驗證訊息
 export function buildTicketAuthMessage(vaultId: string, signedTimestamp: number): string {
@@ -88,16 +106,19 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
         return c.json({ error: 'vault_not_found', message: `SurveyVault ${vaultId} not found` }, 404)
       }
 
-      const fields = (vaultObj.data.content as any).fields
+      const fields = (vaultObj.data.content as { fields: SurveyVaultFields }).fields
       const surveyObj = await deps.suiClient.getObject({
         id: surveyId,
         options: { showContent: true },
       })
-      if (!surveyObj.data?.content || (surveyObj.data.content as any).dataType !== 'moveObject') {
+      const surveyContent = surveyObj.data?.content as
+        | { dataType?: string; fields?: SurveyMoveFields }
+        | undefined
+      if (!surveyContent || surveyContent.dataType !== 'moveObject') {
         return c.json({ error: 'survey_not_found', message: `Survey ${surveyId} not found` }, 404)
       }
-      const surveyFields = (surveyObj.data.content as any).fields
-      const surveyVaultId = surveyFields.vault_id as string
+      const surveyFields = surveyContent.fields ?? {}
+      const surveyVaultId = String(surveyFields.vault_id)
       if (normalizeAddress(surveyVaultId) !== normalizeAddress(vaultId)) {
         return c.json(
           { error: 'survey_vault_mismatch', message: 'Survey is not bound to the provided vault' },
@@ -183,10 +204,10 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
       await insertTicketSlot(walletA, vaultId, issuedAt, expiresAtMs)
 
       return c.json(ticket)
-    } catch (err: any) {
+    } catch (err) {
       console.error('[Ticket] issuance failed', err)
       return c.json(
-        { error: 'ticket_issuance_failed', message: err.message || 'Failed to issue ticket' },
+        { error: 'ticket_issuance_failed', message: errorMessage(err) || 'Failed to issue ticket' },
         500
       )
     }

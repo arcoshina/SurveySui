@@ -65,22 +65,30 @@ export interface WorldIdVerifyResult {
   error?: string
 }
 
+/** IDKit v4 payload.responses 單筆(僅取用判定 Orb 所需欄位)。 */
+interface WorldIdResponse {
+  issuer_schema_id?: number
+  identifier?: string
+  nullifier?: unknown
+}
+
 /**
  * 驗證 IDKit v4 proof payload:
  *  1. 強制 Orb:payload.responses 中需有 proof_of_human(issuer_schema_id === 1),否則 403。
  *  2. 轉發至 World API 確認密碼學有效性,失敗則 401。
  * 兩者皆通過才回 nullifier。
  */
-export async function verifyWorldIdProof(payload: any): Promise<WorldIdVerifyResult> {
+export async function verifyWorldIdProof(payload: unknown): Promise<WorldIdVerifyResult> {
   const rpId = process.env.WORLDCOIN_RP_ID
   if (!rpId) {
     return { ok: false, status: 503, isOrb: false, nullifier: null, error: 'World ID rp_id not configured' }
   }
 
   // 1. Orb 強制(由 typed payload 判定,不可只靠前端 preset)
-  const responses = Array.isArray(payload?.responses) ? payload.responses : []
+  const responsesRaw = (payload as { responses?: unknown } | null)?.responses
+  const responses: WorldIdResponse[] = Array.isArray(responsesRaw) ? responsesRaw : []
   const orbResp = responses.find(
-    (r: any) => r?.issuer_schema_id === ORB_ISSUER_SCHEMA_ID || r?.identifier === 'proof_of_human'
+    (r) => r?.issuer_schema_id === ORB_ISSUER_SCHEMA_ID || r?.identifier === 'proof_of_human'
   )
   if (!orbResp || typeof orbResp.nullifier !== 'string' || orbResp.nullifier.length === 0) {
     return { ok: false, status: 403, isOrb: false, nullifier: null, error: 'Orb verification required' }
@@ -95,15 +103,16 @@ export async function verifyWorldIdProof(payload: any): Promise<WorldIdVerifyRes
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
-  } catch (err: any) {
-    return { ok: false, status: 502, isOrb: true, nullifier: null, error: `World verify unreachable: ${err?.message}` }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { ok: false, status: 502, isOrb: true, nullifier: null, error: `World verify unreachable: ${message}` }
   }
 
   if (!res.ok) {
     return { ok: false, status: 401, isOrb: true, nullifier: null, error: `World verify failed: ${res.status}` }
   }
 
-  const data = (await res.json().catch(() => ({}))) as any
+  const data = (await res.json().catch(() => ({}))) as { success?: boolean }
 
   if (data && data.success === false) {
     return { ok: false, status: 401, isOrb: true, nullifier: null, error: 'World verify rejected' }

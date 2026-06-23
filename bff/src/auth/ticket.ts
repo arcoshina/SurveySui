@@ -59,6 +59,18 @@ export function computeSocialPrimaryNullifier(provider: string, sub: string): Ui
   ])
   return new Uint8Array(createHash('sha256').update(input).digest())
 }
+// 由 SURVEY_PASS_ISSUER_PRIV 載入發行者 keypair（取前 32 bytes 作為 Ed25519 秘鑰）。
+// 供簽票與「驗證既有 bff_sig」共用，避免私鑰解析邏輯重複。
+export function loadTicketIssuerKeypair(): Ed25519Keypair {
+  const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
+  if (!privKeyHex) {
+    throw new Error('SURVEY_PASS_ISSUER_PRIV is not set')
+  }
+  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
+  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
+  return Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
+}
+
 export async function signTicket(
   owner: string,
   source: number,
@@ -67,14 +79,7 @@ export async function signTicket(
   expiresAtMs: number,
   escapeClawbackMist: bigint = 0n
 ): Promise<{ bff_sig: string; expires_at: string; nullifiers: string[]; escape_clawback_mist: string }> {
-  const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
-  if (!privKeyHex) {
-    throw new Error('SURVEY_PASS_ISSUER_PRIV is not set')
-  }
-  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-  const keypairBytes = privateKeyBytes.slice(0, 32)
-  const keypair = Ed25519Keypair.fromSecretKey(keypairBytes)
+  const keypair = loadTicketIssuerKeypair()
   const expires_at = BigInt(expiresAtMs).toString()
   const escape_clawback_mist = escapeClawbackMist.toString()
   const payloadBytes = TicketPayload.serialize({

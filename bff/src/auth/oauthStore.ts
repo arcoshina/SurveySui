@@ -4,6 +4,7 @@ export interface OAuthStateEntry {
   verifier: string   // PKCE code_verifier（base64url random）
   provider: string
   owner: string      // Sui address of the connected wallet
+  sidHash: string    // sha256(sid)；sid 存於發起者瀏覽器的 HttpOnly cookie，用以綁定同一瀏覽器
   expiresAt: number
 }
 
@@ -21,19 +22,20 @@ export class D1OAuthStore {
   async set(state: string, entry: Omit<OAuthStateEntry, 'expiresAt'>): Promise<void> {
     const db = getDbClient()
     await db.execute({
-      sql: `INSERT INTO oauth_state (state, verifier, provider, owner, expires_at)
-            VALUES (?, ?, ?, ?, ?)
+      sql: `INSERT INTO oauth_state (state, verifier, provider, owner, sid_hash, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(state) DO UPDATE SET
               verifier = excluded.verifier, provider = excluded.provider,
-              owner = excluded.owner, expires_at = excluded.expires_at`,
-      args: [state, entry.verifier, entry.provider, entry.owner, Date.now() + this.ttlMs],
+              owner = excluded.owner, sid_hash = excluded.sid_hash,
+              expires_at = excluded.expires_at`,
+      args: [state, entry.verifier, entry.provider, entry.owner, entry.sidHash, Date.now() + this.ttlMs],
     })
   }
 
   async get(state: string): Promise<OAuthStateEntry | null> {
     const db = getDbClient()
     const r = await db.execute({
-      sql: `SELECT verifier, provider, owner, expires_at FROM oauth_state WHERE state = ?`,
+      sql: `SELECT verifier, provider, owner, sid_hash, expires_at FROM oauth_state WHERE state = ?`,
       args: [state],
     })
     if (r.rows.length === 0) return null
@@ -41,6 +43,7 @@ export class D1OAuthStore {
       verifier: string
       provider: string
       owner: string
+      sid_hash: string | null
       expires_at: number
     }
     if (Date.now() > Number(row.expires_at)) {
@@ -51,6 +54,7 @@ export class D1OAuthStore {
       verifier: String(row.verifier),
       provider: String(row.provider),
       owner: String(row.owner),
+      sidHash: row.sid_hash == null ? '' : String(row.sid_hash),
       expiresAt: Number(row.expires_at),
     }
   }

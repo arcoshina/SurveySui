@@ -1,5 +1,5 @@
 import type { Hono } from 'hono'
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { Transaction } from '@mysten/sui/transactions'
 import type { SuiClient } from '@mysten/sui/client'
 import { rateLimit } from '../http/rateLimit.js'
@@ -15,8 +15,14 @@ import {
   senderFromTransactionData,
   gasOwnerFromTransactionData,
   gasPaymentCoinIdsFromTransactionData,
+  gasBudgetFromTransactionData,
   verifyTxSignatureBy,
 } from './sponsorAuth.js'
+import {
+  availableVaultGasSlots,
+  tryReserveVaultGasSlot,
+  releaseVaultGasSlot,
+} from './vaultGasLedger.js'
 import { resolveCountScope } from './sponsorPolicy.js'
 import { effectiveInlineLimit } from './inlineLimit.js'
 import {
@@ -28,6 +34,7 @@ import {
 import { InMemoryCoinLockStore, runSponsorPipeline, validateSponsorTransaction } from '@surveysui/gas-station-core'
 import { loadSponsorSigner, requireSponsorSigner } from './sponsorSigner.js'
 import { getGasConfig, healthMinBalanceMist } from './gasConfig.js'
+import { loadTicketIssuerKeypair } from '../auth/ticket.js'
 import { assertPlatformSponsorTierEligible } from './platformSponsorEligibility.js'
 import { SponsorCoinQueue } from './sponsorCoinQueue.js'
 import {
@@ -41,6 +48,10 @@ import { getWalletSponsorRateLimitStore } from './stores/sqliteWalletRateLimitSt
 interface GasSponsorRequestBody {
   txBytes: string
   senderAddress: string
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 interface GasExecuteRequestBody {
@@ -61,15 +72,6 @@ export interface GasHealthResponse {
   unlockedCoinCount?: number
   lockedCoinCount?: number
   queueDepth?: number
-}
-function loadTicketIssuerKeypair(): Ed25519Keypair {
-  const privKeyHex = process.env.SURVEY_PASS_ISSUER_PRIV
-  if (!privKeyHex) {
-    throw new Error('SURVEY_PASS_ISSUER_PRIV is not set')
-  }
-  const privKeyClean = privKeyHex.startsWith('0x') ? privKeyHex.slice(2) : privKeyHex
-  const privateKeyBytes = new Uint8Array(Buffer.from(privKeyClean, 'hex'))
-  return Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(0, 32))
 }
 let cachedDynamicGas: bigint | null = null
 let lastFetchedTime = 0
@@ -183,8 +185,8 @@ export function registerGasRoutes(
         queueDepth,
         reason: doHealth?.available === false ? 'unknown' : undefined,
       } as GasHealthResponse)
-    } catch (err: any) {
-      console.warn('[GasStation] health probe failed', err?.message)
+    } catch (err) {
+      console.warn('[GasStation] health probe failed', errorMessage(err))
       return c.json({ available: false, reason: 'unknown' } as GasHealthResponse)
     }
   })
@@ -211,9 +213,9 @@ export function registerGasRoutes(
         maxLimit,
         remaining: Math.max(0, maxLimit - count),
       })
-    } catch (err: any) {
+    } catch (err) {
       console.error('[GasStation] sponsor-count failed', err)
-      return c.json({ error: 'failed_to_get_count', message: err.message }, 500)
+      return c.json({ error: 'failed_to_get_count', message: errorMessage(err) }, 500)
     }
   })
 
@@ -304,7 +306,10 @@ export function registerGasRoutes(
       const scope = resolveCountScope()
       const validation = await runValidation(txBytes, senderAddress, sponsorAddress)
       if (!validation.ok) {
-        return c.json({ error: validation.error, message: validation.message }, validation.status as any)
+        return c.json(
+          { error: validation.error, message: validation.message },
+          validation.status as ContentfulStatusCode
+        )
       }
       const { pipelineContext, isPassSponsor } = validation
       // 唯讀額度檢查:提早擋明顯超額(不預留;硬上限由 /execute 原子保證)。
@@ -335,7 +340,10 @@ export function registerGasRoutes(
           sponsorAddress,
         })
         if (!forwarded.ok) {
-          return c.json({ error: forwarded.error, message: forwarded.message }, forwarded.status as any)
+          return c.json(
+            { error: forwarded.error, message: forwarded.message },
+            forwarded.status as ContentfulStatusCode
+          )
         }
         return c.json(forwarded.data)
       }
@@ -362,12 +370,15 @@ export function registerGasRoutes(
         if (outcome.error === 'dry_run_failed') {
           console.warn(`[GasStation] Dry run rejected: ${outcome.message}`)
         }
-        return c.json({ error: outcome.error, message: outcome.message }, outcome.status as any)
+        return c.json(
+          { error: outcome.error, message: outcome.message },
+          outcome.status as ContentfulStatusCode
+        )
       }
       return c.json(outcome.result)
-    } catch (err: any) {
+    } catch (err) {
       console.error('[GasStation] sponsor failed', err)
-      return c.json({ error: 'sponsor_failed', message: err.message }, 500)
+      return c.json({ error: 'sponsor_failed', message: errorMessage(err) }, 500)
     }
   })
 
@@ -419,6 +430,8 @@ export function registerGasRoutes(
     }
 
     let passReserved = false
+    // vault 補償槽預留(M5):成功廣播或失敗回滾時釋放。
+    let vaultGasReservedId: string | null = null
     try {
       // 3. 還原 transaction kind,重跑白名單驗證取得權威分類(Pass / platform-claim / vault-claim)。
       const kindBytes = Buffer.from(
@@ -429,12 +442,15 @@ export function registerGasRoutes(
       ).toString('base64')
       const validation = await runValidation(kindBytes, sender, sponsorAddress)
       if (!validation.ok) {
-        return c.json({ error: validation.error, message: validation.message }, validation.status as any)
+        return c.json(
+          { error: validation.error, message: validation.message },
+          validation.status as ContentfulStatusCode
+        )
       }
-      const { isPassSponsor, isPlatformSponsor } = validation
+      const { isPassSponsor, vaultId, vaultGasBalance } = validation
       const scope = resolveCountScope()
 
-      // 4. 原子記帳(硬上限):Pass 終生額度預留 / claim 平台日額度遞增。超限即拒,不廣播。
+      // 4. 原子記帳(硬上限):Pass 終生額度預留 / claim 走 vault 或平台代付。超限即拒,不廣播。
       if (isPassSponsor) {
         const reserveRes = await tryReserveSponsorLimit({
           suiClient: deps.suiClient,
@@ -454,16 +470,37 @@ export function registerGasRoutes(
           )
         }
         passReserved = true
-      } else if (isPlatformSponsor) {
-        const inc = await tryIncrementPlatformSponsorCount(sender, todayUtcDate())
-        if (!inc.ok) {
-          return c.json(
-            {
-              error: 'PLATFORM_SPONSOR_LIMIT_REACHED',
-              message: 'Daily platform sponsorship limit reached for this wallet address',
-            },
-            403
-          )
+      } else {
+        // claim 代付:用 vault 補償槽的原子預留決定 vault vs 平台代付,取代 racy 鏈上讀數
+        // (M5)。先試原子預留一個 vault 槽;預留失敗代表 vault 預算(鏈上+在途)已滿,
+        // 該筆為溢出交易 → 走平台代付,計入每日額度並夾住單筆上限。
+        const compensation = BigInt(validation.pipelineContext.claimGasCompensationAmount ?? '0')
+        const slots = availableVaultGasSlots(BigInt(vaultGasBalance ?? '0'), compensation)
+        const vaultReserved = vaultId ? await tryReserveVaultGasSlot(vaultId, slots) : false
+        if (vaultReserved && vaultId) {
+          vaultGasReservedId = vaultId
+        } else {
+          // 平台代付:斷言簽出的 gas budget 不超過平台單筆上限,杜絕沿用 vault 寬預算的超額。
+          const signedBudget = gasBudgetFromTransactionData(sponsoredTxBytes)
+          if (signedBudget !== null && signedBudget > getGasConfig().maxPlatformClaimGasMist) {
+            return c.json(
+              {
+                error: 'gas_exceeds_compensation',
+                message: `Signed gas budget ${signedBudget} exceeds platform claim cap ${getGasConfig().maxPlatformClaimGasMist}; re-sponsor required`,
+              },
+              422
+            )
+          }
+          const inc = await tryIncrementPlatformSponsorCount(sender, todayUtcDate())
+          if (!inc.ok) {
+            return c.json(
+              {
+                error: 'PLATFORM_SPONSOR_LIMIT_REACHED',
+                message: 'Daily platform sponsorship limit reached for this wallet address',
+              },
+              403
+            )
+          }
         }
       }
 
@@ -475,6 +512,7 @@ export function registerGasRoutes(
       })
       if (result.effects?.status.status === 'failure') {
         if (passReserved) await releasePassReservation(sender, sponsorAddress, 1).catch(() => undefined)
+        if (vaultGasReservedId) await releaseVaultGasSlot(vaultGasReservedId, 1).catch(() => undefined)
         return c.json(
           {
             error: 'execution_failed',
@@ -493,13 +531,18 @@ export function registerGasRoutes(
           for (const id of spentCoinIds) coinQueue.invalidateCoin(id)
         }
       }
+      // vault 代付已上鏈,gas_balance 隨之下降接手計數;立即釋放在途預留(TTL 為安全網)。
+      if (vaultGasReservedId) await releaseVaultGasSlot(vaultGasReservedId, 1).catch(() => undefined)
       return c.json({ digest: result.digest })
-    } catch (err: any) {
+    } catch (err) {
       if (passReserved) {
         await releasePassReservation(sender, sponsorAddress, 1).catch(() => undefined)
       }
+      if (vaultGasReservedId) {
+        await releaseVaultGasSlot(vaultGasReservedId, 1).catch(() => undefined)
+      }
       console.error('[GasStation] execute failed', err)
-      return c.json({ error: 'execute_failed', message: err.message }, 500)
+      return c.json({ error: 'execute_failed', message: errorMessage(err) }, 500)
     }
   })
 }

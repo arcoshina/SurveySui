@@ -1,4 +1,5 @@
 import type { Hono } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { Transaction } from '@mysten/sui/transactions'
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify'
 import type { SuiClient } from '@mysten/sui/client'
@@ -16,6 +17,10 @@ interface PassDeleteRequestBody {
 
 // 授權訊息有效期：限制簽名重放窗口
 const SIGNATURE_TTL_MS = 5 * 60_000
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
 
 // 與前端一致的授權訊息格式（綁定 passId + 時間戳，防止跨 Pass / 過期重放）。
 // 直接使用呼叫端傳入的 passId 字串（不正規化），確保前端簽署與後端驗證的 bytes 完全一致。
@@ -58,7 +63,7 @@ export function registerPassRoutes(app: Hono, deps: { suiClient: SuiClient }): v
       console.error('[Pass] finalize failed', err)
       return c.json(
         { error: 'finalize_failed', message: e.message ?? 'Failed to finalize sponsored ticket' },
-        (e.statusCode ?? 500) as any
+        (e.statusCode ?? 500) as ContentfulStatusCode
       )
     }
   })
@@ -120,7 +125,7 @@ export function registerPassRoutes(app: Hono, deps: { suiClient: SuiClient }): v
           400
         )
       }
-      const fields = (passObj.data.content as any).fields
+      const fields = (passObj.data.content as { fields: Record<string, unknown> }).fields
       const owner = normalizeAddress(String(fields.owner))
       const depositPayer = normalizeAddress(String(fields.deposit_payer))
 
@@ -167,9 +172,9 @@ export function registerPassRoutes(app: Hono, deps: { suiClient: SuiClient }): v
       }
 
       return c.json({ digest: result.digest })
-    } catch (err: any) {
+    } catch (err) {
       console.error('[Pass] delete failed', err)
-      return c.json({ error: 'pass_delete_failed', message: err.message }, 500)
+      return c.json({ error: 'pass_delete_failed', message: errorMessage(err) }, 500)
     }
   })
 }

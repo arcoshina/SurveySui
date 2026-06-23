@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useSuiClient, useSuiClientQuery } from '@mysten/dapp-kit'
-import type { SuiClient } from '@mysten/sui/client'
+import type { SuiClient, EventId, SuiEvent } from '@mysten/sui/client'
 import { AlertTriangle, Info } from 'lucide-react'
 import {
   aggregateStats,
@@ -26,7 +26,13 @@ function normalizeSuiId(id: string): string {
   return cleaned.padStart(64, '0')
 }
 
-function getOptionVec(opt: any): Uint8Array | null {
+/** survey_registry::SurveyRegistered 事件 parsedJson 中本頁用到的欄位。 */
+type RegisteredEvent = { vault_id?: string; survey_id?: string }
+
+/** Sui 物件 moveObject content 的動態 fields 包裝。 */
+type MoveContent = { dataType?: string; fields?: Record<string, unknown> }
+
+function getOptionVec(opt: unknown): Uint8Array | null {
   if (!opt) return null
   if (Array.isArray(opt)) {
     if (opt.length === 0) return null
@@ -38,15 +44,14 @@ function getOptionVec(opt: any): Uint8Array | null {
     }
     return new Uint8Array(opt.map(Number))
   }
-  const vec = opt.fields?.vec || opt.vec
+  const o = opt as { fields?: { vec?: unknown }; vec?: unknown }
+  const vec = o.fields?.vec || o.vec
   if (!Array.isArray(vec) || vec.length === 0) return null
   const first = vec[0]
   if (Array.isArray(first)) {
     return new Uint8Array(first.map(Number))
   } else if (typeof first === 'string') {
     return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
-  } else if (typeof (vec as any) === 'string') {
-    return new Uint8Array((vec as any).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
   }
   return new Uint8Array(vec.map(Number))
 }
@@ -97,10 +102,10 @@ export default function ResultsPage() {
 
   const vault = useMemo(() => {
     const content = (
-      vaultData as { data?: { content?: { dataType: string; fields: any } } } | undefined
+      vaultData as { data?: { content?: MoveContent } } | undefined
     )?.data?.content
     if (!content || content.dataType !== 'moveObject') return null
-    return content.fields
+    return content.fields ?? null
   }, [vaultData])
 
   // ── SurveyClaimed events ───────────────────────────────────────────────────
@@ -110,7 +115,7 @@ export default function ResultsPage() {
   // ── 鏈上 survey 物件 ────────────────────────────────────────────────────────
   const [surveyId, setSurveyId] = useState<string | null>(null)
   const [surveyResolveFailed, setSurveyResolveFailed] = useState(false)
-  const [surveyData, setSurveyData] = useState<any>(null)
+  const [surveyData, setSurveyData] = useState<{ content?: MoveContent | null } | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [surveyMeta, setSurveyMeta] = useState<{
     allowedSources: number[]
@@ -139,8 +144,8 @@ export default function ResultsPage() {
       )
         return
       try {
-        let cursor: any = null
-        let hit: any = null
+        let cursor: EventId | null = null
+        let hit: SuiEvent | undefined = undefined
         let pageCount = 0
         do {
           const res = await suiClient.queryEvents({
@@ -151,25 +156,24 @@ export default function ResultsPage() {
             limit: 50,
             order: 'descending',
           })
-          hit = res.data.find(
-            (e: any) =>
-              e.parsedJson &&
-              normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(vaultId ?? '')
-          )
+          hit = res.data.find((e) => {
+            const pj = e.parsedJson as RegisteredEvent | undefined
+            return !!pj && normalizeSuiId(pj.vault_id ?? '') === normalizeSuiId(vaultId ?? '')
+          })
           if (hit) break
-          cursor = res.hasNextPage ? res.nextCursor : null
+          cursor = res.hasNextPage ? (res.nextCursor ?? null) : null
           pageCount++
         } while (cursor && pageCount < 10)
 
         if (hit && !cancelled) {
-          const sId = hit.parsedJson.survey_id
+          const sId = (hit.parsedJson as RegisteredEvent).survey_id ?? ''
           setSurveyId(sId)
           const obj = await suiClient.getObject({
             id: sId,
             options: { showContent: true },
           })
           if (obj.data && !cancelled) {
-            setSurveyData(obj.data)
+            setSurveyData(obj.data as { content?: MoveContent | null })
           }
         } else if (!cancelled) {
           setSurveyResolveFailed(true)
@@ -190,7 +194,7 @@ export default function ResultsPage() {
   // 2. 解析 Survey Markdown 題目
   useEffect(() => {
     if (!surveyData) return
-    const fields = surveyData.content?.fields as any
+    const fields = surveyData.content?.fields
     if (!fields) return
 
     let hashBytes = fields.schema_hash ? normalizeBytes(fields.schema_hash) : new Uint8Array(0)
@@ -211,14 +215,14 @@ export default function ResultsPage() {
 
     async function loadQuestions() {
       try {
-        const surveyBlobIdBytes = getOptionVec(fields.survey_blob_id)
+        const surveyBlobIdBytes = getOptionVec(fields?.survey_blob_id)
         let rawContent: Uint8Array
 
         if (surveyBlobIdBytes) {
           const blobId = new TextDecoder().decode(surveyBlobIdBytes)
           rawContent = await downloadFromDecentralizedStorage(blobId)
         } else {
-          const encryptedContentBytes = getOptionVec(fields.encrypted_content)
+          const encryptedContentBytes = getOptionVec(fields?.encrypted_content)
           if (!encryptedContentBytes) {
             throw new Error('Survey content data corrupted')
           }

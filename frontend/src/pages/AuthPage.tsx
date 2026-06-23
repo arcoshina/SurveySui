@@ -4,6 +4,7 @@ import { useCurrentAccount, useSignPersonalMessage, useSuiClient } from '@mysten
 import { IdCard, AlertTriangle, Check } from 'lucide-react'
 import { ProviderIcon } from '../components/ProviderIcon'
 import { Transaction } from '@mysten/sui/transactions'
+import type { SuiClient } from '@mysten/sui/client'
 import { fromBase64 } from '@mysten/sui/utils'
 import {
   buildMintPassPtb,
@@ -34,6 +35,10 @@ import type { ActiveSigner } from '../lib/useActiveSigner'
 import { IDKitRequestWidget, proofOfHuman } from '@worldcoin/idkit'
 import type { IDKitResult, RpContext } from '@worldcoin/idkit'
 import { fetchWorldIdSignRequest, submitWorldIdProof, WorldIdError } from '../lib/worldId'
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 
 // 僅接受站內問卷路徑（/s/...），避免 open-redirect
 function isSafeReturnPath(p: string | null): p is string {
@@ -210,7 +215,7 @@ export default function AuthPage() {
     const fallbackResult = await executeTxWithFallback({
       tx,
       senderAddress: owner,
-      client: suiClient as any,
+      client: suiClient as unknown as SuiClient,
       backendUrl,
       signAndExecute: async (t) => signer.signAndExecute(t as Transaction),
       // 代付鑄造/升級（deposit_payer=sponsor）不可自付回退：代付失敗即顯示「暫時不可用」，
@@ -337,7 +342,7 @@ export default function AuthPage() {
           const finalized = await finalizeSponsoredPassTx({
             tx: txDraft,
             senderAddress: owner,
-            client: suiClient as any,
+            client: suiClient as unknown as SuiClient,
             backendUrl,
           })
           const rebuilt = new Transaction()
@@ -392,7 +397,7 @@ export default function AuthPage() {
           const finalized = await finalizeSponsoredPassTx({
             tx: txDraft,
             senderAddress: owner,
-            client: suiClient as any,
+            client: suiClient as unknown as SuiClient,
             backendUrl,
           })
           const primary = ticketFieldsFromFinalized(finalized[0])
@@ -430,14 +435,14 @@ export default function AuthPage() {
         sessionStorage.removeItem('surveysui:returnTo')
         setTimeout(() => navigate(rt), 1200)
       }
-    } catch (err: any) {
-      if (err.message === USER_DECLINED_SELF_PAID) return
-      if (err.message === SPONSOR_TEMPORARILY_UNAVAILABLE) {
+    } catch (err) {
+      if (errMsg(err) === USER_DECLINED_SELF_PAID) return
+      if (errMsg(err) === SPONSOR_TEMPORARILY_UNAVAILABLE) {
         setErrorMsg(t.mintSponsorUnavailable)
         return
       }
-      const friendly = translateMoveAbort(err.message)
-      setErrorMsg(friendly || err.message || t.authFailed)
+      const friendly = translateMoveAbort(errMsg(err))
+      setErrorMsg(friendly || errMsg(err) || t.authFailed)
     } finally {
       setLoading(false)
       setPendingMsg(null)
@@ -473,8 +478,8 @@ export default function AuthPage() {
 
       setStep('verify')
       setOtpSentNotice(t.otpSentSuccess)
-    } catch (err: any) {
-      setErrorMsg(err.message || t.otpRequestError)
+    } catch (err) {
+      setErrorMsg(errMsg(err) || t.otpRequestError)
     } finally {
       setLoading(false)
     }
@@ -513,10 +518,10 @@ export default function AuthPage() {
       setEmail('')
       setOtpCode('')
       setStep('input')
-    } catch (err: any) {
-      if (err.message === USER_DECLINED_SELF_PAID) return
-      const friendly = translateMoveAbort(err.message)
-      setErrorMsg(friendly || err.message || t.authFailed)
+    } catch (err) {
+      if (errMsg(err) === USER_DECLINED_SELF_PAID) return
+      const friendly = translateMoveAbort(errMsg(err))
+      setErrorMsg(friendly || errMsg(err) || t.authFailed)
     } finally {
       setLoading(false)
     }
@@ -544,8 +549,8 @@ export default function AuthPage() {
       const cfg = await fetchWorldIdSignRequest()
       setWorldIdConfig(cfg)
       setWorldIdOpen(true)
-    } catch (err: any) {
-      setErrorMsg(err?.message || t.worldIdError)
+    } catch (err) {
+      setErrorMsg(errMsg(err) || t.worldIdError)
     } finally {
       setPendingMsg(null)
     }
@@ -563,14 +568,14 @@ export default function AuthPage() {
     try {
       const ticket = await submitWorldIdProof(account.address, result)
       await handleMintOrUpdateWithTickets([ticket], account.address, activeSigner)
-    } catch (err: any) {
-      if (err.message === USER_DECLINED_SELF_PAID) return
+    } catch (err) {
+      if (errMsg(err) === USER_DECLINED_SELF_PAID) return
       if (err instanceof WorldIdError) {
         setErrorMsg(err.code === 'orb_required' ? t.worldIdOrbRequired : err.message || t.worldIdError)
         return
       }
-      const friendly = translateMoveAbort(err.message)
-      setErrorMsg(friendly || err.message || t.worldIdError)
+      const friendly = translateMoveAbort(errMsg(err))
+      setErrorMsg(friendly || errMsg(err) || t.worldIdError)
     } finally {
       worldIdSubmittingRef.current = false
       setPendingMsg(null)
@@ -688,9 +693,9 @@ export default function AuthPage() {
       } else {
         await deleteSponsoredPass()
       }
-    } catch (err: any) {
-      const friendly = translateMoveAbort(err.message)
-      setErrorMsg(friendly || err.message || t.destroyFailed)
+    } catch (err) {
+      const friendly = translateMoveAbort(errMsg(err))
+      setErrorMsg(friendly || errMsg(err) || t.destroyFailed)
     } finally {
       setLoading(false)
     }

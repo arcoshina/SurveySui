@@ -154,7 +154,11 @@ export default function CreatePage() {
     if (poolData?.data?.content?.dataType !== 'moveObject') {
       return { totalFeeBps: 2000n, discountBps: 5000n }
     }
-    const fields = (poolData.data.content as { fields: Record<string, any> }).fields
+    const fields = (
+      poolData.data.content as {
+        fields: { fee_config?: { fields?: { total_fee_bps?: string | number; discount_bps?: string | number } } }
+      }
+    ).fields
     const feeFields = fields?.fee_config?.fields
     if (!feeFields) return { totalFeeBps: 2000n, discountBps: 5000n }
     return {

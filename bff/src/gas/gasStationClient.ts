@@ -1,5 +1,6 @@
 import {
   canonicalJsonStringify,
+  generateGasStationNonce,
   signGasStationBody,
 } from '@surveysui/gas-station-core'
 import { getGasStationFetch, hasGasStationBinding } from './gasStationBinding.js'
@@ -58,13 +59,15 @@ export async function forwardSponsorToGasStation(
   const url = new URL('/sponsor', baseUrl.replace(/\/$/, ''))
   const bodyJson = canonicalJsonStringify(request)
   const timestamp = String(Date.now())
-  const signature = signGasStationBody(secret, timestamp, bodyJson)
+  const nonce = generateGasStationNonce()
+  const signature = signGasStationBody(secret, timestamp, nonce, bodyJson)
 
   const res = await getGasStationFetch()(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'x-gas-station-timestamp': timestamp,
+      'x-gas-station-nonce': nonce,
       'x-gas-station-signature': signature,
     },
     body: bodyJson,
@@ -103,13 +106,15 @@ export async function releaseGasStationCoins(coinObjectIds: string[]): Promise<v
   const url = new URL('/release', baseUrl.replace(/\/$/, ''))
   const bodyJson = canonicalJsonStringify({ coinObjectIds })
   const timestamp = String(Date.now())
-  const signature = signGasStationBody(secret, timestamp, bodyJson)
+  const nonce = generateGasStationNonce()
+  const signature = signGasStationBody(secret, timestamp, nonce, bodyJson)
 
   await getGasStationFetch()(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'x-gas-station-timestamp': timestamp,
+      'x-gas-station-nonce': nonce,
       'x-gas-station-signature': signature,
     },
     body: bodyJson,

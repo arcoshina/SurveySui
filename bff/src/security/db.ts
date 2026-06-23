@@ -81,6 +81,12 @@ const SCHEMA_DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_pass_sponsor_reservation_lookup
     ON pass_sponsor_reservation (sender_address, sponsor_address, created_at)`,
+  `CREATE TABLE IF NOT EXISTS vault_gas_reservation (
+    vault_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_vault_gas_reservation_lookup
+    ON vault_gas_reservation (vault_id, created_at)`,
   `CREATE TABLE IF NOT EXISTS realtime_ticket_slot (
     wallet_address TEXT NOT NULL,
     vault_id TEXT NOT NULL,
@@ -112,6 +118,7 @@ const SCHEMA_DDL = [
     verifier TEXT NOT NULL,
     provider TEXT NOT NULL,
     owner TEXT NOT NULL,
+    sid_hash TEXT,
     expires_at INTEGER NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS mint_rate_limit (

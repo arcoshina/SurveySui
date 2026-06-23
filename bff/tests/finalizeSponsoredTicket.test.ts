@@ -77,7 +77,7 @@ describe('finalizeSponsoredPassTickets', () => {
         ],
         hasNextPage: false,
       }),
-      getNormalizedMoveFunction: vi.fn().mockImplementation(async ({ module, function: func }) => {
+      getNormalizedMoveFunction: vi.fn().mockImplementation(async ({ module: _module, function: _func }) => {
         const mintParams = [
           'Address',
           'Address',
@@ -155,6 +155,86 @@ describe('finalizeSponsoredPassTickets', () => {
     expect(tickets).toHaveLength(1)
     expect(tickets[0].escape_clawback_mist).toBe('1540000')
     expect(tickets[0].bff_sig).not.toBe(placeholder.bff_sig)
+  })
+
+  // H1 回歸：偽造身分 ticket（source=5 Orb、自選 nullifier、亂簽的 bff_sig）送進 finalize
+  // 必須在「原始簽章驗證閘門」被擋下，不得回傳任何合法重簽。
+  it('rejects forged-identity ticket (H1): invalid origin bff_sig', async () => {
+    const nullifier = new Uint8Array(32)
+    nullifier[0] = 42
+    const forgedSig = new Uint8Array(64) // 非發行者簽章
+
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_pass::mint_pass`,
+      arguments: [
+        tx.object('0x000000000000000000000000000000000000000000000000000000000000000a'),
+        tx.object('0x000000000000000000000000000000000000000000000000000000000000000b'),
+        tx.pure.address(userAddress),
+        tx.pure.address(sponsorAddress),
+        tx.pure.u8(5), // 自稱 World ID Orb，最高信任層級
+        tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize([[...nullifier]]).toBytes()),
+        tx.pure.vector('u8', []),
+        tx.pure.u64((Date.now() + 1_000_000).toString()),
+        tx.pure.u64('0'),
+        tx.pure.vector('u8', Array.from(forgedSig)),
+        tx.object('0x6'),
+      ],
+    })
+    tx.setSender(userAddress)
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient as any, onlyTransactionKind: true })
+    ).toString('base64')
+
+    await expect(
+      finalizeSponsoredPassTickets({
+        suiClient: mockSuiClient as any,
+        txBytes,
+        senderAddress: userAddress,
+      })
+    ).rejects.toMatchObject({ statusCode: 400 })
+    // 偽造票不得觸發 dry-run（閘門在量 gas 前即擋下）
+    expect(mockSuiClient.dryRunTransactionBlock).not.toHaveBeenCalled()
+  })
+
+  // H1 相關：合法票（簽給 userAddress）卻配上不同的 senderAddress，owner 不符 → 擋下。
+  it('rejects ticket reuse under a different sender (owner mismatch)', async () => {
+    const nullifier = new Uint8Array(32)
+    nullifier[0] = 11
+    const legit = await signTicket(userAddress, 2, [nullifier], new Uint8Array(0), Date.now() + 1_000_000, 0n)
+    const otherAddress = Ed25519Keypair.fromSecretKey(
+      new Uint8Array(Buffer.from(sponsorPriv2, 'hex')).slice(0, 32)
+    ).getPublicKey().toSuiAddress()
+
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_pass::mint_pass`,
+      arguments: [
+        tx.object('0x000000000000000000000000000000000000000000000000000000000000000a'),
+        tx.object('0x000000000000000000000000000000000000000000000000000000000000000b'),
+        tx.pure.address(otherAddress),
+        tx.pure.address(sponsorAddress),
+        tx.pure.u8(2),
+        tx.pure(bcs.vector(bcs.vector(bcs.u8())).serialize([[...nullifier]]).toBytes()),
+        tx.pure.vector('u8', []),
+        tx.pure.u64(legit.expires_at),
+        tx.pure.u64('0'),
+        tx.pure.vector('u8', Buffer.from(legit.bff_sig, 'hex')),
+        tx.object('0x6'),
+      ],
+    })
+    tx.setSender(otherAddress)
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient as any, onlyTransactionKind: true })
+    ).toString('base64')
+
+    await expect(
+      finalizeSponsoredPassTickets({
+        suiClient: mockSuiClient as any,
+        txBytes,
+        senderAddress: otherAddress,
+      })
+    ).rejects.toMatchObject({ statusCode: 400 })
   })
 
   // 回歸測試（不依賴 mock dry-run）：placeholder 必須同時 (a) 真正寫入 clawback=1，

@@ -18,6 +18,10 @@ export type SponsorValidationSuccess = {
   pipelineContext: SponsorPipelineContext
   isPassSponsor: boolean
   isPlatformSponsor: boolean
+  /** claim 的 SurveyVault ID（非 claim／pass mint 時為 null）。供 /execute 做 vault 額度預留。 */
+  vaultId: string | null
+  /** vault 當下鏈上 gas_balance（字串，避免 bigint 序列化問題；非 claim 時為 null）。 */
+  vaultGasBalance: string | null
 }
 
 export type SponsorValidationOutcome = SponsorValidationError | SponsorValidationSuccess
@@ -211,6 +215,8 @@ export async function validateSponsorTransaction(
   const isPassSponsor = hasPass
   let isPlatformSponsor = false
   let claimGasCompensationAmount: bigint | null = null
+  let vaultId: string | null = null
+  let vaultGasBalance: bigint | null = null
   let passId: string | null = null
 
   if (isPassSponsor) {
@@ -273,7 +279,6 @@ export async function validateSponsorTransaction(
   } else {
     const call = commands[0].MoveCall!
     let answersArg: unknown = null
-    let vaultId: string | null = null
     if (call.function === 'claim') {
       answersArg = call.arguments[12]
       const firstArg = call.arguments[0]
@@ -324,6 +329,7 @@ export async function validateSponsorTransaction(
     }
     claimGasCompensationAmount = BigInt((fields.gas_compensation_amount as string | number | undefined) ?? '0')
     const gasBalance = BigInt((fields.gas_balance as string | undefined) ?? '0')
+    vaultGasBalance = gasBalance
     // 領取負債只剩 gas 補償(storage 補償已廢除)。池不足且未開平台 fallback 即回 409,
     // FE 導向自付。
     const requiredLiability = claimGasCompensationAmount
@@ -363,6 +369,8 @@ export async function validateSponsorTransaction(
     ok: true,
     isPassSponsor,
     isPlatformSponsor,
+    vaultId,
+    vaultGasBalance: vaultGasBalance?.toString() ?? null,
     pipelineContext: {
       isPassSponsor,
       isPlatformSponsor,

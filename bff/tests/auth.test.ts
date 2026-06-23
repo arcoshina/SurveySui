@@ -7,7 +7,7 @@ vi.mock('../src/email/sender.js', () => ({
   sendOtpEmail: vi.fn().mockResolvedValue(undefined),
 }))
 import { sendOtpEmail } from '../src/email/sender.js'
-import { computeNullifierHash, computeEmailSecondaryNullifier, signTicket, getPassTtlMs } from '../src/auth/ticket.js'
+import { computeNullifierHash, signTicket, getPassTtlMs } from '../src/auth/ticket.js'
 import { registerAuthRoutes } from '../src/auth/handler.js'
 
 describe('BFF Authentication & Ticket Tests', () => {
@@ -153,6 +153,27 @@ describe('BFF Authentication & Ticket Tests', () => {
       expect(verifyResponse.status).toBe(401)
       const errData = (await verifyResponse.json()) as any
       expect(errData.error).toBe('Invalid or expired OTP code')
+    })
+
+    it('should rate-limit verify attempts per email (6th attempt → 429)', async () => {
+      await otpStore.set('alice@test.com', '123456')
+      const owner = '0xa11ce00000000000000000000000000000000000000000000000000000000000'
+
+      // 前 5 次錯碼皆受理（401）
+      for (let i = 0; i < 5; i++) {
+        const r = await post('/auth/email/verify', { email: 'alice@test.com', code: '000000', owner })
+        expect(r.status).toBe(401)
+      }
+      // 第 6 次同一 email 被節流
+      const blocked = await post('/auth/email/verify', { email: 'alice@test.com', code: '000000', owner })
+      expect(blocked.status).toBe(429)
+      const data = (await blocked.json()) as any
+      expect(data.error).toBe('rate_limited')
+
+      // 不同 email 不受影響（用正確碼仍可驗證）
+      await otpStore.set('bob@test.com', '654321')
+      const ok = await post('/auth/email/verify', { email: 'bob@test.com', code: '654321', owner })
+      expect(ok.status).toBe(200)
     })
   })
 

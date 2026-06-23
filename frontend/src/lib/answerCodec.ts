@@ -6,7 +6,7 @@ export interface EncodedAnswersPayload {
   version: number
 }
 
-export function normalizeBytes(input: any): Uint8Array {
+export function normalizeBytes(input: unknown): Uint8Array {
   if (Array.isArray(input)) {
     return new Uint8Array(input.map(Number))
   }

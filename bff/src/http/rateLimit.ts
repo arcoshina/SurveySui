@@ -1,4 +1,4 @@
-import type { MiddlewareHandler } from 'hono'
+import type { Context, MiddlewareHandler } from 'hono'
 import { getDbClient } from '../security/db.js'
 
 export interface RateLimitOptions {
@@ -8,6 +8,8 @@ export interface RateLimitOptions {
   windowMs: number
   /** bucket 前綴，用以區隔不同端點的計數。 */
   key: string
+  /** 自訂 bucket 識別子；回傳 falsy 時 fall back 到 client IP。預設取 client IP。 */
+  identifier?: (c: Context) => string | undefined | Promise<string | undefined>
 }
 
 /**
@@ -21,9 +23,10 @@ export function rateLimit(opts: RateLimitOptions): MiddlewareHandler {
       c.req.header('cf-connecting-ip') ??
       c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
       'unknown'
+    const id = opts.identifier ? (await opts.identifier(c)) || ip : ip
     const now = Date.now()
     const windowStart = Math.floor(now / opts.windowMs) * opts.windowMs
-    const bucket = `${opts.key}:${ip}:${windowStart}`
+    const bucket = `${opts.key}:${id}:${windowStart}`
 
     const db = getDbClient()
     await db.execute({

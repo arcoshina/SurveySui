@@ -2,12 +2,20 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FileText, ClipboardList, Gift, Globe, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit'
+import type { EventId } from '@mysten/sui/client'
 import { parseFullSurveyMarkdown } from '../lib/frontmatter'
 import { useLanguage } from '../context/LanguageContext'
 import { useT } from '../i18n'
 
 const stepsIcons = [FileText, ClipboardList, Gift]
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
+
+/** SurveyRegistered 事件 parsedJson 中本頁用到的欄位。 */
+type RegisteredEvent = { survey_id?: string; vault_id?: string; registered_at_ms?: string | number }
+/** SurveyClaimed 事件 parsedJson 中本頁用到的欄位。 */
+type ClaimedEvent = { respondent?: string; vault_id?: string }
+/** Sui 物件 moveObject content 的動態 fields 包裝。 */
+type MoveContent = { dataType?: string; fields?: Record<string, unknown> }
 
 interface PublicSurveyItem {
   surveyId: string
@@ -122,8 +130,8 @@ export default function LandingPage() {
     async function loadExploreData() {
       try {
         const timeLimit = Date.now() - 7 * 86400000
-        let cursor: any = null
-        let registeredEvents: any[] = []
+        let cursor: EventId | null | undefined = null
+        let registeredEvents: RegisteredEvent[] = []
         let hasNext = true
 
         // 降序查詢註冊事件，7 天時間窗口截斷
@@ -136,7 +144,7 @@ export default function LandingPage() {
           })
           let hitDeadline = false
           for (const ev of res.data) {
-            const j: any = ev.parsedJson
+            const j = ev.parsedJson as RegisteredEvent | null
             if (!j) continue
             const regTime = Number(j.registered_at_ms || 0)
             if (regTime < timeLimit) {
@@ -158,8 +166,8 @@ export default function LandingPage() {
         }
 
         // 批次加載 Survey 與 Vault 物件
-        const surveyIds = registeredEvents.map((e) => e.survey_id)
-        const vaultIds = registeredEvents.map((e) => e.vault_id)
+        const surveyIds = registeredEvents.map((e) => String(e.survey_id ?? ''))
+        const vaultIds = registeredEvents.map((e) => String(e.vault_id ?? ''))
 
         const chunk = <T,>(arr: T[], size: number): T[][] =>
           Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
@@ -169,8 +177,8 @@ export default function LandingPage() {
         const surveyChunks = chunk(surveyIds, 50)
         const vaultChunks = chunk(vaultIds, 50)
 
-        let surveyObjects: any[] = []
-        let vaultObjects: any[] = []
+        let surveyObjects: Awaited<ReturnType<typeof suiClient.multiGetObjects>> = []
+        let vaultObjects: Awaited<ReturnType<typeof suiClient.multiGetObjects>> = []
 
         for (const c of surveyChunks) {
           if (cancelled) return
@@ -193,8 +201,8 @@ export default function LandingPage() {
 
           if (!sObj?.data || sObj.error || !vObj?.data || vObj.error) continue
 
-          const sFields = sObj.data.content?.fields
-          const vFields = vObj.data.content?.fields
+          const sFields = (sObj.data.content as MoveContent | null | undefined)?.fields
+          const vFields = (vObj.data.content as MoveContent | null | undefined)?.fields
           if (!sFields || !vFields) continue
 
           // 狀態過濾 (已結束/已刪除)
@@ -206,7 +214,7 @@ export default function LandingPage() {
           if (claimedCount >= maxResponses) continue
 
           // 儲存位置過濾：跳過 Walrus 託管問卷，保證極速載入
-          const getOptionVec = (opt: any): Uint8Array | null => {
+          const getOptionVec = (opt: unknown): Uint8Array | null => {
             if (!opt) return null
             if (Array.isArray(opt)) {
               if (opt.length === 0) return null
@@ -217,7 +225,8 @@ export default function LandingPage() {
               }
               return new Uint8Array(opt.map(Number))
             }
-            const vec = opt.fields?.vec || opt.vec
+            const o = opt as { fields?: { vec?: unknown }; vec?: unknown }
+            const vec = o.fields?.vec || o.vec
             if (!Array.isArray(vec) || vec.length === 0) return null
             const first = vec[0]
             if (Array.isArray(first)) return new Uint8Array(first.map(Number))
@@ -256,8 +265,8 @@ export default function LandingPage() {
             const allowedNftType = allowedNftTypeBytes ? new TextDecoder().decode(allowedNftTypeBytes) : null
 
             items.push({
-              surveyId: event.survey_id,
-              vaultId: event.vault_id,
+              surveyId: String(event.survey_id ?? ''),
+              vaultId: String(event.vault_id ?? ''),
               title: fm.title,
               description: fm.description,
               perResponse: fm.perResponse,
@@ -304,7 +313,7 @@ export default function LandingPage() {
       try {
         const myAddrNorm = normalizeSuiId(account!.address)
         const claimedSet = new Set<string>()
-        let evCursor: any = null
+        let evCursor: EventId | null | undefined = null
         let page = 0
 
         while (!cancelled) {
@@ -314,10 +323,10 @@ export default function LandingPage() {
             limit: 50,
           })
           for (const ev of res.data) {
-            const j: any = ev.parsedJson
+            const j = ev.parsedJson as ClaimedEvent | null
             if (!j) continue
-            if (normalizeSuiId(j.respondent) === myAddrNorm) {
-              claimedSet.add(normalizeSuiId(j.vault_id))
+            if (normalizeSuiId(j.respondent ?? '') === myAddrNorm) {
+              claimedSet.add(normalizeSuiId(j.vault_id ?? ''))
             }
           }
           if (!res.hasNextPage || page >= 5) break

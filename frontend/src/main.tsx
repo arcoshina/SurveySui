@@ -55,7 +55,11 @@ const createSuiClient = (_name: string, _config: { url: string }) =>
   })
 
 if (typeof window !== 'undefined') {
-  ;(window as any).suiSdkForTesting = { SuiClient, Transaction }
+  ;(
+    window as Window & {
+      suiSdkForTesting?: { SuiClient: typeof SuiClient; Transaction: typeof Transaction }
+    }
+  ).suiSdkForTesting = { SuiClient, Transaction }
 }
 
 function WalletProviderWithTheme() {
@@ -73,7 +77,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <SuiClientProvider
         networks={networks}
         defaultNetwork={NETWORK}
-        createClient={createSuiClient as any}
+        createClient={
+          // dapp-kit 綁定的 sui 版本與 app 不同，SuiClient 型別不相容；以 dapp-kit
+          // useSuiClient 的回傳型別作為跨邊界目標型別。
+          createSuiClient as unknown as (
+            name: string | number,
+            config: { url: string }
+          ) => ReturnType<typeof import('@mysten/dapp-kit').useSuiClient>
+        }
       >
         <ThemeProvider>
           <WalletProviderWithTheme />
