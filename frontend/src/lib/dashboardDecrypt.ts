@@ -11,7 +11,7 @@
 import type { SuiClient } from '@mysten/sui/client'
 import { decryptAnswers, type CreatorKeyPair } from './crypto'
 
-import { decodeAnswers } from './answerCodec'
+import { decodeAnswers, SchemaMismatchError } from './answerCodec'
 import type { Question } from './frontmatter'
 import { downloadFromDecentralizedStorage } from './storage'
 
@@ -47,6 +47,8 @@ export interface DashboardStats {
   decrypted_count: number
   /** Events that failed decryption (corrupted bytes or wrong key). */
   failed_count: number
+  /** Events whose payload schema is incompatible (version/schema_hash mismatch); excluded from aggregation. */
+  schema_mismatch_count: number
   /** Per-question aggregated counts, keyed by answer field name. */
   questions: Record<string, QuestionStats>
 }
@@ -152,9 +154,10 @@ export async function decryptAllResponses(
   creatorKeyPair: CreatorKeyPair,
   questions: Question[],
   vaultSchemaHash: string | Uint8Array
-): Promise<{ responses: DecryptedResponse[]; failed: number }> {
+): Promise<{ responses: DecryptedResponse[]; failed: number; schemaMismatch: number }> {
   const responses: DecryptedResponse[] = []
   let failed = 0
+  let schemaMismatch = 0
 
   for (const ev of events) {
     try {
@@ -167,12 +170,13 @@ export async function decryptAllResponses(
         answers,
         claimed_at_ms: Number(ev.claimed_at_ms),
       })
-    } catch {
-      failed++
+    } catch (e) {
+      if (e instanceof SchemaMismatchError) schemaMismatch++
+      else failed++
     }
   }
 
-  return { responses, failed }
+  return { responses, failed, schemaMismatch }
 }
 
 /**
@@ -182,9 +186,10 @@ export function decodeAllPlainResponses(
   events: SurveyClaimedEvent[],
   questions: Question[],
   vaultSchemaHash: string | Uint8Array
-): { responses: DecryptedResponse[]; failed: number } {
+): { responses: DecryptedResponse[]; failed: number; schemaMismatch: number } {
   const responses: DecryptedResponse[] = []
   let failed = 0
+  let schemaMismatch = 0
 
   for (const ev of events) {
     try {
@@ -197,12 +202,13 @@ export function decodeAllPlainResponses(
         answers,
         claimed_at_ms: Number(ev.claimed_at_ms),
       })
-    } catch {
-      failed++
+    } catch (e) {
+      if (e instanceof SchemaMismatchError) schemaMismatch++
+      else failed++
     }
   }
 
-  return { responses, failed }
+  return { responses, failed, schemaMismatch }
 }
 
 
@@ -211,12 +217,14 @@ export function decodeAllPlainResponses(
 /**
  * Aggregate per-question answer counts from a list of decrypted responses.
  *
- * @param responses     Successfully decrypted responses.
- * @param totalEvents   Total number of on-chain events (≥ responses.length).
+ * @param responses      Successfully decrypted responses.
+ * @param totalEvents    Total number of on-chain events (≥ responses.length).
+ * @param schemaMismatch Responses excluded due to incompatible schema (version/schema_hash mismatch).
  */
 export function aggregateStats(
   responses: DecryptedResponse[],
-  totalEvents: number
+  totalEvents: number,
+  schemaMismatch = 0
 ): DashboardStats {
   const questions: Record<string, QuestionStats> = {}
 
@@ -240,7 +248,8 @@ export function aggregateStats(
   return {
     total_responses: totalEvents,
     decrypted_count: responses.length,
-    failed_count: totalEvents - responses.length,
+    failed_count: totalEvents - responses.length - schemaMismatch,
+    schema_mismatch_count: schemaMismatch,
     questions,
   }
 }

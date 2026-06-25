@@ -1,6 +1,20 @@
 import { bcs } from '@mysten/sui/bcs'
 import type { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 
+// ticketBase = ticket 欄位群（source..bff_sig）在 moveCall args 中的起始索引。
+// 對齊 contracts/sources/survey_pass.move，args 不含自動注入的 TxContext。
+// pass(0) registry(1) config(2) | source(3)..bff_sig(8)
+const UPDATE_PASS_CREDENTIAL_TICKET_BASE = 3
+// registry(0) config(1) owner(2) deposit_payer(3) | source(4)..bff_sig(9)
+const MINT_PASS_TICKET_BASE = 4
+
+// mint_pass_with_extra_credentials：primary 同 MINT_PASS_TICKET_BASE，extra 欄位接在 bff_sig(9) 之後。
+const EXTRA_SOURCES_INDEX = 10
+const EXTRA_NULLIFIERS_INDEX = 11
+const EXTRA_COMMITMENTS_INDEX = 12
+const EXTRA_EXPIRES_AT_INDEX = 13
+const EXTRA_BFF_SIGS_INDEX = 14
+
 export const PassTicketPayload = bcs.struct('TicketPayload', {
   owner: bcs.Address,
   source: bcs.u8(),
@@ -59,21 +73,21 @@ export function extractPassTicketsFromMoveCall(
   args: unknown[]
 ): PassTicketFields[] | null {
   if (fn === 'update_pass_credential') {
-    const ticket = parsePassTicketFromArgs(getPureBytes, args, 3)
+    const ticket = parsePassTicketFromArgs(getPureBytes, args, UPDATE_PASS_CREDENTIAL_TICKET_BASE)
     return ticket ? [ticket] : null
   }
   if (fn === 'mint_pass') {
-    const ticket = parsePassTicketFromArgs(getPureBytes, args, 4)
+    const ticket = parsePassTicketFromArgs(getPureBytes, args, MINT_PASS_TICKET_BASE)
     return ticket ? [ticket] : null
   }
   if (fn === 'mint_pass_with_extra_credentials') {
-    const primary = parsePassTicketFromArgs(getPureBytes, args, 4)
+    const primary = parsePassTicketFromArgs(getPureBytes, args, MINT_PASS_TICKET_BASE)
     if (!primary) return null
-    const extraSourcesBytes = getPureBytes(args[10])
-    const extraNullifiersBytes = getPureBytes(args[11])
-    const extraCommitmentsBytes = getPureBytes(args[12])
-    const extraExpiresAtBytes = getPureBytes(args[13])
-    const extraBffSigsBytes = getPureBytes(args[14])
+    const extraSourcesBytes = getPureBytes(args[EXTRA_SOURCES_INDEX])
+    const extraNullifiersBytes = getPureBytes(args[EXTRA_NULLIFIERS_INDEX])
+    const extraCommitmentsBytes = getPureBytes(args[EXTRA_COMMITMENTS_INDEX])
+    const extraExpiresAtBytes = getPureBytes(args[EXTRA_EXPIRES_AT_INDEX])
+    const extraBffSigsBytes = getPureBytes(args[EXTRA_BFF_SIGS_INDEX])
     if (
       !extraSourcesBytes ||
       !extraNullifiersBytes ||

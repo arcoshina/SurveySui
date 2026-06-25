@@ -1,7 +1,9 @@
 import type { Hono } from 'hono'
+import { assertPublicHttpUrl } from './ssrfGuard.js'
 
 const MAX_BYTES = 2 * 1024 * 1024
 const MAX_DIMENSION = 5000
+const MAX_REDIRECTS = 4
 
 type ImageType = 'png' | 'jpeg' | 'gif' | 'webp'
 
@@ -117,16 +119,52 @@ export function registerImageProxyRoutes(app: Hono): void {
         400
       )
     }
+    // SSRF 防護：封鎖內網/保留/link-local 目標（與轉址逐跳重驗同碼，避免洩漏內網掃描訊號）
+    if (!assertPublicHttpUrl(parsedUrl).ok) {
+      return c.json({ error: 'blocked_target', message: 'Target host is not allowed' }, 400)
+    }
 
     try {
       // 1. 抓外部影像：5 秒逾時、2MB 上限（逐塊讀取防 content-length 繞過）
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 5000)
-      const res = await fetch(parsedUrl.toString(), {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'SurveySui-ImageProxy/1.0' },
-      })
-      clearTimeout(timeoutId)
+      let res: Response
+      try {
+        // redirect:'manual' 手動逐跳重驗，防 302 轉址至內網（workerd 下可讀 3xx Location）
+        let currentUrl = parsedUrl
+        let hops = 0
+        for (;;) {
+          const hopRes = await fetch(currentUrl.toString(), {
+            signal: controller.signal,
+            redirect: 'manual',
+            headers: { 'User-Agent': 'SurveySui-ImageProxy/1.0' },
+          })
+          const isRedirect = hopRes.status >= 300 && hopRes.status < 400
+          const location = hopRes.headers.get('location')
+          if (!isRedirect || !location) {
+            res = hopRes
+            break
+          }
+          if (++hops > MAX_REDIRECTS) {
+            clearTimeout(timeoutId)
+            return c.json({ error: 'too_many_redirects', message: 'Too many redirects' }, 502)
+          }
+          let nextUrl: URL
+          try {
+            nextUrl = new URL(location, currentUrl)
+          } catch {
+            clearTimeout(timeoutId)
+            return c.json({ error: 'blocked_target', message: 'Target host is not allowed' }, 400)
+          }
+          if (!assertPublicHttpUrl(nextUrl).ok) {
+            clearTimeout(timeoutId)
+            return c.json({ error: 'blocked_target', message: 'Target host is not allowed' }, 400)
+          }
+          currentUrl = nextUrl
+        }
+      } finally {
+        clearTimeout(timeoutId)
+      }
 
       if (!res.ok) {
         return c.json({ error: 'fetch_failed', message: `Failed to fetch image: ${res.status}` }, 502)

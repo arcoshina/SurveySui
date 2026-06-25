@@ -343,13 +343,15 @@ export default function SurveyPage() {
 
   // Debug output to trace variables
   useEffect(() => {
-    console.log('[SurveyPage Debug]', {
-      PACKAGE_ID,
-      accountAddress: activeSigner?.address,
-      activePass,
-      surveyAllowedSources,
-      phase,
-    })
+    if (import.meta.env.DEV) {
+      console.log('[SurveyPage Debug]', {
+        PACKAGE_ID,
+        accountAddress: activeSigner?.address,
+        activePass,
+        surveyAllowedSources,
+        phase,
+      })
+    }
   }, [activeSigner?.address, activePass, surveyAllowedSources, phase])
 
   // Probe BFF gas sponsor health when entering review phase
@@ -414,7 +416,8 @@ export default function SurveyPage() {
             throw new Error(t.errNoSurveyRegistry)
           }
           finalSurveyId = (hit.parsedJson as RegisteredEvent).survey_id ?? ''
-          console.log('[SurveyPage] Resolved surveyId from on-chain event:', finalSurveyId)
+          if (import.meta.env.DEV)
+            console.log('[SurveyPage] Resolved surveyId from on-chain event:', finalSurveyId)
 
           // Re-fetch the true Survey object
           obj = await suiClient.getObject({
@@ -492,7 +495,8 @@ export default function SurveyPage() {
 
         if (surveyBlobIdBytes) {
           const blobId = new TextDecoder().decode(surveyBlobIdBytes)
-          console.log('[SurveyPage] Survey is in decentralized mode. Downloading blobId:', blobId)
+          if (import.meta.env.DEV)
+            console.log('[SurveyPage] Survey is in decentralized mode. Downloading blobId:', blobId)
           rawContent = await downloadFromDecentralizedStorage(blobId)
         } else {
           // Fallback to legacy encrypted_content

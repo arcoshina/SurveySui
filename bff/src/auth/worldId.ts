@@ -112,11 +112,46 @@ export async function verifyWorldIdProof(payload: unknown): Promise<WorldIdVerif
     return { ok: false, status: 401, isOrb: true, nullifier: null, error: `World verify failed: ${res.status}` }
   }
 
-  const data = (await res.json().catch(() => ({}))) as { success?: boolean }
+  interface WorldVerifyResultItem {
+    identifier?: string
+    success?: boolean
+    nullifier?: unknown
+  }
+  const data = (await res.json().catch(() => ({}))) as {
+    success?: boolean
+    nullifier?: unknown
+    results?: WorldVerifyResultItem[]
+  }
 
-  if (data && data.success === false) {
+  // fail-closed:唯有 success === true 才放行(涵蓋 {}、缺 success、success !== true 等情況)
+  if (!data || data.success !== true) {
     return { ok: false, status: 401, isOrb: true, nullifier: null, error: 'World verify rejected' }
   }
 
-  return { ok: true, status: 200, isOrb: true, nullifier: orbResp.nullifier as string }
+  // nullifier 必須採用 API 密碼學驗證後的值,不得回傳前端 payload 送入的值。
+  // 優先取 results 中 Orb(proof_of_human)且 success 的項,否則退回頂層 nullifier。
+  const orbResult = Array.isArray(data.results)
+    ? data.results.find(
+        (r) =>
+          r?.identifier === 'proof_of_human' &&
+          r?.success === true &&
+          typeof r?.nullifier === 'string' &&
+          (r.nullifier as string).length > 0
+      )
+    : undefined
+  const verifiedNullifier =
+    (orbResult?.nullifier as string | undefined) ??
+    (typeof data.nullifier === 'string' && data.nullifier.length > 0 ? data.nullifier : undefined)
+
+  if (!verifiedNullifier) {
+    return {
+      ok: false,
+      status: 401,
+      isOrb: true,
+      nullifier: null,
+      error: 'World verify returned no verified nullifier',
+    }
+  }
+
+  return { ok: true, status: 200, isOrb: true, nullifier: verifiedNullifier }
 }

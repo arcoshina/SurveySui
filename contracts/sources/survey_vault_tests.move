@@ -1956,3 +1956,87 @@ fun test_claim_records_revoked_credential_nullifiers() {
 
     test_scenario::end(scenario);
 }
+
+// ── 預算/required_gas 連乘 u128 溢位防護(V2)────────────────────────────────────
+const POW40: u64 = 1_099_511_627_776; // 2^40,平方即 2^80 > u64::MAX
+
+// 正常配置:改 u128 中介後 required_gas / reward_budget 結果不變(回歸保護)。
+// reward_budget = per_response*max_responses + repeat_reward*max_responses*repeat_max_times
+//               = 2*10 + 3*10*4 = 140
+#[test]
+fun test_budget_normal_values_unchanged() {
+    let creator = @0x11;
+    let mut scenario = test_scenario::begin(creator);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        amm_pool::create_protocol_config(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, creator);
+    let config = test_scenario::take_shared<ProtocolConfig>(&scenario);
+    let ctx = test_scenario::ctx(&mut scenario);
+    let gas = coin::zero<SUI>(ctx);
+    let clock = clock::create_for_testing(ctx);
+    let vault = survey_vault::create_empty(
+        2, 3, 4, 10, 100000, @0xEE, gas, @0x0, 0, 0, 0,
+        TEST_PURGE_GRACE_MS, option::none(), &config, &clock, ctx,
+    );
+    clock::destroy_for_testing(clock);
+    assert!(survey_vault::reward_budget_for_testing(&vault) == 140, 0);
+    test_scenario::return_shared(config);
+    survey_vault::share_vault_for_testing(vault);
+    test_scenario::end(scenario);
+}
+
+// required_gas 極端配置:POW40*(1+POW40)*POW40 ≈ 2^120 遠超 u64,
+// 改寫後以專屬 EBudgetOverflow abort,而非通用算術溢位錯誤。
+#[test]
+#[expected_failure(abort_code = surveysui::survey_vault::EBudgetOverflow)]
+fun test_required_gas_overflow_aborts() {
+    let creator = @0x11;
+    let mut scenario = test_scenario::begin(creator);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        amm_pool::create_protocol_config(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, creator);
+    let config = test_scenario::take_shared<ProtocolConfig>(&scenario);
+    let ctx = test_scenario::ctx(&mut scenario);
+    let gas = coin::zero<SUI>(ctx);
+    let clock = clock::create_for_testing(ctx);
+    // repeat_reward=1(>0 走乘法分支), gas_compensation_amount=POW40(= per_response_sui)
+    let vault = survey_vault::create_empty(
+        1, 1, POW40, POW40, 100000, @0xEE, gas, @0x0, POW40, 0, 0,
+        TEST_PURGE_GRACE_MS, option::none(), &config, &clock, ctx,
+    );
+    clock::destroy_for_testing(clock);
+    test_scenario::return_shared(config);
+    survey_vault::share_vault_for_testing(vault);
+    test_scenario::end(scenario);
+}
+
+// reward_budget 極端配置:per_response*max_responses = 2^80 溢位。
+// gas_comp/ticket_fee=0 使 required_gas=0 不先 abort,vault 建立後再觸發 reward_budget。
+#[test]
+#[expected_failure(abort_code = surveysui::survey_vault::EBudgetOverflow)]
+fun test_reward_budget_overflow_aborts() {
+    let creator = @0x11;
+    let mut scenario = test_scenario::begin(creator);
+    {
+        let ctx = test_scenario::ctx(&mut scenario);
+        amm_pool::create_protocol_config(ctx);
+    };
+    test_scenario::next_tx(&mut scenario, creator);
+    let config = test_scenario::take_shared<ProtocolConfig>(&scenario);
+    let ctx = test_scenario::ctx(&mut scenario);
+    let gas = coin::zero<SUI>(ctx);
+    let clock = clock::create_for_testing(ctx);
+    let vault = survey_vault::create_empty(
+        POW40, 0, 1, POW40, 100000, @0xEE, gas, @0x0, 0, 0, 0,
+        TEST_PURGE_GRACE_MS, option::none(), &config, &clock, ctx,
+    );
+    clock::destroy_for_testing(clock);
+    let _ = survey_vault::reward_budget_for_testing(&vault);
+    test_scenario::return_shared(config);
+    survey_vault::share_vault_for_testing(vault);
+    test_scenario::end(scenario);
+}

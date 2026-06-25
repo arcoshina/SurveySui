@@ -35,9 +35,12 @@ function emptyMetrics(partial: Partial<SponsorPipelineMetrics> = {}): SponsorPip
   }
 }
 
-function releaseAcquiredCoin(coinStore: CoinLockStore, acquiredCoin: AcquiredGasCoin | undefined): void {
+async function releaseAcquiredCoin(
+  coinStore: CoinLockStore,
+  acquiredCoin: AcquiredGasCoin | undefined
+): Promise<void> {
   if (acquiredCoin) {
-    coinStore.release(acquiredCoin.coinObjectId)
+    await coinStore.release(acquiredCoin.coinObjectId)
   }
 }
 
@@ -66,7 +69,7 @@ async function dryRunOrRetry(
 
     const message = dryRun.effects.status.error ?? 'Dry run failed'
     if (attempt < maxRetries) {
-      coinStore.invalidateCoin(currentCoin.coinObjectId)
+      await coinStore.invalidateCoin(currentCoin.coinObjectId)
       try {
         currentCoin = await coinStore.acquire(suiClient, sponsorAddress, gasConfig.gasBudgetCapMist)
       } catch (err: unknown) {
@@ -91,7 +94,7 @@ async function dryRunOrRetry(
       continue
     }
 
-    releaseAcquiredCoin(coinStore, currentCoin)
+    await releaseAcquiredCoin(coinStore, currentCoin)
     return {
       ok: false,
       outcome: {
@@ -190,7 +193,7 @@ export async function runSponsorPipeline(
         gasUsed: dryRun.effects.gasUsed,
       })
       if (!clawbackCheck.ok) {
-        releaseAcquiredCoin(coinStore, acquiredCoin)
+        await releaseAcquiredCoin(coinStore, acquiredCoin)
         return {
           ok: false,
           status: clawbackCheck.status,
@@ -214,7 +217,7 @@ export async function runSponsorPipeline(
       if (context.isPlatformSponsor) {
         const platformBudgetFloor = upfrontGas + gasConfig.gasBudgetBufferMist
         if (platformBudgetFloor > gasConfig.maxPlatformClaimGasMist) {
-          releaseAcquiredCoin(coinStore, acquiredCoin)
+          await releaseAcquiredCoin(coinStore, acquiredCoin)
           return {
             ok: false,
             status: 422,
@@ -229,7 +232,7 @@ export async function runSponsorPipeline(
           }
         }
         if (netGas > gasConfig.maxPlatformClaimGasMist) {
-          releaseAcquiredCoin(coinStore, acquiredCoin)
+          await releaseAcquiredCoin(coinStore, acquiredCoin)
           return {
             ok: false,
             status: 422,
@@ -248,7 +251,7 @@ export async function runSponsorPipeline(
         const compensation = claimGasCompensationAmount
         const required = netGas + gasConfig.gasBudgetBufferMist
         if (required > compensation) {
-          releaseAcquiredCoin(coinStore, acquiredCoin)
+          await releaseAcquiredCoin(coinStore, acquiredCoin)
           return {
             ok: false,
             status: 422,
@@ -323,7 +326,7 @@ export async function runSponsorPipeline(
       },
     }
   } catch (err: unknown) {
-    releaseAcquiredCoin(coinStore, acquiredCoin)
+    await releaseAcquiredCoin(coinStore, acquiredCoin)
     const message = err instanceof Error ? err.message : String(err)
     return {
       ok: false,

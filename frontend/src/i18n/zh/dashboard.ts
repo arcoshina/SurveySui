@@ -82,6 +82,7 @@ const dashboard = {
   respondentHeader: '受訪者（Respondent）',
   submittedTimeHeader: '填答時間（Submitted Time）',
   decryptFailedCount: (n: number) => `有 ${n} 筆回覆無法解密（金鑰不符或資料毀損）。`,
+  schemaMismatchCount: (n: number) => `有 ${n} 筆回覆因題目結構不符，已排除於統計之外。`,
   closeSuccess: '活動已成功結束,剩餘 SSR 已退回您的錢包。',
   btnClosed: '已結束',
   btnClosing: '結束中…',

@@ -65,19 +65,16 @@ export class SqlitePassReservationStore implements PassReservationStore {
     const sender = normalizeAddress(senderAddress)
     const sponsor = normalizeAddress(sponsorAddress)
     const minCreated = now - RESERVATION_TTL_MS
-    const rows = await db.execute({
-      sql: `SELECT rowid FROM pass_sponsor_reservation
-            WHERE sender_address = ? AND sponsor_address = ? AND created_at > ?
-            ORDER BY created_at ASC LIMIT ?`,
+    // 單句刪除最舊 n 筆未過期預留（消除 N+1）：子查詢以 created_at ASC + LIMIT 選列。
+    await db.execute({
+      sql: `DELETE FROM pass_sponsor_reservation
+            WHERE rowid IN (
+              SELECT rowid FROM pass_sponsor_reservation
+              WHERE sender_address = ? AND sponsor_address = ? AND created_at > ?
+              ORDER BY created_at ASC LIMIT ?
+            )`,
       args: [sender, sponsor, minCreated, n],
     })
-    for (const row of rows.rows) {
-      const rowid = (row as unknown as { rowid: number }).rowid
-      await db.execute({
-        sql: `DELETE FROM pass_sponsor_reservation WHERE rowid = ?`,
-        args: [rowid],
-      })
-    }
   }
 
   async pruneExpired(now = Date.now()): Promise<void> {

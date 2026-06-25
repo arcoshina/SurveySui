@@ -30,12 +30,14 @@ function getRuntime(): Runtime {
   const rpcUrl = process.env.SUI_RPC_URL ?? 'https://fullnode.testnet.sui.io:443'
   const packageId = process.env.SUI_PACKAGE_ID
   if (!packageId) throw new Error('Missing SUI_PACKAGE_ID')
+  const frontendUrl = process.env.FRONTEND_URL
+  if (!frontendUrl) throw new Error('Missing FRONTEND_URL')
   const suiClient = new SuiClient({ url: rpcUrl })
   const coinQueue = InMemoryCoinLockStore.fromGasConfig(getGasConfig())
   const app = buildApp({
     suiClient,
     packageId,
-    frontendUrl: process.env.FRONTEND_URL,
+    frontendUrl,
     sponsorCoinQueue: coinQueue,
   })
   runtime = { app, suiClient, coinQueue, packageId }

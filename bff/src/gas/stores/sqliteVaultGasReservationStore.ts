@@ -27,19 +27,16 @@ export class SqliteVaultGasReservationStore implements VaultGasReservationStore 
     if (n <= 0) return
     const db = getDbClient()
     const minCreated = now - VAULT_GAS_RESERVATION_TTL_MS
-    const rows = await db.execute({
-      sql: `SELECT rowid FROM vault_gas_reservation
-            WHERE vault_id = ? AND created_at > ?
-            ORDER BY created_at ASC LIMIT ?`,
+    // 單句刪除最舊 n 筆未過期預留（消除 N+1）：子查詢以 created_at ASC + LIMIT 選列。
+    await db.execute({
+      sql: `DELETE FROM vault_gas_reservation
+            WHERE rowid IN (
+              SELECT rowid FROM vault_gas_reservation
+              WHERE vault_id = ? AND created_at > ?
+              ORDER BY created_at ASC LIMIT ?
+            )`,
       args: [vaultId, minCreated, n],
     })
-    for (const row of rows.rows) {
-      const rowid = (row as unknown as { rowid: number }).rowid
-      await db.execute({
-        sql: `DELETE FROM vault_gas_reservation WHERE rowid = ?`,
-        args: [rowid],
-      })
-    }
   }
 
   async pruneExpired(now = Date.now()): Promise<void> {

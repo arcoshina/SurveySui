@@ -290,8 +290,8 @@ export default function ResultsPage() {
   useEffect(() => {
     if (surveyMeta?.encryptAnswers === false && questions && events && schemaHashStr) {
       try {
-        const { responses } = decodeAllPlainResponses(events, questions, schemaHashStr)
-        const s = aggregateStats(responses, events.length)
+        const { responses, schemaMismatch } = decodeAllPlainResponses(events, questions, schemaHashStr)
+        const s = aggregateStats(responses, events.length, schemaMismatch)
         setStats(s)
         setDecryptedResponses(responses)
       } catch (err) {

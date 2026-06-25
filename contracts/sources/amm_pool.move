@@ -168,6 +168,7 @@ public fun register_canonical_pool_for_test(
     config.canonical_pool_id = option::some(object::id(pool));
 }
 public fun effective(fee: &FeeConfig): u64 {
+    // bps 截斷為刻意設計:有效費率向下取整,零頭不收。下游 royalty 亦以 floor 計費。
     fee.total_fee_bps * fee.discount_bps / 10_000
 }
 public fun set_fee_config(

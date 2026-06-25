@@ -67,7 +67,11 @@ export async function countOnChainSponsoredTx(params: {
   console.log(`[SponsorLedger] Querying chain for sender: ${normalizedSender}, sponsor: ${normalizedSponsor}`)
 
   try {
-    while (hasNextPage && pagesPolled < 5) {
+    // 分頁上限 7 頁 × limit 50 = 最多掃 350 筆交易。
+    // 權衡：超過 350 筆的 sender 會在此截斷，導致贊助計數被低估；
+    // 我們接受此成本以控制 RPC 次數與延遲（低估只會放寬額度，不會超收，
+    // 屬 O2 低信心觀察，需極大量交易才觸發）。
+    while (hasNextPage && pagesPolled < 7) {
       const res = await suiClient.queryTransactionBlocks({
         filter: {
           FromAddress: normalizedSender,

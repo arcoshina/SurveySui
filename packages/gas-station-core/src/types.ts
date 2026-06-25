@@ -9,9 +9,9 @@ export interface AcquiredGasCoin {
 
 export interface CoinLockStore {
   acquire(suiClient: SuiClient, owner: string, minBalanceMist: bigint): Promise<AcquiredGasCoin>
-  release(coinObjectId: string): void
+  release(coinObjectId: string): Promise<void>
   /** Drop cached coin metadata and release any lock (e.g. after dry-run failure). */
-  invalidateCoin(coinObjectId: string): void
+  invalidateCoin(coinObjectId: string): Promise<void>
   getLockedCoinIds(now?: number): Set<string>
   isLocked(coinObjectId: string, now?: number): boolean
 }

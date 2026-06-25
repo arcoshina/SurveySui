@@ -1,3 +1,5 @@
+// 即時票券簽章原語（一次性票券 / 匿名投票預留機制）。
+// 目前 fail-closed：/api/ticket/issue 未在 app.ts 掛載，此函式不會被生產路徑呼叫；保留供未來方案使用。
 import { bcs } from '@mysten/sui/bcs'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 export const RealTimeTicketPayload = bcs.struct('RealTimeTicketPayload', {

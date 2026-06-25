@@ -7,7 +7,8 @@ import { registerAuthRoutes } from './auth/handler.js'
 import { registerGasRoutes } from './gas/handler.js'
 import type { SponsorCoinQueue } from './gas/sponsorCoinQueue.js'
 import { registerPassRoutes } from './pass/handler.js'
-import { registerTicketRoutes } from './pass/ticket_handler.js'
+// 即時票券簽發（一次性票券 / 匿名投票預留機制）目前 fail-closed，不對外掛載（見下方 buildApp）。
+// import { registerTicketRoutes } from './pass/ticket_handler.js'
 import { registerAdminRevocationRoutes } from './security/revocation_handler.js'
 import { registerImageProxyRoutes } from './security/imageProxy.js'
 
@@ -38,7 +39,6 @@ export function buildApp(deps: BffAppDeps): BffApp {
     '*',
     cors({
       origin: (origin) => {
-        if (!deps.frontendUrl) return origin || '*'
         return allowed.includes(origin) ? origin : null
       },
       credentials: true,
@@ -63,7 +63,9 @@ export function buildApp(deps: BffAppDeps): BffApp {
     coinQueue: deps.sponsorCoinQueue,
   })
   registerPassRoutes(app, { suiClient: deps.suiClient })
-  registerTicketRoutes(app, { suiClient: deps.suiClient })
+  // 即時票券簽發 fail-closed：匿名投票方案尚未規劃，後端不應簽發。/api/ticket/issue 不掛載（回 404）。
+  // M5 併發超賣競態已於 ticket_handler 修復（ticket slot 原子預留）；未來重新啟用只需移除此註解與上方 import。
+  // registerTicketRoutes(app, { suiClient: deps.suiClient })
 
   return app
 }

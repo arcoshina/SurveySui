@@ -141,7 +141,7 @@ export async function fetchActivePass(
   }
 
   const attempt = async (): Promise<SurveyPassData | null> => {
-    console.log('[fetchActivePass] start', { userAddress, registryId })
+    if (import.meta.env.DEV) console.log('[fetchActivePass] start', { userAddress, registryId })
 
     // 1. Fetch NullifierRegistry to get the passes Table object ID
     const registryRes = await suiClient.getObject({
@@ -165,7 +165,7 @@ export async function fetchActivePass(
       console.warn('[fetchActivePass] step1: passes table ID not found in NullifierRegistry fields', registryFields)
       return null
     }
-    console.log('[fetchActivePass] step1 ok', { tableId })
+    if (import.meta.env.DEV) console.log('[fetchActivePass] step1 ok', { tableId })
 
     // 2. Query the passes Table dynamic field using the user's address as Key
     const tableRes = await suiClient.getDynamicFieldObject({
@@ -184,7 +184,7 @@ export async function fetchActivePass(
       })
       return null
     }
-    console.log('[fetchActivePass] step2 ok', { dfData: tableRes.data })
+    if (import.meta.env.DEV) console.log('[fetchActivePass] step2 ok', { dfData: tableRes.data })
 
     // 3. Extract the SurveyPass object ID from the dynamic field value
     const content = tableRes.data.content
@@ -219,7 +219,7 @@ export async function fetchActivePass(
             createdAt: Number(fields.created_at ?? 0),
             escapeClawbackMist: BigInt(fields.escape_clawback_mist ?? 0),
           }
-          console.log('[fetchActivePass] step4 ok — returning pass', result)
+          if (import.meta.env.DEV) console.log('[fetchActivePass] step4 ok — returning pass', result)
           return result
         }
         console.warn('[fetchActivePass] step4: pass object fetched but content invalid', passRes)

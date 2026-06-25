@@ -60,6 +60,8 @@ const EGasCompTooLow: u64 = 31;
 const EVaultAlreadyHasSurvey: u64 = 32;
 const EDeadlineTooFar: u64 = 33;
 const EGraceTooLong: u64 = 34;
+const EBudgetOverflow: u64 = 35;
+const U64_MAX_AS_U128: u128 = 18446744073709551615;
 const AUTH_PASS: u8 = 0;
 const AUTH_TICKET: u8 = 1;
 const CLAIM_MODE_PASS_AUDIENCE: u8 = 0;
@@ -147,11 +149,9 @@ public fun create_for_testing(
     assert!(per_response >= 1, EInvalidRewardConfig);
     assert!(repeat_max_times >= 1, EInvalidRewardConfig);
     let per_response_sui = gas_compensation_amount;
-    let required_gas = if (repeat_reward > 0) {
-        max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
-    } else {
-        max_responses * (per_response_sui + ticket_fee)
-    };
+    let required_gas = required_gas_for(
+        max_responses, repeat_reward, repeat_max_times, per_response_sui, ticket_fee,
+    );
     assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
     SurveyVault {
         id: object::new(ctx),
@@ -226,6 +226,11 @@ fun count_allowlist_hits(submitted: &vector<vector<u8>>, allowlist: &vector<vect
     hits
 }
 
+/// 僅做 allowlist 比對(命中數 ≥ match_threshold),刻意「不」對 attribute_nullifiers
+/// 去重——去重由 credential nullifier 機制承擔:呼叫端 claim 必先過 write_pass_nullifiers,
+/// 將 Pass 的 credential_keys(mint 時經 assert_non_empty_nullifiers 強制非空、且由
+/// NullifierRegistry 全域唯一)scoped 寫入 used_nullifiers。故同一身分無法跨地址各鑄一張
+/// Pass 重放 attribute 證明;本函式與 write_pass_nullifiers 為「資格比對 + 去重」的互補兩步。
 fun audience_ok(survey: &Survey, submitted: &vector<vector<u8>>): bool {
     let allowlist = survey_registry::allowed_nullifiers(survey);
     if (vector::is_empty(&allowlist)) {
@@ -469,6 +474,9 @@ public fun claim<Nft: key>(
         ),
         EInvalidPass,
     );
+    // 去重與資格比對分工:write_pass_nullifiers 先以 Pass 的 credential_keys 落帳去重
+    // (credential nullifier mint 時非空且全域唯一),audience_ok 再驗 attribute_nullifiers
+    // 命中 allowlist。兩者互補,故 audience_ok 無須另行寫入 attribute_nullifiers。
     if (use_pass && pass_satisfies_step1a(survey, pass, clock)) {
         write_pass_nullifiers(vault, pass, ctx);
     };
@@ -821,11 +829,9 @@ public fun create_empty(
     assert!(purge_grace_ms <= DEFAULT_PURGE_GRACE_MS, EGraceTooLong);
     let _ = storage_compensation_amount;
     let per_response_sui = gas_compensation_amount;
-    let required_gas = if (repeat_reward > 0) {
-        max_responses * (1 + repeat_max_times) * (per_response_sui + ticket_fee)
-    } else {
-        max_responses * (per_response_sui + ticket_fee)
-    };
+    let required_gas = required_gas_for(
+        max_responses, repeat_reward, repeat_max_times, per_response_sui, ticket_fee,
+    );
     assert!(coin::value(&gas_coin) >= required_gas, EInsufficientGasBalance);
     SurveyVault {
         id: object::new(ctx),
@@ -862,12 +868,33 @@ public fun deposit_existing_ssr(
     assert!(!vault.fee_paid, EFeeAlreadyPaid);
     balance::join(&mut vault.balance, coin::into_balance(ssr_coin));
 }
+fun required_gas_for(
+    max_responses: u64,
+    repeat_reward: u64,
+    repeat_max_times: u64,
+    per_response_sui: u64,
+    ticket_fee: u64,
+): u64 {
+    // u128 中介避免三重 u64 連乘溢位以「通用算術錯誤」abort;溢位時改回報專屬 EBudgetOverflow。
+    let multiplier = if (repeat_reward > 0) { 1u128 + (repeat_max_times as u128) } else { 1u128 };
+    let per_unit = (per_response_sui as u128) + (ticket_fee as u128);
+    let total = (max_responses as u128) * multiplier * per_unit;
+    assert!(total <= U64_MAX_AS_U128, EBudgetOverflow);
+    total as u64
+}
 fun reward_budget(vault: &SurveyVault): u64 {
-    vault.per_response * vault.max_responses
-        + vault.repeat_reward * vault.max_responses * vault.repeat_max_times
+    let base = (vault.per_response as u128) * (vault.max_responses as u128);
+    let repeat = (vault.repeat_reward as u128)
+        * (vault.max_responses as u128)
+        * (vault.repeat_max_times as u128);
+    let total = base + repeat;
+    assert!(total <= U64_MAX_AS_U128, EBudgetOverflow);
+    total as u64
 }
 fun royalty_on_budget(budget: u64, effective_fee_bps: u64): u64 {
     let product = (budget as u128) * (effective_fee_bps as u128);
+    // 協議費向下取整(floor):零頭刻意不向發起者收取。極小 budget 時 fee 可為 0,
+    // 屬設計取捨而非 bug,毋須改為無條件進位。
     (product / 10_000) as u64
 }
 public fun merge_balances(
@@ -896,6 +923,9 @@ public fun split_fee_to_treasury(
     let budget = reward_budget(vault);
     let effective_fee_bps = amm_pool::effective(amm_pool::fee_config(pool));
     let fee = royalty_on_budget(budget, effective_fee_bps);
+    // 償付斷言:餘額須同時覆蓋協議費與全額獎勵預算,確保扣費後仍 >= budget,
+    // 避免發起者開啟資金不足的問卷讓填答者白白浪費 gas。與 merge_balances 同一不變式。
+    assert!(balance::value(&vault.balance) >= budget + fee, EInsufficientVaultBalance);
     if (fee > 0) {
         let fee_coin = coin::from_balance(
             balance::split(&mut vault.balance, fee),
@@ -998,6 +1028,10 @@ public fun add_answer_for_testing(vault: &mut SurveyVault, payload: vector<u8>) 
         claimed_at_ms: 0,
     });
     vault.answers_count = idx + 1;
+}
+#[test_only]
+public fun reward_budget_for_testing(vault: &SurveyVault): u64 {
+    reward_budget(vault)
 }
 
 

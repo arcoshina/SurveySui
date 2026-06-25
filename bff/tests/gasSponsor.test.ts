@@ -9,6 +9,7 @@ import { __resetGasConfigCache, getGasConfig } from '../src/gas/gasConfig.js'
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
 import { __resetPlatformSponsorLedger, getPlatformSponsorCount } from '../src/gas/platformSponsorLedger.js'
 import { tryReserveVaultGasSlot, __resetVaultGasLedger } from '../src/gas/vaultGasLedger.js'
+import * as sponsorAuth from '../src/gas/sponsorAuth.js'
 import { signTicket } from '../src/auth/ticket.js'
 import { setupFakeD1 } from './helpers/fakeD1.js'
 
@@ -934,9 +935,10 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
         return {
           data: {
             objectId: id,
+            type: `${packageId}::survey_pass::SurveyPass`,
             content: {
               dataType: 'moveObject',
-              fields: { credential_sources: [2] },
+              fields: { credential_sources: [2], owner: userAddress },
             },
           },
         }
@@ -985,6 +987,116 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     expect(response.statusCode).toBe(403)
     expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
+  })
+
+  // H2 回歸：platform tier 檢查須驗證 pass 由 sender 持有，不得借用他人高 tier pass。
+  const buildPlatformClaimTxBytes = async (passId: string) => {
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId,
+      }),
+    })
+    tx.setSender(userAddress)
+    return Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
+  }
+
+  // 池為空的 vault mock（觸發平台代付 fallback），其餘物件走預設。
+  const mockPlatformPassObject = (passId: string, fields: Record<string, unknown>, type?: string) => {
+    mockSuiClient.getObject.mockImplementation(async ({ id }: { id: string }) => {
+      if (id === passId) {
+        return {
+          data: {
+            objectId: id,
+            type: type ?? `${packageId}::survey_pass::SurveyPass`,
+            content: { dataType: 'moveObject', fields },
+          },
+        }
+      }
+      return {
+        data: {
+          objectId: id,
+          content: {
+            dataType: 'moveObject',
+            fields: {
+              gas_balance: '0',
+              gas_compensation_amount: '5000000',
+              storage_compensation_amount: '0',
+              max_inline_answer_bytes: '6144',
+            },
+          },
+        },
+      }
+    })
+  }
+
+  it('rejects platform claim when passId points to a high-tier pass owned by someone else (H2)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    process.env.MIN_PLATFORM_SPONSOR_TIER = '2'
+    __resetGasConfigCache()
+
+    const borrowedPassId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    const otherOwner = '0x00000000000000000000000000000000000000000000000000000000000000ff'
+    // 攻擊者錢包 (userAddress) 把 passId 指向他人持有、具 World ID (tier 2) 的高 tier pass。
+    mockPlatformPassObject(borrowedPassId, { credential_sources: [5], owner: otherOwner })
+
+    const txBytes = await buildPlatformClaimTxBytes(borrowedPassId)
+    const response = await inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
+    expect(mockSuiClient.executeTransactionBlock).not.toHaveBeenCalled()
+  })
+
+  it('rejects platform claim when passId points to a non-SurveyPass object (H2 type check)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    process.env.MIN_PLATFORM_SPONSOR_TIER = '1'
+    __resetGasConfigCache()
+
+    const fakePassId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    // owner 正確、tier 足夠，但物件型別不是 SurveyPass（偽造剛好帶 credential_sources 欄位的物件）。
+    mockPlatformPassObject(
+      fakePassId,
+      { credential_sources: [5], owner: userAddress },
+      `${packageId}::evil::FakePass`
+    )
+
+    const txBytes = await buildPlatformClaimTxBytes(fakePassId)
+    const response = await inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
+  })
+
+  it('allows platform claim when sender owns a sufficient-tier pass (H2 happy path)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    process.env.MIN_PLATFORM_SPONSOR_TIER = '2'
+    __resetGasConfigCache()
+
+    const ownPassId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    mockPlatformPassObject(ownPassId, { credential_sources: [5], owner: userAddress })
+
+    const txBytes = await buildPlatformClaimTxBytes(ownPassId)
+    const response = await inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toHaveProperty('sponsorSignature')
   })
 
   it('rejects vault-insufficient claim with 409 vault_gas_insufficient when platform fallback disabled (default)', async () => {
@@ -1266,6 +1378,23 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     // 被斷言擋下：不廣播、不計平台額度。
     expect(mockSuiClient.executeTransactionBlock).not.toHaveBeenCalled()
     expect(await getPlatformSponsorCount(userAddress)).toBe(0)
+  })
+
+  it('M3: platform overflow whose signed budget is unparseable (null) is rejected fail-closed (422)', async () => {
+    // budget 解析為 null（欄位缺失/非數值）時無法確認上限 → fail-closed 一律拒絕。
+    mockVault('50000000', '50000000')
+    expect(await tryReserveVaultGasSlot(M5_VAULT_ID, 1)).toBe(true)
+    const spy = vi.spyOn(sponsorAuth, 'gasBudgetFromTransactionData').mockReturnValue(null)
+    try {
+      const res = await sponsorThenExecute(await buildClaimTxBytes())
+      expect(res.statusCode).toBe(422)
+      expect(JSON.parse(res.payload).error).toBe('gas_exceeds_compensation')
+      // 不廣播、不計平台額度。
+      expect(mockSuiClient.executeTransactionBlock).not.toHaveBeenCalled()
+      expect(await getPlatformSponsorCount(userAddress)).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

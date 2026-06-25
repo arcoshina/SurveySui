@@ -61,6 +61,8 @@ interface GasExecuteRequestBody {
 }
 
 const DYNAMIC_GAS_CAP_MULTIPLIER = 3n
+// 樣本數超過此門檻才丟棄排序後最高的一筆以濾除離群峰值；否則樣本太少全留
+const MIN_SAMPLES_FOR_TRIM = 2
 
 export { __useInMemoryPassReservationsForTests }
 export interface GasHealthResponse {
@@ -118,7 +120,8 @@ export async function calculateDynamicGasCompensation(
     let maxGas = minAmount
     if (samples.length > 0) {
       samples.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-      const trimmed = samples.length > 2 ? samples.slice(0, samples.length - 1) : samples
+      const trimmed =
+        samples.length > MIN_SAMPLES_FOR_TRIM ? samples.slice(0, samples.length - 1) : samples
       const dynamicPeak = trimmed[trimmed.length - 1] ?? minAmount
       const hardCap = minAmount * DYNAMIC_GAS_CAP_MULTIPLIER
       maxGas = dynamicPeak < hardCap ? dynamicPeak : hardCap
@@ -481,16 +484,24 @@ export function registerGasRoutes(
           vaultGasReservedId = vaultId
         } else {
           // 平台代付:斷言簽出的 gas budget 不超過平台單筆上限,杜絕沿用 vault 寬預算的超額。
+          // M3:budget 解析為 null(欄位缺失/非數值)時無法確認上限,視同驗證失敗一律拒絕
+          // (fail-closed),不可放行;正經走 /sponsor 出來的 bytes budget 必非 null。
           const signedBudget = gasBudgetFromTransactionData(sponsoredTxBytes)
-          if (signedBudget !== null && signedBudget > getGasConfig().maxPlatformClaimGasMist) {
+          if (signedBudget === null || signedBudget > getGasConfig().maxPlatformClaimGasMist) {
             return c.json(
               {
                 error: 'gas_exceeds_compensation',
-                message: `Signed gas budget ${signedBudget} exceeds platform claim cap ${getGasConfig().maxPlatformClaimGasMist}; re-sponsor required`,
+                message:
+                  signedBudget === null
+                    ? 'Signed gas budget is missing or unparseable; re-sponsor required'
+                    : `Signed gas budget ${signedBudget} exceeds platform claim cap ${getGasConfig().maxPlatformClaimGasMist}; re-sponsor required`,
               },
               422
             )
           }
+          // M2(刻意設計,非缺陷):此遞增是廣播前的最後一個 await,中間無任何會拋例外的步驟。
+          // 一旦遞增成功,後續失敗一律「不回退」每日計數——因為失敗交易 sponsor 仍已付 gas
+          // (見下方 failure 與 catch 分支)。回退反而會讓人用反覆 abort 繞過每日額度。
           const inc = await tryIncrementPlatformSponsorCount(sender, todayUtcDate())
           if (!inc.ok) {
             return c.json(
@@ -511,6 +522,8 @@ export function registerGasRoutes(
         options: { showEffects: true },
       })
       if (result.effects?.status.status === 'failure') {
+        // 交易已上鏈、僅 Move 執行 abort:Sui 上 sponsor 仍已付 gas,故平台每日計數
+        // 「刻意不釋放」(計入額度才正確),只釋放尚未消耗的在途預留。
         if (passReserved) await releasePassReservation(sender, sponsorAddress, 1).catch(() => undefined)
         if (vaultGasReservedId) await releaseVaultGasSlot(vaultGasReservedId, 1).catch(() => undefined)
         return c.json(
@@ -528,13 +541,16 @@ export function registerGasRoutes(
         if (getGasStationMode() === 'do') {
           void releaseGasStationCoins(spentCoinIds).catch(() => undefined)
         } else {
-          for (const id of spentCoinIds) coinQueue.invalidateCoin(id)
+          for (const id of spentCoinIds) await coinQueue.invalidateCoin(id)
         }
       }
       // vault 代付已上鏈,gas_balance 隨之下降接手計數;立即釋放在途預留(TTL 為安全網)。
       if (vaultGasReservedId) await releaseVaultGasSlot(vaultGasReservedId, 1).catch(() => undefined)
       return c.json({ digest: result.digest })
     } catch (err) {
+      // 平台每日計數遞增後唯一可能拋例外者為 executeTransactionBlock 本身,此時交易
+      // 已送至節點(逾時/連線中斷的模糊地帶),無法確定 gas 未被消耗,故「刻意不回退」
+      // 每日計數,避免開出反覆 abort 繞過額度的後門;僅釋放尚未消耗的在途預留。
       if (passReserved) {
         await releasePassReservation(sender, sponsorAddress, 1).catch(() => undefined)
       }

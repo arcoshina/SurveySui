@@ -85,6 +85,7 @@ const dashboard: DashboardDict = {
   respondentHeader: '참여자 (Respondent)',
   submittedTimeHeader: '제출 시간 (Submitted Time)',
   decryptFailedCount: (n: number) => `${n}건의 답변을 복호화하지 못했습니다 (키 불일치 또는 데이터 손상).`,
+  schemaMismatchCount: (n: number) => `${n}건의 답변이 질문 구성이 일치하지 않아 통계에서 제외되었습니다.`,
   closeSuccess: '설문조사가 정상적으로 종료되었으며, 남은 SSR은 지갑으로 반환되었습니다.',
   btnClosed: '종료됨',
   btnClosing: '종료 중…',

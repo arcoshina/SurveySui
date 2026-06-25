@@ -84,7 +84,7 @@ export class GasStationDO implements DurableObject {
       // Racing with acquire is benign — worst case the next acquire re-fetches inventory.
       const ids = Array.isArray(releaseBody.coinObjectIds) ? releaseBody.coinObjectIds : []
       for (const id of ids) {
-        if (typeof id === 'string') this.coinStore.invalidateCoin(id)
+        if (typeof id === 'string') await this.coinStore.invalidateCoin(id)
       }
       this.metrics.lockedCoinCount = this.coinStore.getLockedCoinIds().size
       return Response.json({ released: ids.length })

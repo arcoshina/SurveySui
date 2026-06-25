@@ -141,7 +141,20 @@ describe('World ID — Tier 2 (Orb only)', () => {
     // T-W3
     describe('POST /auth/worldid/verify', () => {
       it('signs a Tier 2 ticket (source=5) for a valid Orb proof', async () => {
-        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 })))
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            async () =>
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  nullifier: '0xnull-orb',
+                  results: [{ identifier: 'proof_of_human', success: true, nullifier: '0xnull-orb' }],
+                }),
+                { status: 200 }
+              )
+          )
+        )
 
         const res = await post('/auth/worldid/verify', { owner: OWNER, payload: orbPayload('0xnull-orb') })
 
@@ -153,6 +166,42 @@ describe('World ID — Tier 2 (Orb only)', () => {
         expect(data.nullifiers).toHaveLength(1)
         const expected = Buffer.from(computeWorldIdPrimaryNullifier('0xnull-orb')).toString('hex')
         expect(data.nullifiers[0]).toBe(expected)
+      })
+
+      // T-W3b: fail-closed — 200 但 body 缺 success 不得放行(H1 第 1 點回歸)
+      it('rejects a 200 response that lacks success (fail-closed) and does NOT issue a ticket', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })))
+
+        const res = await post('/auth/worldid/verify', { owner: OWNER, payload: orbPayload('0xnull-orb') })
+
+        expect(res.status).toBe(401)
+      })
+
+      // T-W3c: nullifier 取自 API 驗證值而非前端 payload(H1 第 2 點回歸)
+      it('uses the API-verified nullifier, not the client-supplied payload nullifier', async () => {
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            async () =>
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  results: [{ identifier: 'proof_of_human', success: true, nullifier: '0xVERIFIED' }],
+                }),
+                { status: 200 }
+              )
+          )
+        )
+
+        const res = await post('/auth/worldid/verify', { owner: OWNER, payload: orbPayload('0xATTACKER') })
+
+        expect(res.status).toBe(200)
+        const data = (await res.json()) as any
+        expect(data.nullifiers).toHaveLength(1)
+        const expected = Buffer.from(computeWorldIdPrimaryNullifier('0xVERIFIED')).toString('hex')
+        expect(data.nullifiers[0]).toBe(expected)
+        const attacker = Buffer.from(computeWorldIdPrimaryNullifier('0xATTACKER')).toString('hex')
+        expect(data.nullifiers[0]).not.toBe(attacker)
       })
 
       it('returns 403 for a non-Orb (device/selfie) proof and does NOT issue a ticket', async () => {

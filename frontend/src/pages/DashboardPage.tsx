@@ -344,7 +344,8 @@ function getAnswerText(
       )
         return
       try {
-        console.log('[DashboardPage] Querying on-chain registry events to resolve survey_id...')
+        if (import.meta.env.DEV)
+          console.log('[DashboardPage] Querying on-chain registry events to resolve survey_id...')
         let cursor: EventId | null = null
         let hit: SuiEvent | undefined = undefined
         let pageCount = 0
@@ -734,12 +735,12 @@ function getAnswerText(
   useEffect(() => {
     if (surveyMeta?.encryptAnswers === false && questions && events && schemaHashStr) {
       try {
-        const { responses } = decodeAllPlainResponses(
+        const { responses, schemaMismatch } = decodeAllPlainResponses(
           events,
           questions,
           schemaHashStr
         )
-        const s = aggregateStats(responses, events.length)
+        const s = aggregateStats(responses, events.length, schemaMismatch)
         setStats(s)
         setDecryptedResponses(responses)
         setDecryptStatus('done')
@@ -805,13 +806,13 @@ function getAnswerText(
 
       const kp = await deriveCreatorKeyPair(sigBytes, salt)
       setDecryptStatus('decrypting')
-      const { responses } = await decryptAllResponses(
+      const { responses, schemaMismatch } = await decryptAllResponses(
         events,
         kp,
         questions || [],
         schemaHashStr || ''
       )
-      const s = aggregateStats(responses, events.length)
+      const s = aggregateStats(responses, events.length, schemaMismatch)
       setStats(s)
       setDecryptedResponses(responses)
       setDecryptStatus('done')
@@ -1848,6 +1849,12 @@ function getAnswerText(
           {stats && stats.failed_count > 0 && (
             <p className="text-xs text-amber-600">
               {t.decryptFailedCount(stats.failed_count)}
+            </p>
+          )}
+
+          {stats && stats.schema_mismatch_count > 0 && (
+            <p className="text-xs text-amber-600">
+              {t.schemaMismatchCount(stats.schema_mismatch_count)}
             </p>
           )}
         </section>

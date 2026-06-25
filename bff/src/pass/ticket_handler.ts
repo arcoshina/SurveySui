@@ -3,7 +3,7 @@ import type { SuiClient } from '@mysten/sui/client'
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify'
 import { randomBytes } from 'node:crypto'
 import { issueRealTimeTicket } from '../auth/ticket_issue.js'
-import { hasLiveTicketSlot, insertTicketSlot } from './realtimeTicketSlotStore.js'
+import { getRealtimeTicketSlotStore } from './stores/realtimeTicketSlotStore.js'
 import { normalizeAddress } from '@surveysui/gas-station-core'
 
 interface TicketIssueRequestBody {
@@ -40,6 +40,8 @@ export function buildTicketAuthMessage(vaultId: string, signedTimestamp: number)
   return `surveysui:issue-ticket:${vaultId}:${signedTimestamp}`
 }
 
+// 一次性票券 / 匿名投票預留機制：目前 fail-closed，未在 app.ts 掛載（後端不應在方案規劃前簽發）。
+// 此函式保留作未來預留；M5 併發超賣競態已以 ticket slot 原子預留（getRealtimeTicketSlotStore）修復。
 export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }): void {
   app.post('/api/ticket/issue', async (c) => {
     const { vaultId, surveyId, walletA, signedTimestamp, signature } = await c.req
@@ -64,6 +66,8 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
       )
     }
 
+    let slotReserved = false
+    let committed = false
     try {
       // 1. 時間戳新鮮度（防範重放）
       if (Math.abs(Date.now() - Number(signedTimestamp)) > SIGNATURE_TTL_MS) {
@@ -85,8 +89,13 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
         )
       }
 
-      // 3. 防重複申請 Ticket 檢查（D1 slot，TTL 過期自動釋放）
-      if (await hasLiveTicketSlot(walletA, vaultId)) {
+      // 3. 原子預留 ticket slot（取代 check-then-insert；單句寫入杜絕併發超賣競態 M5）。
+      //    slot 與後續 ticket 共用同一 expiresAtMs，確保到期一致。
+      const issuedAt = Date.now()
+      const expiresAtMs = issuedAt + SIGNATURE_TTL_MS
+      const slotStore = getRealtimeTicketSlotStore()
+      const reserved = await slotStore.tryReserve(walletA, vaultId, issuedAt, expiresAtMs)
+      if (!reserved) {
         return c.json(
           {
             error: 'ticket_already_issued',
@@ -95,6 +104,7 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
           400
         )
       }
+      slotReserved = true
 
       // 4. 讀取鏈上 Vault 設定
       const vaultObj = await deps.suiClient.getObject({
@@ -186,11 +196,8 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
         }
       }
 
-      // 7. 簽發 Ticket
+      // 7. 簽發 Ticket（slot 已於步驟 3 預留，沿用同一 expiresAtMs）
       const ephemeralNullifier = new Uint8Array(randomBytes(32))
-      // Ticket 5 分鐘有效
-      const expiresAtMs = Date.now() + SIGNATURE_TTL_MS
-
       const ticket = await issueRealTimeTicket(
         vaultId,
         surveyId,
@@ -199,10 +206,8 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
         expiresAtMs
       )
 
-      // 8. 寫入 D1 slot，並回傳
-      const issuedAt = Date.now()
-      await insertTicketSlot(walletA, vaultId, issuedAt, expiresAtMs)
-
+      // 8. 簽發成功，保留預留並回傳。
+      committed = true
       return c.json(ticket)
     } catch (err) {
       console.error('[Ticket] issuance failed', err)
@@ -210,6 +215,11 @@ export function registerTicketRoutes(app: Hono, deps: { suiClient: SuiClient }):
         { error: 'ticket_issuance_failed', message: errorMessage(err) || 'Failed to issue ticket' },
         500
       )
+    } finally {
+      // 預留後任一失敗/早退路徑（vault/survey/claim_mode/餘額/資格/簽票丟錯）釋放 slot，使用者可立即重試。
+      if (slotReserved && !committed) {
+        await getRealtimeTicketSlotStore().release(walletA, vaultId).catch(() => undefined)
+      }
     }
   })
 }

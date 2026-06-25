@@ -1,6 +1,7 @@
 import type { DurableObjectStorage } from '@cloudflare/workers-types'
 import type { SuiClient, CoinStruct } from '@mysten/sui/client'
 import type { AcquiredGasCoin, CoinLockStore } from '@surveysui/gas-station-core'
+import { pickCoin, fetchSuiCoins } from '@surveysui/gas-station-core'
 
 type LockEntry = { expiresAt: number }
 
@@ -44,21 +45,21 @@ export class DurableObjectCoinLockStore implements CoinLockStore {
     return ids
   }
 
-  release(coinObjectId: string): void {
+  async release(coinObjectId: string): Promise<void> {
     delete this.state.locks[coinObjectId]
-    void this.persist()
+    await this.persist()
   }
 
-  invalidateCoin(coinObjectId: string): void {
-    this.release(coinObjectId)
+  async invalidateCoin(coinObjectId: string): Promise<void> {
+    delete this.state.locks[coinObjectId]
     this.state.cachedCoins = this.state.cachedCoins.filter((c) => c.coinObjectId !== coinObjectId)
     this.state.lastInventoryFetch = 0
-    void this.persist()
+    await this.persist()
   }
 
-  private lock(coinObjectId: string, now = Date.now()): void {
+  private async lock(coinObjectId: string, now = Date.now()): Promise<void> {
     this.state.locks[coinObjectId] = { expiresAt: now + this.lockTtlMs }
-    void this.persist()
+    await this.persist()
   }
 
   private pruneExpired(now: number): void {
@@ -80,29 +81,11 @@ export class DurableObjectCoinLockStore implements CoinLockStore {
     ) {
       return this.state.cachedCoins
     }
-    const all: CoinStruct[] = []
-    let cursor: string | null | undefined = undefined
-    do {
-      const res = await suiClient.getCoins({ owner, coinType: '0x2::sui::SUI', cursor })
-      all.push(...res.data)
-      cursor = res.hasNextPage ? res.nextCursor : null
-    } while (cursor)
+    const all = await fetchSuiCoins(suiClient, owner)
     this.state.cachedCoins = all
     this.state.lastInventoryFetch = now
     await this.persist()
     return all
-  }
-
-  private pickCoin(coins: CoinStruct[], minBalanceMist: bigint, now: number): CoinStruct | null {
-    const eligible = coins
-      .filter((c) => !this.isLocked(c.coinObjectId, now))
-      .filter((c) => BigInt(c.balance) >= minBalanceMist)
-      .sort((a, b) => {
-        const balA = BigInt(a.balance)
-        const balB = BigInt(b.balance)
-        return balA > balB ? -1 : balA < balB ? 1 : 0
-      })
-    return eligible[0] ?? null
   }
 
   async acquire(
@@ -129,7 +112,7 @@ export class DurableObjectCoinLockStore implements CoinLockStore {
         throw lastError
       }
 
-      const picked = this.pickCoin(coins, minBalanceMist, now)
+      const picked = pickCoin(coins, (id, n) => this.isLocked(id, n), minBalanceMist, now)
       if (!picked) {
         lastError = new Error('sponsor_coin_unavailable')
         if (attempt < this.acquireRetries) {
@@ -139,7 +122,7 @@ export class DurableObjectCoinLockStore implements CoinLockStore {
         throw lastError
       }
 
-      this.lock(picked.coinObjectId, now)
+      await this.lock(picked.coinObjectId, now)
       return {
         coinObjectId: picked.coinObjectId,
         version: picked.version,

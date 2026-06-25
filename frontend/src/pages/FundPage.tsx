@@ -461,7 +461,8 @@ export default function FundPage() {
       },
       {
         onSuccess: async (result) => {
-          console.log('E2E Debug: signAndExecute onSuccess result:', JSON.stringify(result))
+          if (import.meta.env.DEV)
+            console.log('E2E Debug: signAndExecute onSuccess result:', JSON.stringify(result))
           try {
             type TxBlockResult = Awaited<ReturnType<typeof suiClient.getTransactionBlock>>
             let txResult: TxBlockResult | undefined = (
@@ -518,18 +519,20 @@ export default function FundPage() {
                 const pj = hit.parsedJson as { vault_id?: string; survey_id?: string }
                 vaultId = pj.vault_id ?? null
                 surveyId = pj.survey_id ?? null
-                console.log(
-                  '[FundPage] Successfully extracted vaultId and surveyId from events:',
-                  vaultId,
-                  surveyId
-                )
+                if (import.meta.env.DEV)
+                  console.log(
+                    '[FundPage] Successfully extracted vaultId and surveyId from events:',
+                    vaultId,
+                    surveyId
+                  )
               }
             }
 
             // 2. Fallback to objectChanges (secondary)
             if (!vaultId && txResult.objectChanges) {
               const changes = txResult.objectChanges
-              console.log('E2E Debug: fetched changes fallback:', JSON.stringify(changes))
+              if (import.meta.env.DEV)
+                console.log('E2E Debug: fetched changes fallback:', JSON.stringify(changes))
               vaultId = extractVaultIdFromEffects(changes)
               surveyId = extractSurveyIdFromEffects(changes)
             }
