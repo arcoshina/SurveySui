@@ -7,9 +7,10 @@ import {
   useSignAndExecuteTransaction,
   useSignPersonalMessage,
   useSuiClient,
+  useSuiClientContext,
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
-import type { SuiClient } from '@mysten/sui/client'
+import type { SuiClient, EventId, SuiEvent } from '@mysten/sui/client'
 import {
   aggregateStats,
   decryptAllResponses,
@@ -49,7 +50,19 @@ function getOptionId(opt: unknown): string | null {
   return null
 }
 
-function getOptionVec(opt: any): Uint8Array | null {
+/** survey_registry::SurveyRegistered 事件 parsedJson 中本頁用到的欄位。 */
+type RegisteredEvent = {
+  vault_id?: string
+  survey_id?: string
+  creator?: string
+  question_count?: string | number
+  registered_at_ms?: string | number
+}
+
+/** Sui 物件 moveObject content 的動態 fields 包裝。 */
+type MoveContent = { dataType?: string; fields?: Record<string, unknown> }
+
+function getOptionVec(opt: unknown): Uint8Array | null {
   if (!opt) return null
   if (Array.isArray(opt)) {
     if (opt.length === 0) return null
@@ -61,15 +74,14 @@ function getOptionVec(opt: any): Uint8Array | null {
     }
     return new Uint8Array(opt.map(Number))
   }
-  const vec = opt.fields?.vec || opt.vec
+  const o = opt as { fields?: { vec?: unknown }; vec?: unknown }
+  const vec = o.fields?.vec || o.vec
   if (!Array.isArray(vec) || vec.length === 0) return null
   const first = vec[0]
   if (Array.isArray(first)) {
     return new Uint8Array(first.map(Number))
   } else if (typeof first === 'string') {
     return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
-  } else if (typeof (vec as any) === 'string') {
-    return new Uint8Array((vec as any).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
   }
   return new Uint8Array(vec.map(Number))
 }
@@ -177,7 +189,14 @@ export default function DashboardPage() {
   const suiClient = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
+  const { network } = useSuiClientContext()
+  // 顯式鎖定目標鏈，避免錢包停在其他網路時把交易送錯鏈。
+  const chain = `sui:${network}` as `${string}:${string}`
   const t = useT('dashboard')
+
+  const [refreshCounter, setRefreshCounter] = useState(0)
+  const triggerRefresh = () => setRefreshCounter((prev) => prev + 1)
+
 
   const contentKeyB64 = useMemo(() => {
     let key = location.hash.startsWith('#') ? location.hash.slice(1) : ''
@@ -247,7 +266,7 @@ export default function DashboardPage() {
   // ── 鏈上 survey 物件 ────────────────────────────────────────────────────────
   const [surveyId, setSurveyId] = useState<string | null>(null)
   const [surveyResolveFailed, setSurveyResolveFailed] = useState(false)
-  const [surveyData, setSurveyData] = useState<any>(null)
+  const [surveyData, setSurveyData] = useState<{ content?: MoveContent | null } | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [detailSurveyTitle, setDetailSurveyTitle] = useState<string | null>(null)
   const [surveyMeta, setSurveyMeta] = useState<{
@@ -279,7 +298,11 @@ export default function DashboardPage() {
   const [surveyDetails, setSurveyDetails] = useState<CreatorSurveyDetail[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
 
-function getAnswerText(q: any, val: any, separator: string = ', '): string {
+function getAnswerText(
+  q: { type?: string; options_json?: string[] | null },
+  val: unknown,
+  separator: string = ', '
+): string {
   if (val === undefined || val === null) return ''
   if (q.type === 'single_choice' && q.options_json) {
     const idx = Number(val)
@@ -321,9 +344,10 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
       )
         return
       try {
-        console.log('[DashboardPage] Querying on-chain registry events to resolve survey_id...')
-        let cursor: any = null
-        let hit: any = null
+        if (import.meta.env.DEV)
+          console.log('[DashboardPage] Querying on-chain registry events to resolve survey_id...')
+        let cursor: EventId | null = null
+        let hit: SuiEvent | undefined = undefined
         let pageCount = 0
         do {
           const res = await suiClient.queryEvents({
@@ -334,26 +358,26 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
             limit: 50,
             order: 'descending',
           })
-          hit = res.data.find(
-            (e: any) =>
-              e.parsedJson &&
-              normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(vaultId ?? '')
-          )
+          hit = res.data.find((e) => {
+            const pj = e.parsedJson as RegisteredEvent | undefined
+            return !!pj && normalizeSuiId(pj.vault_id ?? '') === normalizeSuiId(vaultId ?? '')
+          })
           if (hit) break
-          cursor = res.hasNextPage ? res.nextCursor : null
+          cursor = res.hasNextPage ? (res.nextCursor ?? null) : null
           pageCount++
         } while (cursor && pageCount < 10)
 
         if (hit && !cancelled) {
-          const sId = hit.parsedJson.survey_id
+          const sId = (hit.parsedJson as RegisteredEvent).survey_id ?? ''
           setSurveyId((prev) => (prev === sId ? prev : sId))
           const obj = await suiClient.getObject({
             id: sId,
             options: { showContent: true },
           })
           if (obj.data && !cancelled) {
-            setSurveyData((prev: any) =>
-              JSON.stringify(prev) === JSON.stringify(obj.data) ? prev : obj.data
+            const nextData = obj.data as { content?: MoveContent | null }
+            setSurveyData((prev) =>
+              JSON.stringify(prev) === JSON.stringify(nextData) ? prev : nextData
             )
           }
         } else if (!cancelled) {
@@ -376,7 +400,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
     let cancelled = false
     async function loadCreatorSurveys() {
       try {
-        let cursor: any = null
+        let cursor: EventId | null = null
         let mine: Array<{
           vault_id: string
           survey_id: string
@@ -393,22 +417,19 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
             limit: 50,
             order: 'descending',
           })
-          const pageMine = (res.data as any[])
+          const pageMine = res.data
+            .map((e) => e.parsedJson as RegisteredEvent)
             .filter(
-              (e: any) =>
-                normalizeSuiId(e.parsedJson?.creator || '') ===
-                normalizeSuiId(account?.address || '')
+              (pj) => normalizeSuiId(pj.creator || '') === normalizeSuiId(account?.address || '')
             )
-            .map((e: any) => ({
-              vault_id: e.parsedJson.vault_id as string,
-              survey_id: e.parsedJson.survey_id as string,
-              question_count: e.parsedJson.question_count ? Number(e.parsedJson.question_count) : 0,
-              registered_at_ms: e.parsedJson.registered_at_ms
-                ? Number(e.parsedJson.registered_at_ms)
-                : 0,
+            .map((pj) => ({
+              vault_id: String(pj.vault_id ?? ''),
+              survey_id: String(pj.survey_id ?? ''),
+              question_count: pj.question_count ? Number(pj.question_count) : 0,
+              registered_at_ms: pj.registered_at_ms ? Number(pj.registered_at_ms) : 0,
             }))
           mine = [...mine, ...pageMine]
-          cursor = res.hasNextPage ? res.nextCursor : null
+          cursor = res.hasNextPage ? (res.nextCursor ?? null) : null
           pageCount++
         } while (cursor && pageCount < 10)
 
@@ -448,7 +469,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
     return () => {
       cancelled = true
     }
-  }, [account?.address, suiClient])
+  }, [account?.address, suiClient, refreshCounter])
 
   useEffect(() => {
     if (creatorSurveys.length === 0 || !suiClient) {
@@ -490,7 +511,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
             if (isSurveyDeleted && isVaultDeleted) {
               status = 2 // 已銷毀
             } else {
-              const sFields = (surveyObj?.data?.content as any)?.fields
+              const sFields = (surveyObj?.data?.content as MoveContent | undefined)?.fields
               if (sFields) {
                 status = sFields.status !== undefined ? Number(sFields.status) : 0
 
@@ -541,7 +562,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
                 }
               }
 
-              const vFields = (vaultObj?.data?.content as any)?.fields
+              const vFields = (vaultObj?.data?.content as MoveContent | undefined)?.fields
               if (vFields) {
                 claimed_count = vFields.claimed_count !== undefined ? Number(vFields.claimed_count) : 0
                 max_responses = vFields.max_responses !== undefined ? Number(vFields.max_responses) : 0
@@ -600,11 +621,11 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
     return () => {
       cancelled = true
     }
-  }, [creatorSurveys, suiClient])
+  }, [creatorSurveys, suiClient, refreshCounter])
 
   useEffect(() => {
     if (!surveyData) return
-    const fields = surveyData.content?.fields as any
+    const fields = surveyData.content?.fields
     if (!fields) return
 
     let hashBytes = fields.schema_hash ? normalizeBytes(fields.schema_hash) : new Uint8Array(0)
@@ -639,14 +660,14 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
     async function loadQuestions() {
       try {
-        const surveyBlobIdBytes = getOptionVec(fields.survey_blob_id)
+        const surveyBlobIdBytes = getOptionVec(fields?.survey_blob_id)
         let rawContent: Uint8Array
 
         if (surveyBlobIdBytes) {
           const blobId = new TextDecoder().decode(surveyBlobIdBytes)
           rawContent = await downloadFromDecentralizedStorage(blobId)
         } else {
-          const encryptedContentBytes = getOptionVec(fields.encrypted_content)
+          const encryptedContentBytes = getOptionVec(fields?.encrypted_content)
           if (!encryptedContentBytes) {
             throw new Error('Survey content data corrupted')
           }
@@ -714,12 +735,12 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
   useEffect(() => {
     if (surveyMeta?.encryptAnswers === false && questions && events && schemaHashStr) {
       try {
-        const { responses } = decodeAllPlainResponses(
+        const { responses, schemaMismatch } = decodeAllPlainResponses(
           events,
           questions,
           schemaHashStr
         )
-        const s = aggregateStats(responses, events.length)
+        const s = aggregateStats(responses, events.length, schemaMismatch)
         setStats(s)
         setDecryptedResponses(responses)
         setDecryptStatus('done')
@@ -785,13 +806,13 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
       const kp = await deriveCreatorKeyPair(sigBytes, salt)
       setDecryptStatus('decrypting')
-      const { responses } = await decryptAllResponses(
+      const { responses, schemaMismatch } = await decryptAllResponses(
         events,
         kp,
         questions || [],
         schemaHashStr || ''
       )
-      const s = aggregateStats(responses, events.length)
+      const s = aggregateStats(responses, events.length, schemaMismatch)
       setStats(s)
       setDecryptedResponses(responses)
       setDecryptStatus('done')
@@ -914,12 +935,17 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
       return
     }
     signAndExecute(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { transaction: tx as any },
+      { transaction: tx as unknown as Parameters<typeof signAndExecute>[0]['transaction'], chain },
       {
-        onSuccess: () => {
+        onSuccess: async (result) => {
           setCloseStatus('success')
+          try {
+            await suiClient.waitForTransaction({ digest: result.digest })
+          } catch (e) {
+            console.warn('[DashboardPage] waitForTransaction failed:', e)
+          }
           void refetchVault()
+          triggerRefresh()
         },
         onError: (err) => {
           setCloseError(err.message)
@@ -942,11 +968,17 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
         sender: account.address,
       })
       signAndExecute(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { transaction: tx as any },
+        { transaction: tx as unknown as Parameters<typeof signAndExecute>[0]['transaction'], chain },
         {
-          onSuccess: () => {
+          onSuccess: async (result) => {
             setExtendStatus('success')
+            try {
+              await suiClient.waitForTransaction({ digest: result.digest })
+            } catch (e) {
+              console.warn('[DashboardPage] waitForTransaction failed:', e)
+            }
+            void refetchVault()
+            triggerRefresh()
           },
           onError: (err) => {
             setExtendError(err.message)
@@ -999,11 +1031,16 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
       return
     }
     signAndExecute(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { transaction: tx as any },
+      { transaction: tx as unknown as Parameters<typeof signAndExecute>[0]['transaction'], chain },
       {
-        onSuccess: () => {
+        onSuccess: async (result) => {
           setPurgeStatus('success')
+          try {
+            await suiClient.waitForTransaction({ digest: result.digest })
+          } catch (e) {
+            console.warn('[DashboardPage] waitForTransaction failed:', e)
+          }
+          triggerRefresh()
           setTimeout(() => navigate('/dashboard'), 1200)
         },
         onError: (err) => {
@@ -1046,7 +1083,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
   if (vaultId && isAccessDenied) {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
           <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
@@ -1059,7 +1096,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
 
   if (!vaultId) {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
           <div className="flex-1">
             <h1 className="text-h1">
@@ -1224,7 +1261,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
   const surveyTitle = detailSurveyTitle || (currentSurvey ? currentSurvey.title : loadingDetails ? t.loadingShort : t.surveyDefault)
 
   return (
-    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
+    <main className="w-full flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
       <div className="mb-4">
         <Link
           to="/dashboard"
@@ -1234,7 +1271,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
         </Link>
       </div>
 
-      <h1 className="text-h1 mb-1 overflow-x-auto whitespace-nowrap pb-1.5">{surveyTitle}</h1>
+      <h1 className="text-h1 mb-1 pb-1.5">{surveyTitle}</h1>
       <h2 className="text-h3 text-muted mb-6">
         {t.subtitle}
       </h2>
@@ -1378,7 +1415,7 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
           <dd className="text-body flex items-center gap-1.5">
             {surveyData ? (
               (() => {
-                const fields = surveyData.content?.fields as any
+                const fields = surveyData.content?.fields
                 const surveyBlobIdBytes = getOptionVec(fields?.survey_blob_id)
                 return surveyBlobIdBytes ? (
                   <span className="badge-decentralized shrink-0 inline-flex items-center gap-1">
@@ -1812,6 +1849,12 @@ function getAnswerText(q: any, val: any, separator: string = ', '): string {
           {stats && stats.failed_count > 0 && (
             <p className="text-xs text-amber-600">
               {t.decryptFailedCount(stats.failed_count)}
+            </p>
+          )}
+
+          {stats && stats.schema_mismatch_count > 0 && (
+            <p className="text-xs text-amber-600">
+              {t.schemaMismatchCount(stats.schema_mismatch_count)}
             </p>
           )}
         </section>

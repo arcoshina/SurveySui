@@ -19,7 +19,6 @@ export interface ClaimPtbParams {
   ephemeralNullifier?: string
   expiresAt?: string
   encryptedAnswers?: string // optional hex string
-  answerBlobId?: string // optional pointer string
   /** Shared sentinel from package publish; required when passId is omitted. */
   claimPassSentinelId?: string
   /** Shared VoidNft from package publish; required when nftId is omitted. */
@@ -85,15 +84,9 @@ export function buildClaimPtb(params: ClaimPtbParams): Transaction {
   const encryptedAnswersOpt = params.encryptedAnswers
     ? hexToBytes(params.encryptedAnswers)
     : null
-  const answerBlobIdOpt = params.answerBlobId
-    ? Array.from(new TextEncoder().encode(params.answerBlobId))
-    : null
 
   const encryptedAnswersArg = tx.pure(
     bcs.option(bcs.vector(bcs.u8())).serialize(encryptedAnswersOpt).toBytes()
-  )
-  const answerBlobIdArg = tx.pure(
-    bcs.option(bcs.vector(bcs.u8())).serialize(answerBlobIdOpt).toBytes()
   )
 
   const authKind = params.authKind ?? 0
@@ -121,7 +114,6 @@ export function buildClaimPtb(params: ClaimPtbParams): Transaction {
       tx.pure(bcs.vector(bcs.u8()).serialize(ephemeralNullifierBytes).toBytes()),
       tx.pure.u64(params.expiresAt ?? '0'),
       encryptedAnswersArg,
-      answerBlobIdArg,
       tx.object('0x6'), // clock
     ],
   })
@@ -199,6 +191,11 @@ export async function dryRunAndSponsorTx(params: {
     if (errCode === 'gas_exceeds_compensation') {
       throw new Error(`gas_exceeds_compensation: ${msg}`)
     }
+    // Vault gas pool empty and platform fallback disabled: surface as a soft error so
+    // executeTxWithFallback routes to the self-paid path with a tailored prompt.
+    if (errCode === 'vault_gas_insufficient') {
+      throw new Error(`VAULT_GAS_INSUFFICIENT: ${msg}`)
+    }
     if (res.status === 422 || /dry\s*run|MoveAbort/i.test(msg)) {
       throw new Error(`DRY_RUN_REJECTED: ${msg}`)
     }
@@ -256,6 +253,9 @@ export async function executeTxWithFallback(params: {
   // 預設 true（claim 與「一開始就自付」的 deposit_payer=owner 路徑）。代付鑄造 Pass
   // （deposit_payer=sponsor）須傳 false：代付失敗不可自付，否則 deposit_payer 與實付方不符。
   allowSelfPaidFallback?: boolean
+  // 為 true 時完全跳過代付嘗試，直接走自付（blob 答卷：前端政策一律自付，
+  // 已於上傳前取得使用者同意，不再經 BFF /api/gas/sponsor）。
+  forceSelfPaid?: boolean
 }): Promise<FallbackResult> {
   const {
     tx,
@@ -265,29 +265,66 @@ export async function executeTxWithFallback(params: {
     signAndExecute,
     onSelfPaidFallback,
     allowSelfPaidFallback = true,
+    forceSelfPaid = false,
   } = params
 
   let bffError: Error | undefined = undefined
 
-  try {
-    const { sponsoredTxBytes, sponsorSignature } = await dryRunAndSponsorTx({
-      tx,
-      senderAddress,
-      client,
-      backendUrl,
-    })
-    return { mode: 'sponsored', sponsoredTxBytes, sponsorSignature }
-  } catch (err: any) {
-    if (err.message?.startsWith('DRY_RUN_REJECTED')) {
-      throw err
+  if (!forceSelfPaid) {
+    try {
+      const { sponsoredTxBytes, sponsorSignature } = await dryRunAndSponsorTx({
+        tx,
+        senderAddress,
+        client,
+        backendUrl,
+      })
+      return { mode: 'sponsored', sponsoredTxBytes, sponsorSignature }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('DRY_RUN_REJECTED')) {
+        throw err
+      }
+      bffError = err instanceof Error ? err : new Error(String(err))
     }
-    bffError = err
+
+    if (!allowSelfPaidFallback) {
+      throw new Error(SPONSOR_TEMPORARILY_UNAVAILABLE)
+    }
   }
 
-  if (!allowSelfPaidFallback) {
-    throw new Error(SPONSOR_TEMPORARILY_UNAVAILABLE)
+  // forceSelfPaid 為刻意自付（blob），非代付失敗回退；避免誤導性的 fallback 警告。
+  if (!forceSelfPaid) {
+    const reason = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED' ? 'limit_reached' : 'bff_unreachable'
+    console.warn(`[gas-fallback] BFF sponsorship failed (${reason}), switching to self-paid gas mode`)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gas-fallback', { detail: { reason } }))
+    }
   }
 
+  // Pre-flight dry run（throws on failure）並取得自付 gas 估算。
+  const estimate = await estimateSelfPaidGasMist({ tx, client, senderAddress })
+
+  if (onSelfPaidFallback) {
+    const approved = await onSelfPaidFallback(estimate, bffError)
+    if (!approved) {
+      throw new Error(USER_DECLINED_SELF_PAID)
+    }
+  }
+
+  const { digest } = await signAndExecute(tx)
+  return { mode: 'self_paid', digest }
+}
+
+/**
+ * 對「使用者自付」交易做 pre-flight dry run，回傳預估 gas（MIST）。
+ * 估算 = computationCost + storageCost − storageRebate（不為負）。dry run 失敗則丟出。
+ * 供 UI 在實際送出/上傳前預估自付成本。
+ */
+export async function estimateSelfPaidGasMist(params: {
+  tx: Transaction
+  client: SuiClient
+  senderAddress: string
+}): Promise<bigint> {
+  const { tx, client, senderAddress } = params
   tx.setSender(senderAddress)
   const dryRunBytes = await tx.build({ client })
   const dryRunResult = await client.dryRunTransactionBlock({
@@ -296,27 +333,12 @@ export async function executeTxWithFallback(params: {
   if (dryRunResult.effects.status.status === 'failure') {
     throw new Error(dryRunResult.effects.status.error ?? 'Transaction pre-flight failed')
   }
-
-  const reason = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED' ? 'limit_reached' : 'bff_unreachable'
-  console.warn(`[gas-fallback] BFF sponsorship failed (${reason}), switching to self-paid gas mode`)
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('gas-fallback', { detail: { reason } }))
-  }
-
-  if (onSelfPaidFallback) {
-    const gasUsed = dryRunResult.effects.gasUsed
-    const estimate =
-      BigInt(gasUsed.computationCost) +
-      BigInt(gasUsed.storageCost) -
-      BigInt(gasUsed.storageRebate)
-    const approved = await onSelfPaidFallback(estimate > 0n ? estimate : 0n, bffError)
-    if (!approved) {
-      throw new Error(USER_DECLINED_SELF_PAID)
-    }
-  }
-
-  const { digest } = await signAndExecute(tx)
-  return { mode: 'self_paid', digest }
+  const gasUsed = dryRunResult.effects.gasUsed
+  const estimate =
+    BigInt(gasUsed.computationCost) +
+    BigInt(gasUsed.storageCost) -
+    BigInt(gasUsed.storageRebate)
+  return estimate > 0n ? estimate : 0n
 }
 
 /**
@@ -362,7 +384,6 @@ export interface ClaimWithTicketParams {
   ephemeralNullifier: string
   expiresAt: string
   encryptedAnswers?: string
-  answerBlobId?: string
 }
 
 /** @deprecated Use buildClaimPtb with authKind=1 */
@@ -381,7 +402,6 @@ export interface ClaimWithNftMarkingParams {
   nftType: string
   issuerConfigId: string
   encryptedAnswers?: string
-  answerBlobId?: string
   claimPassSentinelId?: string
 }
 
@@ -395,7 +415,6 @@ export function buildClaimWithNftMarkingPtb(params: ClaimWithNftMarkingParams): 
     nftType: params.nftType,
     issuerConfigId: params.issuerConfigId,
     encryptedAnswers: params.encryptedAnswers,
-    answerBlobId: params.answerBlobId,
     claimPassSentinelId: params.claimPassSentinelId,
   })
 }

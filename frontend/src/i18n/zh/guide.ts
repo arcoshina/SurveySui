@@ -7,7 +7,6 @@ type Step = { title: string; desc: string; links: StepLink[] }
 export type GuideDict = {
   title: string
   intro: string
-  stepLabel: string
   steps: Step[]
   ctaAuth: string
   ctaHome: string
@@ -17,7 +16,6 @@ const guide: GuideDict = {
   title: '新手教學：建立你的 Sui 錢包',
   intro:
     'SurveySui 是建立在 Sui 公開區塊鏈上的問卷平台。你只需要一個免費的 Sui 錢包即可連接、領取 SurveyPass 並開始填答——填答完全零成本，手續費由問卷發起者代付。以下五步驟帶你用 Slush 錢包的 zkLogin（Google 登入）快速上手，全程不需助記詞、不需持有任何加密貨幣。',
-  stepLabel: '步驟',
   steps: [
     {
       title: '安裝 Slush 錢包擴充',

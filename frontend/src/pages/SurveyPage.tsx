@@ -7,6 +7,7 @@ import {
   useSuiClient,
 } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
+import type { SuiClient, EventId, SuiEvent } from '@mysten/sui/client'
 import { fromBase64 } from '@mysten/sui/utils'
 import { PURGE_GRACE_MS } from '../lib/ptb'
 import { useActiveSigner } from '../lib/useActiveSigner'
@@ -21,13 +22,20 @@ import { decryptSurveyContent, encryptAnswers, base64urlToBytes, parseContentBlo
 import { parseFullSurveyMarkdown, type QuestionType, sanitizeQuestionIds } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import { encodeAnswers, computeSchemaHash, bytesToHex, normalizeBytes } from '../lib/answerCodec'
-import { fetchActivePass, fetchPassCredentials, SurveyPassData } from '../lib/surveyPass'
+import { fetchActivePass, fetchPassCredentials, SurveyPassData, type CredentialInfo } from '../lib/surveyPass'
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { formatSui } from '../lib/format'
-import { downloadFromDecentralizedStorage, uploadToDecentralizedStorage } from '../lib/storage'
+import { downloadFromDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
+
+/** SurveyRegistered 事件 parsedJson 中本頁用到的欄位。 */
+type RegisteredEvent = { vault_id?: string; survey_id?: string }
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 const ISSUER_CONFIG_ID = import.meta.env.VITE_ISSUER_CONFIG_ID ?? ''
 
 function normalizeSuiId(id: string): string {
@@ -79,8 +87,8 @@ interface Survey {
   encryptAnswers?: boolean
   isDecentralized?: boolean
   allowedNftType: string | null
-  /** On-chain caps — authoritative for inline vs Walrus routing at submit time. */
-  vaultLimits: { maxInlineBytes: number; maxBlobIdBytes: number }
+  /** On-chain inline answer size cap — authoritative at submit time (答卷一律 inline). */
+  vaultLimits: { maxInlineBytes: number }
 }
 
 type Answers = Record<string, string | string[] | number | number[]>
@@ -129,12 +137,11 @@ export default function SurveyPage() {
   const suiClient = useSuiClient()
   const activeSigner = useActiveSigner()
   const [selfPaidMode, setSelfPaidMode] = useState(false)
-  const [isUploadingAnswer, setIsUploadingAnswer] = useState(false)
-  const [gasMode, setGasMode] = useState<'unknown' | 'sponsored' | 'self_paid_warning' | 'limit_reached_warning'>('unknown')
+  const [gasMode, setGasMode] = useState<'unknown' | 'sponsored' | 'self_paid_warning' | 'limit_reached_warning' | 'vault_empty_warning'>('unknown')
   const [selfPaidConfirm, setSelfPaidConfirm] = useState<{
     estSui: string
     resolve: (ok: boolean) => void
-    isLimitReached?: boolean
+    reason?: 'self_paid' | 'limit_reached' | 'vault_empty'
   } | null>(null)
 
   // SurveyPass SBT & Verification States
@@ -142,7 +149,7 @@ export default function SurveyPage() {
     import.meta.env.VITE_NULLIFIER_REGISTRY_ID ?? import.meta.env.VITE_PASS_REGISTRY_ID ?? ''
 
   const [activePass, setActivePass] = useState<SurveyPassData | null>(null)
-  const [passCredentials, setPassCredentials] = useState<any[]>([])
+  const [passCredentials, setPassCredentials] = useState<CredentialInfo[]>([])
   const [isPassLoading, setIsPassLoading] = useState(true)
 
   /** How many times the connected wallet has already claimed for this survey. */
@@ -185,9 +192,9 @@ export default function SurveyPage() {
           setSelectedNftId('')
           setNftError(t.nftNotOwnedError(survey!.allowedNftType!))
         }
-      } catch (err: any) {
+      } catch (err) {
         if (cancelled) return
-        setNftError(err.message || t.nftQueryFailed)
+        setNftError(errMsg(err) || t.nftQueryFailed)
       } finally {
         if (!cancelled) setIsNftsLoading(false)
       }
@@ -336,20 +343,22 @@ export default function SurveyPage() {
 
   // Debug output to trace variables
   useEffect(() => {
-    console.log('[SurveyPage Debug]', {
-      PACKAGE_ID,
-      accountAddress: activeSigner?.address,
-      activePass,
-      surveyAllowedSources,
-      phase,
-    })
+    if (import.meta.env.DEV) {
+      console.log('[SurveyPage Debug]', {
+        PACKAGE_ID,
+        accountAddress: activeSigner?.address,
+        activePass,
+        surveyAllowedSources,
+        phase,
+      })
+    }
   }, [activeSigner?.address, activePass, surveyAllowedSources, phase])
 
   // Probe BFF gas sponsor health when entering review phase
   useEffect(() => {
     if (phase !== 'review' || gasMode !== 'unknown') return
     let cancelled = false
-    void probeGasSponsorHealth().then((res) => {
+    void probeGasSponsorHealth({ backendUrl: import.meta.env.VITE_BFF_URL ?? '' }).then((res) => {
       if (cancelled) return
       setGasMode(res.available ? 'sponsored' : 'self_paid_warning')
     })
@@ -383,8 +392,8 @@ export default function SurveyPage() {
           (obj.data.content.type.endsWith('::survey_vault::SurveyVault') ||
             obj.data.content.type.includes('::survey_vault::SurveyVault'))
         ) {
-          let cursor: any = null
-          let hit: any = null
+          let cursor: EventId | null | undefined = null
+          let hit: SuiEvent | undefined = undefined
           let pageCount = 0
           do {
             const res = await suiClient.queryEvents({
@@ -395,11 +404,10 @@ export default function SurveyPage() {
               limit: 50,
               order: 'descending',
             })
-            hit = res.data.find(
-              (e: any) =>
-                e.parsedJson &&
-                normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(finalSurveyId)
-            )
+            hit = res.data.find((e) => {
+              const pj = e.parsedJson as RegisteredEvent | undefined
+              return !!pj && normalizeSuiId(pj.vault_id ?? '') === normalizeSuiId(finalSurveyId)
+            })
             if (hit) break
             cursor = res.hasNextPage ? res.nextCursor : null
             pageCount++
@@ -407,8 +415,9 @@ export default function SurveyPage() {
           if (!hit) {
             throw new Error(t.errNoSurveyRegistry)
           }
-          finalSurveyId = hit.parsedJson.survey_id
-          console.log('[SurveyPage] Resolved surveyId from on-chain event:', finalSurveyId)
+          finalSurveyId = (hit.parsedJson as RegisteredEvent).survey_id ?? ''
+          if (import.meta.env.DEV)
+            console.log('[SurveyPage] Resolved surveyId from on-chain event:', finalSurveyId)
 
           // Re-fetch the true Survey object
           obj = await suiClient.getObject({
@@ -421,8 +430,8 @@ export default function SurveyPage() {
           throw new Error(t.errNoSurveyObject)
         }
 
-        const fields = obj.data.content.fields as any
-        const vault_id = fields.vault_id
+        const fields = obj.data.content.fields as Record<string, unknown>
+        const vault_id = String(fields.vault_id)
         const status = fields.status // 0 = ACTIVE, 1 = ARCHIVED
 
         // 加查 vault 狀態，作為「是否關閉」的權威來源
@@ -434,20 +443,14 @@ export default function SurveyPage() {
         if (!vaultObj.data?.content || vaultObj.data.content.dataType !== 'moveObject') {
           throw new Error(t.errLoadSurveyFailed)
         }
-        const vaultFields = vaultObj.data.content.fields as Record<string, any>
+        const vaultFields = vaultObj.data.content.fields as Record<string, unknown>
         if (Number(vaultFields.status) === 1) {
           setPhase('closed')
           return
         }
 
         const maxInlineBytes = Number(vaultFields.max_inline_answer_bytes)
-        const maxBlobIdBytes = Number(vaultFields.max_blob_id_bytes)
-        if (
-          !Number.isFinite(maxInlineBytes) ||
-          maxInlineBytes <= 0 ||
-          !Number.isFinite(maxBlobIdBytes) ||
-          maxBlobIdBytes <= 0
-        ) {
+        if (!Number.isFinite(maxInlineBytes) || maxInlineBytes <= 0) {
           throw new Error(t.errLoadSurveyFailed)
         }
         const repeatRewardBase = Number(vaultFields.repeat_reward ?? 0)
@@ -456,9 +459,9 @@ export default function SurveyPage() {
         const repeatRewardHuman = Math.floor(repeatRewardBase / 1_000_000)
 
         // Extract encrypted content
-        const getOptionVec = (opt: any): Uint8Array | null => {
+        const getOptionVec = (opt: unknown): Uint8Array | null => {
           if (!opt) return null
-          
+
           // Support direct raw array (new Sui RPC Option format)
           if (Array.isArray(opt)) {
             if (opt.length === 0) return null
@@ -472,15 +475,14 @@ export default function SurveyPage() {
           }
 
           // Support legacy Option wrapping
-          const vec = opt.fields?.vec || opt.vec
+          const o = opt as { fields?: { vec?: unknown }; vec?: unknown }
+          const vec = o.fields?.vec || o.vec
           if (!Array.isArray(vec) || vec.length === 0) return null
           const first = vec[0]
           if (Array.isArray(first)) {
             return new Uint8Array(first.map(Number))
           } else if (typeof first === 'string') {
             return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
-          } else if (typeof (vec as any) === 'string') {
-            return new Uint8Array((vec as any).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
           }
           return new Uint8Array(vec.map(Number))
         }
@@ -493,7 +495,8 @@ export default function SurveyPage() {
 
         if (surveyBlobIdBytes) {
           const blobId = new TextDecoder().decode(surveyBlobIdBytes)
-          console.log('[SurveyPage] Survey is in decentralized mode. Downloading blobId:', blobId)
+          if (import.meta.env.DEV)
+            console.log('[SurveyPage] Survey is in decentralized mode. Downloading blobId:', blobId)
           rawContent = await downloadFromDecentralizedStorage(blobId)
         } else {
           // Fallback to legacy encrypted_content
@@ -619,14 +622,14 @@ export default function SurveyPage() {
           encryptAnswers: parsed.data.encryptAnswers !== false,
           isDecentralized: !!surveyBlobIdBytes,
           allowedNftType,
-          vaultLimits: { maxInlineBytes, maxBlobIdBytes },
+          vaultLimits: { maxInlineBytes },
         })
 
         // Count this wallet's prior claims on this vault (events filtered client-side).
         if (activeSigner?.address) {
           try {
             const myAddrNorm = normalizeSuiId(activeSigner.address)
-            let evCursor: any = null
+            let evCursor: EventId | null | undefined = null
             let evPages = 0
             let count = 0
             do {
@@ -636,11 +639,11 @@ export default function SurveyPage() {
                 limit: 50,
               })
               for (const ev of res.data) {
-                const j: any = ev.parsedJson
+                const j = ev.parsedJson as { vault_id?: string; respondent?: string } | null
                 if (!j) continue
                 if (
-                  normalizeSuiId(j.vault_id) === normalizeSuiId(vault_id) &&
-                  normalizeSuiId(j.respondent) === myAddrNorm
+                  normalizeSuiId(j.vault_id ?? '') === normalizeSuiId(vault_id) &&
+                  normalizeSuiId(j.respondent ?? '') === myAddrNorm
                 ) {
                   count++
                 }
@@ -659,7 +662,7 @@ export default function SurveyPage() {
         // Answer encryption uses the hybrid (X25519 + ML-KEM-768) pubkey published
         // on-chain in creator_pub_key, NOT the 32B X25519 header in the content blob.
         setCreatorPubKey(normalizeBytes(fields.creator_pub_key))
-        setSurveyAllowedSources(fields.allowed_sources || [2])
+        setSurveyAllowedSources((fields.allowed_sources as number[] | undefined) || [2])
         // 還原導向 /auth 領 Pass 前暫存的作答
         try {
           const saved = sessionStorage.getItem(ANSWERS_KEY)
@@ -669,9 +672,9 @@ export default function SurveyPage() {
         }
         // survey 已 set，使用者按「繼續填答」時即有資料可渲染。
         setPhase(contentHashMismatch ? 'hash-mismatch' : 'filling')
-      } catch (err: any) {
+      } catch (err) {
         console.error('Failed to load survey:', err)
-        setSubmitError(err.message || t.errLoadSurveyFailed)
+        setSubmitError(errMsg(err) || t.errLoadSurveyFailed)
         setPhase('error')
       }
     }
@@ -818,7 +821,7 @@ export default function SurveyPage() {
     setPhase('submitting')
     setSubmitError(null)
 
-    let lastBffError: any = undefined
+    let lastBffError: Error | undefined = undefined
 
     try {
       // 0. 前端 Schema 邊界校驗（防範選項注入與非法提交）
@@ -877,69 +880,46 @@ export default function SurveyPage() {
           .join('')
       }
 
-      // Route small answers on-chain; larger payloads go to Walrus (chain-authoritative caps).
-      let answerBlobId: string | undefined = undefined
-      const { maxInlineBytes, maxBlobIdBytes } = survey.vaultLimits
-
+      // 答卷一律 inline 上鏈;超過鏈上上限即拒(禁止大型答卷,改貼雲端連結)。
+      const { maxInlineBytes } = survey.vaultLimits
       if (encryptedAnswersBytes.length > maxInlineBytes) {
-        setIsUploadingAnswer(true)
-        try {
-          const uploadRes = await uploadToDecentralizedStorage(encryptedAnswersBytes)
-          answerBlobId = uploadRes.blobId
-          const blobIdByteLen = new TextEncoder().encode(answerBlobId).length
-          if (blobIdByteLen > maxBlobIdBytes) {
-            throw new Error(
-              `Answer blob id exceeds on-chain limit (${blobIdByteLen} > ${maxBlobIdBytes} bytes)`
-            )
-          }
-        } catch (err) {
-          console.error('[SurveyPage] Failed to upload answer to decentralized storage:', err)
-          throw new Error(t.errEncryptSubmitFailed)
-        } finally {
-          setIsUploadingAnswer(false)
-        }
+        throw new Error('inline_answer_too_large')
       }
-
-      // 2. Build Claim PTB
-      let tx: Transaction
       const useNftRoute = hasNftLimit && isNftQualified && !isPassQualified
 
-      if (useNftRoute) {
-        tx = buildClaimPtb({
+      // Build the inline-answer claim PTB.
+      const buildClaimTx = (): Transaction => {
+        const common = {
           packageId: PACKAGE_ID,
           vaultId: survey.vaultObjectId,
           surveyId: survey.id,
-          nftId: selectedNftId!,
-          nftType: survey.allowedNftType!,
           issuerConfigId: ISSUER_CONFIG_ID,
-          encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
-          answerBlobId: answerBlobId,
-        })
-      } else {
-        tx = buildClaimPtb({
-          packageId: PACKAGE_ID,
-          vaultId: survey.vaultObjectId,
-          surveyId: survey.id,
-          passId: activePass!.objectId,
-          issuerConfigId: ISSUER_CONFIG_ID,
-          encryptedAnswers: answerBlobId ? undefined : encryptedAnswersHex,
-          answerBlobId: answerBlobId,
-        })
+          encryptedAnswers: encryptedAnswersHex,
+        }
+        return useNftRoute
+          ? buildClaimPtb({ ...common, nftId: selectedNftId!, nftType: survey.allowedNftType! })
+          : buildClaimPtb({ ...common, passId: activePass!.objectId })
       }
 
-      // 3. Try sponsored path; auto-fallback to self-paid if BFF unreachable.
-      // When fallback would charge the user, surface a confirm dialog first.
+      // Try sponsored path, auto-fallback to self-paid (with confirm).
+      const backendUrl = import.meta.env.VITE_BFF_URL ?? ''
       const fallbackResult = await executeTxWithFallback({
-        tx,
+        tx: buildClaimTx(),
         senderAddress: activeSigner.address,
-        client: suiClient as any,
+        backendUrl,
+        client: suiClient as unknown as SuiClient,
         signAndExecute: async (t) => activeSigner.signAndExecute(t as Transaction),
         onSelfPaidFallback: (estMist, bffError) =>
           new Promise<boolean>((resolve) => {
             lastBffError = bffError
             const estSui = formatSui(estMist)
-            const isLimitReached = bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
-            setSelfPaidConfirm({ estSui, resolve, isLimitReached })
+            const reason: 'self_paid' | 'limit_reached' | 'vault_empty' =
+              bffError?.message?.startsWith('VAULT_GAS_INSUFFICIENT')
+                ? 'vault_empty'
+                : bffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
+                  ? 'limit_reached'
+                  : 'self_paid'
+            setSelfPaidConfirm({ estSui, resolve, reason })
           }),
       })
 
@@ -953,6 +933,7 @@ export default function SurveyPage() {
           sponsoredTxBytes: fallbackResult.sponsoredTxBytes,
           userSignature,
           sponsorSignature: fallbackResult.sponsorSignature,
+          backendUrl,
         })
         digest = txResult.digest
       } else {
@@ -985,18 +966,20 @@ export default function SurveyPage() {
         sessionStorage.removeItem(ANSWERS_KEY)
       } catch { /* ignore */ }
       setPhase('success')
-    } catch (err: any) {
-      if (err?.message === USER_DECLINED_SELF_PAID) {
+    } catch (err) {
+      if (errMsg(err) === USER_DECLINED_SELF_PAID) {
         // User cancelled the self-paid confirmation — keep their answers, surface the warning
         setGasMode(
-          lastBffError?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
-            ? 'limit_reached_warning'
-            : 'self_paid_warning'
+          (lastBffError as Error | undefined)?.message?.startsWith('VAULT_GAS_INSUFFICIENT')
+            ? 'vault_empty_warning'
+            : (lastBffError as Error | undefined)?.message === 'PLATFORM_SPONSOR_LIMIT_REACHED'
+              ? 'limit_reached_warning'
+              : 'self_paid_warning'
         )
         setPhase('review')
         return
       }
-      const rawMsg = err?.message ?? ''
+      const rawMsg = errMsg(err)
       let friendly: string | null = null
       if (rawMsg.includes('inline_answer_too_large')) {
         friendly = t.errInlineAnswerTooLarge
@@ -1028,7 +1011,7 @@ export default function SurveyPage() {
 
   if (phase === 'hash-mismatch') {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-amber-200 dark:border-amber-900/50 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-500 border border-amber-100 dark:border-amber-900/50">
             <AlertTriangle size={28} />
@@ -1054,7 +1037,7 @@ export default function SurveyPage() {
 
   if (!activeSigner && phase !== 'loading' && phase !== 'closed') {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <h1 className="text-h1">{t.connectWalletTitle}</h1>
           <p className="text-muted leading-relaxed">
@@ -1079,7 +1062,7 @@ export default function SurveyPage() {
 
   if (phase === 'loading') {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
           <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
@@ -1092,7 +1075,7 @@ export default function SurveyPage() {
 
   if ((phase === 'error' || !survey) && phase !== 'closed') {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
             <AlertTriangle size={24} />
@@ -1107,7 +1090,7 @@ export default function SurveyPage() {
 
   if (phase === 'closed') {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500">
             <svg
@@ -1140,7 +1123,7 @@ export default function SurveyPage() {
 
   if (phase === 'success') {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-8 sm:p-10 space-y-6 text-center flex flex-col items-center animate-fadeIn w-full">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 border border-emerald-100 mb-1 animate-scaleIn">
             <svg
@@ -1198,7 +1181,7 @@ export default function SurveyPage() {
   if (phase === 'review' || phase === 'submitting') {
     if (!survey) return null
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
           <div className="border-b pb-4 border-slate-100 dark:border-neutral-800">
             <h1 className="text-h1">{t.reviewTitle}</h1>
@@ -1213,6 +1196,12 @@ export default function SurveyPage() {
               <div role="alert" className="alert-error mt-3">
                 <AlertTriangle size={16} className="shrink-0 mt-0.5" />
                 <span>{t.gasLimitReachedWarning}</span>
+              </div>
+            )}
+            {gasMode === 'vault_empty_warning' && (
+              <div role="alert" className="alert-error mt-3">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                <span>{t.gasVaultEmptyWarning}</span>
               </div>
             )}
             {survey.encryptAnswers === false && (
@@ -1266,14 +1255,14 @@ export default function SurveyPage() {
               onClick={() => void handleSubmit()}
               disabled={phase === 'submitting'}
               className={
-                gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning'
+                gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning' || gasMode === 'vault_empty_warning'
                   ? 'btn-danger w-full sm:w-2/3 flex items-center justify-center gap-1.5 disabled:opacity-50'
                   : 'w-full sm:w-2/3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 text-sm shadow-md flex items-center justify-center gap-1.5'
               }
             >
               {phase === 'submitting'
                 ? t.submitting
-                : gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning'
+                : gasMode === 'self_paid_warning' || gasMode === 'limit_reached_warning' || gasMode === 'vault_empty_warning'
                   ? t.confirmSubmitSelfPaid
                   : t.confirmSubmit}
             </button>
@@ -1299,14 +1288,18 @@ export default function SurveyPage() {
                 </div>
                 <div className="flex-1">
                   <h2 className="text-base font-semibold text-slate-900 dark:text-neutral-100">
-                    {selfPaidConfirm.isLimitReached
+                    {selfPaidConfirm.reason === 'limit_reached'
                       ? t.gasLimitReachedConfirmTitle
-                      : t.gasSelfPaidConfirmTitle}
+                      : selfPaidConfirm.reason === 'vault_empty'
+                        ? t.gasVaultEmptyConfirmTitle
+                        : t.gasSelfPaidConfirmTitle}
                   </h2>
                   <p className="text-sm text-slate-600 dark:text-neutral-400 mt-1 leading-relaxed">
-                    {selfPaidConfirm.isLimitReached
+                    {selfPaidConfirm.reason === 'limit_reached'
                       ? t.gasLimitReachedConfirmDesc(selfPaidConfirm.estSui)
-                      : t.gasSelfPaidConfirmDesc(selfPaidConfirm.estSui)}
+                      : selfPaidConfirm.reason === 'vault_empty'
+                        ? t.gasVaultEmptyConfirmDesc(selfPaidConfirm.estSui)
+                        : t.gasSelfPaidConfirmDesc(selfPaidConfirm.estSui)}
                   </p>
                 </div>
               </div>
@@ -1335,19 +1328,6 @@ export default function SurveyPage() {
             </div>
           </div>
         )}
-        {isUploadingAnswer && (
-          <div className="glass-overlay">
-            <div className="glass-card space-y-4">
-              <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-              <h3 className="text-lg font-medium text-slate-800 dark:text-neutral-200 animate-pulse">
-                {t.encryptingSubmit}
-              </h3>
-              <p className="text-sm text-slate-500 dark:text-neutral-400">
-                {t.pleaseWait}
-              </p>
-            </div>
-          </div>
-        )}
       </main>
     )
   }
@@ -1357,12 +1337,12 @@ export default function SurveyPage() {
   if (!survey) return null
 
   return (
-    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
+    <main className="w-full flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn">
 
         {/* 頂部問卷標題與說明區 */}
         <div className="space-y-3 bg-slate-50/50 dark:bg-neutral-900/30 border border-slate-100 dark:border-neutral-800 p-5 rounded-2xl animate-fadeIn">
-          <h1 className="text-h1 overflow-x-auto whitespace-nowrap pb-1.5">{survey.title}</h1>
+          <h1 className="text-h1 pb-1.5">{survey.title}</h1>
           <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-bold text-slate-500 dark:text-neutral-400 border-b border-slate-200/60 dark:border-neutral-700/60 pb-3 items-center">
             <span>{t.deadlineLabel(new Date(survey.deadline).toLocaleDateString(t.locale))}</span>
             <span>{t.rewardPerLabel(survey.per_response)}</span>

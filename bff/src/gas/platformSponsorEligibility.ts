@@ -1,4 +1,5 @@
 import type { SuiClient } from '@mysten/sui/client'
+import { normalizeAddress } from '@surveysui/gas-station-core'
 
 /** Tier-1 credential sources: Social, World ID, Google, GitHub (aligned with auth/ticket.ts). */
 export const TIER1_CREDENTIAL_SOURCES = [3, 5, 6, 7] as const
@@ -31,13 +32,28 @@ export async function resolvePassCredentialSources(
   if (passId) {
     const passObj = await suiClient.getObject({
       id: passId,
-      options: { showContent: true },
+      options: { showContent: true, showType: true },
     })
     if (!passObj.data?.content || (passObj.data.content as { dataType?: string }).dataType !== 'moveObject') {
       return []
     }
-    const fields = (passObj.data.content as { fields?: { credential_sources?: number[] } }).fields
-    return fields?.credential_sources ?? []
+    // 型別檢查：防止 passId 指向偽造、剛好帶 credential_sources 欄位的非 SurveyPass 物件。
+    const actualType = (passObj.data.type ?? '').replace(/^0x0*/, '0x')
+    if (
+      normalizeAddress(actualType.split('::')[0]) !== normalizeAddress(packageId) ||
+      !actualType.endsWith('::survey_pass::SurveyPass')
+    ) {
+      return []
+    }
+    const fields = (passObj.data.content as {
+      fields?: { credential_sources?: number[]; owner?: string }
+    }).fields
+    // 擁有權檢查：SurveyPass 為 shared object，真正持有者記在結構欄位 owner。
+    // passId 取自使用者交易參數，須驗證該 pass 由 senderAddress 持有，否則視為 tier 不足。
+    if (!fields?.owner || normalizeAddress(String(fields.owner)) !== normalizeAddress(senderAddress)) {
+      return []
+    }
+    return fields.credential_sources ?? []
   }
 
   const passType = `${normalizePackageAddress(packageId)}::survey_pass::SurveyPass`

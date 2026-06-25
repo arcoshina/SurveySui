@@ -85,6 +85,7 @@ const dashboard: DashboardDict = {
   respondentHeader: 'Respondent',
   submittedTimeHeader: 'Submitted Time',
   decryptFailedCount: (n: number) => `${n} responses could not be decrypted (key mismatch or data corruption).`,
+  schemaMismatchCount: (n: number) => `${n} responses were excluded from statistics due to an incompatible question schema.`,
   closeSuccess: 'Activity successfully closed. Remaining SSR has been returned to your wallet.',
   btnClosed: 'Closed',
   btnClosing: 'Closing…',

@@ -1,6 +1,6 @@
 const results = {
   title: '問卷統計結果',
-  subtitle: '統計結果圖表',
+  subtitle: '填答進度',
   loading: '正在加載問卷統計數據...',
   errLoadFailed: '載入問卷失敗，請確認 Vault ID 是否正確。',
   errEncrypted: '此問卷設定為「加密答卷」，答卷數據已在鏈上加密保護。只有問卷發起人可以使用錢包簽名解密並查看統計結果，無法公開展示。',

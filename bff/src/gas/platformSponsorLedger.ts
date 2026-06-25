@@ -35,6 +35,7 @@ export async function __resetPlatformSponsorLedger(): Promise<void> {
   await db.execute(`DELETE FROM platform_sponsor_daily`)
   await db.execute(`DELETE FROM wallet_sponsor_rate`)
   await db.execute(`DELETE FROM pass_sponsor_reservation`)
+  await db.execute(`DELETE FROM vault_gas_reservation`)
   await db.execute(`DELETE FROM realtime_ticket_slot`)
   await db.execute(`DELETE FROM pass_sponsor_onchain_cache`)
 }

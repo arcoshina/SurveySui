@@ -18,6 +18,7 @@ describe('gasConfig', () => {
       'MAX_PLATFORM_CLAIM_GAS_MIST',
       'COIN_MERGE_THRESHOLD_SUI',
       'COIN_MERGE_TRIGGER_COUNT',
+      'PLATFORM_CLAIM_SPONSOR_ENABLED',
     ]) {
       envBackup[key] = process.env[key]
       delete process.env[key]
@@ -56,6 +57,16 @@ describe('gasConfig', () => {
     process.env.MAX_PLATFORM_CLAIM_GAS_MIST = '20_000_000'
     __resetGasConfigCache()
     expect(() => assertGasConfig(loadGasConfig())).toThrow(/MAX_PLATFORM_CLAIM_GAS_MIST/)
+  })
+
+  it('defaults platformClaimSponsorEnabled to false and parses true', () => {
+    expect(loadGasConfig().platformClaimSponsorEnabled).toBe(false)
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    __resetGasConfigCache()
+    expect(loadGasConfig().platformClaimSponsorEnabled).toBe(true)
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'false'
+    __resetGasConfigCache()
+    expect(loadGasConfig().platformClaimSponsorEnabled).toBe(false)
   })
 
   it('fails when budget cap exceeds min compensation', () => {

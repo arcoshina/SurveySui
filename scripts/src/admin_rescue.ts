@@ -178,8 +178,9 @@ async function main() {
         throw new Error(data.message || 'HTTP Error')
       }
       console.log(`[BFF] Successfully updated BFF for nullifier ${nh} (source ${source}):`, data.message)
-    } catch (err: any) {
-      console.error(`[BFF] Error syncing with BFF for nullifier ${nh}: ${err.message}`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[BFF] Error syncing with BFF for nullifier ${nh}: ${message}`)
       process.exit(1)
     }
   }

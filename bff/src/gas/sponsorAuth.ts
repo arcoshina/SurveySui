@@ -29,6 +29,28 @@ export function gasOwnerFromTransactionData(sponsoredTxBytes: string): string | 
   return data.gasData?.owner ?? null
 }
 
+/** Read the gas budget (MIST) baked into full TransactionData (base64); null if absent. */
+export function gasBudgetFromTransactionData(sponsoredTxBytes: string): bigint | null {
+  const tx = Transaction.from(Buffer.from(sponsoredTxBytes, 'base64'))
+  const data = tx.getData() as { gasData?: { budget?: string | number | null } }
+  const budget = data.gasData?.budget
+  if (budget === undefined || budget === null) return null
+  try {
+    return BigInt(budget)
+  } catch {
+    return null
+  }
+}
+
+/** Read the gas payment coin object IDs from full TransactionData (base64). */
+export function gasPaymentCoinIdsFromTransactionData(sponsoredTxBytes: string): string[] {
+  const tx = Transaction.from(Buffer.from(sponsoredTxBytes, 'base64'))
+  const data = tx.getData() as { gasData?: { payment?: Array<{ objectId?: string }> } }
+  return (data.gasData?.payment ?? [])
+    .map((p) => p.objectId)
+    .filter((id): id is string => typeof id === 'string')
+}
+
 /**
  * Verify a transaction signature over full TransactionData bytes (base64),
  * binding it to the expected signer. zkLogin signatures are checked against the

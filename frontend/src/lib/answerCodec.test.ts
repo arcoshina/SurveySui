@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { encodeAnswers, decodeAnswers } from './answerCodec'
+import { encodeAnswers, decodeAnswers, SchemaMismatchError } from './answerCodec'
 import type { Question } from './frontmatter'
 
 describe('answerCodec - Version 1 (Index-Based Answers)', () => {
@@ -94,25 +94,39 @@ describe('answerCodec - Version 1 (Index-Based Answers)', () => {
     })
   })
 
-  it('should drop and return empty if version is not 1 (discard legacy)', () => {
+  it('should throw SchemaMismatchError if version is missing (discard legacy)', () => {
     const payloadStr = JSON.stringify({
       answers: ['蘋果', ['B'], '回饋', '5'],
       schema_hash: schemaHash
       // 缺少 version，代表舊版
     })
 
-    const decoded = decodeAnswers(payloadStr, mockQuestions, schemaHash)
-    expect(decoded).toEqual({})
+    expect(() => decodeAnswers(payloadStr, mockQuestions, schemaHash)).toThrow(
+      SchemaMismatchError
+    )
   })
 
-  it('should drop and return empty if version is unsupported', () => {
+  it('should throw SchemaMismatchError if version is unsupported', () => {
     const payloadStr = JSON.stringify({
       answers: [0, [0], '意見', '3'],
       schema_hash: schemaHash,
       version: 99
     })
 
-    const decoded = decodeAnswers(payloadStr, mockQuestions, schemaHash)
-    expect(decoded).toEqual({})
+    expect(() => decodeAnswers(payloadStr, mockQuestions, schemaHash)).toThrow(
+      SchemaMismatchError
+    )
+  })
+
+  it('should throw SchemaMismatchError if schema_hash does not match (avoid misaligned mapping)', () => {
+    const payloadStr = JSON.stringify({
+      answers: [2, [1, 2], '意見', '5'],
+      schema_hash: '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      version: 1
+    })
+
+    expect(() => decodeAnswers(payloadStr, mockQuestions, schemaHash)).toThrow(
+      SchemaMismatchError
+    )
   })
 })

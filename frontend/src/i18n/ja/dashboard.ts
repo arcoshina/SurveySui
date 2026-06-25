@@ -85,6 +85,7 @@ const dashboard: DashboardDict = {
   respondentHeader: '回答者（Respondent）',
   submittedTimeHeader: '提出日時（Submitted Time）',
   decryptFailedCount: (n: number) => `${n} 件の回答を復号できませんでした（鍵の不一致またはデータの破損）。`,
+  schemaMismatchCount: (n: number) => `${n} 件の回答は設問構成が一致しないため、統計から除外されました。`,
   closeSuccess: 'アンケートは正常に終了しました。残りのSSRはウォレットに返金されました。',
   btnClosed: '終了',
   btnClosing: '終了中…',

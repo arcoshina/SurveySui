@@ -15,7 +15,7 @@ const ENotCanonicalPool: u64     = 6;
 const EPoolAlreadyRegistered: u64 = 7;
 const EInvalidPurgeBatch: u64    = 9;
 const ETooManySponsors: u64      = 10;
-const DEFAULT_PURGE_ANSWERS_BATCH: u64 = 100;
+const DEFAULT_PURGE_ANSWERS_BATCH: u64 = 500;
 /// Max number of BFF sponsor addresses authorised to purge at the normal grace.
 const MAX_PURGE_SPONSORS: u64 = 3;
 /// Human units: 1 SUI → 1000 SR/SSR at bootstrap (DECIMALS=6).
@@ -168,6 +168,7 @@ public fun register_canonical_pool_for_test(
     config.canonical_pool_id = option::some(object::id(pool));
 }
 public fun effective(fee: &FeeConfig): u64 {
+    // bps 截斷為刻意設計:有效費率向下取整,零頭不收。下游 royalty 亦以 floor 計費。
     fee.total_fee_bps * fee.discount_bps / 10_000
 }
 public fun set_fee_config(

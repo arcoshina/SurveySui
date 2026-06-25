@@ -1,0 +1,63 @@
+name = "surveysui-bff"
+main = "src/worker.ts"
+compatibility_date = "2025-06-07"
+# nodejs_compat：啟用 node:crypto / Buffer / process.env 注入（@mysten/sui、HMAC、現有程式所需）
+compatibility_flags = ["nodejs_compat"]
+
+# 公開 *.workers.dev 網址：前端靠此 URL 串接，保留開啟
+workers_dev = true
+preview_urls = false
+
+# ── D1（BFF 專屬，與 gas-station 的 D1 隔離）──
+# 首次部署前：cd bff && npx wrangler d1 create surveysui-bff-testnet → 回填 database_id
+# schema 見 migrations/0001_init.sql：npx wrangler d1 migrations apply surveysui-bff-testnet --remote
+[[d1_databases]]
+binding = "DB"
+database_name = "surveysui-bff-testnet"
+database_id = "a4e3456f-e53c-4c48-bd6d-c13c8135d863"
+
+# ── Service Binding → gas-station Worker（§10）──
+# GAS_STATION_MODE=do 時，簽章轉送改走此繫結（免公網、低延遲）；
+# 過渡期仍可用 GAS_STATION_URL（secret）。
+[[services]]
+binding = "GAS_STATION"
+service = "surveysui-gas-station"
+
+# ── Cron Triggers（背景任務；scheduled handler 依 event.cron 分派）──
+# 高頻：coin merge / coin pool 維護。低頻：close → purge 生命週期掃描（有界推進 + D1 cursor）。
+[triggers]
+crons = ["*/10 * * * *", "0 */6 * * *"]
+
+# ── 非機密設定（執行期注入 process.env）──
+# CF Worker 讀不到根 .env，以下為 worker 專屬副本，須與根 .env 對應段手動保持同步。
+# 機密一律走 `wrangler secret put`（勿寫此處、勿進 git）：
+#   SURVEY_PASS_ISSUER_PRIV, SURVEY_PASS_ISSUER_SALT,
+#   GAS_SPONSOR_PRIV_1, GAS_SPONSOR_PRIV_2, GAS_SPONSOR_PUBKEY_3, GAS_SPONSOR_ADDRESS,
+#   GAS_STATION_SHARED_SECRET, ADMIN_SECRET, RESEND_API_KEY,
+#   GOOGLE_OAUTH_CLIENT_ID/SECRET, GITHUB_OAUTH_CLIENT_ID/SECRET, WORLDCOIN_*（依使用情形）
+# SUI_ADMIN_PRIVATE_KEY 絕不可設（BFF 偵測即 crash）。
+[vars]
+SUI_NETWORK = "testnet"
+SUI_RPC_URL = "https://fullnode.testnet.sui.io:443"
+# SUI_GRAPHQL_URL 省略：SUI_NETWORK=testnet 會自動推導 https://graphql.testnet.sui.io/graphql（zkLogin 驗簽用）
+SUI_PACKAGE_ID = "0x6cb1cc9163b737bebabb5f8e70ae943388cddc68949691af6faa86117d3e6ee8"
+GAS_STATION_MODE = "do"
+
+# ── 合約物件 ID（purge/close cron 與部分鏈上讀取所需，從根 .env 複製）──
+SURVEY_REGISTRY_ID = "0x14ad63529c1d6512c81358d9e78947bb750abb57099e5766139d3082b5f49e3a"
+PROTOCOL_CONFIG_ID = "0x131d89445c9219abde8c83326844e806fded67ab1107f9a60be4a250e310539c"
+PASS_REGISTRY_ID = "0xb17da71dc9bbd6529457dabc5f704559b68cf37d546322cb2598a597d04419c7"
+ISSUER_CONFIG_ID = "0x05a32f8ba41f7996821aa9cd64c5197fa5376ca3dff022b0946c3bbf05f582d6"
+
+# ── 生命週期背景任務（cron "0 */6 * * *"）；與根 .env 對齊 ──
+PURGE_TASK_ENABLED = "true"
+CLOSE_TASK_ENABLED = "true"   # 需要時開啟（close 把過期問卷關閉，先於 purge）
+
+# ── World ID（公開識別碼；WORLDCOIN_SIGNING_KEY 走 secret）──
+WORLDCOIN_APP_ID = "app_ca47d55f0ebb5e6090f041fbe537e211"
+WORLDCOIN_RP_ID = "rp_c8e09ab10522a159"
+WORLDCOIN_ACTION = "surveysui-worldcoin-verifier"
+
+# ── 第二趟回填（前端 Pages / BFF 部署後拿真實網址再換掉佔位）──
+FRONTEND_URL = "https://www.surveysui.com"   # CORS 白名單 = 前端自訂網域
+BFF_URL = "https://surveysui-bff.wrangler-gaser.workers.dev"          # 本 Worker *.workers.dev（OAuth redirect 組裝）

@@ -2,7 +2,7 @@ import type { ResultsDict } from '../zh/results'
 
 const results: ResultsDict = {
   title: '설문조사 통계 결과',
-  subtitle: '통계 결과 그래프',
+  subtitle: '응답 진행 상황',
   loading: '설문 통계 데이터를 불러오는 중...',
   errLoadFailed: '설문조사를 불러오지 못했습니다. Vault ID가 올바른지 확인해 주세요.',
   errEncrypted: '이 설문조사는 "답변 암호화"로 설정되어 있으며, 답변 데이터는 온체인에서 암호화되어 보호됩니다. 설문조사 개설자만 지갑 서명을 통해 복호화하여 결과를 확인할 수 있으며, 일반 공개는 되지 않습니다.',

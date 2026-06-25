@@ -1,4 +1,5 @@
 import { getDbClient } from '../../security/db.js'
+import { hasD1 } from '../../d1.js'
 import { normalizeAddress } from '@surveysui/gas-station-core'
 
 export interface PassSponsorOnchainCacheEntry {
@@ -113,5 +114,6 @@ export function __resetPassSponsorOnchainCacheStore(): void {
     void testStore.clearAll()
     return
   }
-  void getPassSponsorOnchainCacheStore().clearAll()
+  // 純測試用 helper：D1 未綁定時（beforeEach 早於 setupFakeD1）無資料可清，略過以免 floating rejection。
+  if (hasD1()) void getPassSponsorOnchainCacheStore().clearAll().catch(() => {})
 }

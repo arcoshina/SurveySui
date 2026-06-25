@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Transaction } from '@mysten/sui/transactions'
-import { buildClaimPtb, executeTxWithFallback } from './sponsoredTx.js'
+import { buildClaimPtb, estimateSelfPaidGasMist, executeTxWithFallback } from './sponsoredTx.js'
 
 describe('Frontend Sponsored Transaction Fallback Tests', () => {
   let mockSuiClient: any
@@ -67,6 +67,39 @@ describe('Frontend Sponsored Transaction Fallback Tests', () => {
     expect(mockSignAndExecute).toHaveBeenCalledWith(tx)
   })
 
+  it('should route vault_gas_insufficient to self-paid fallback with VAULT_GAS_INSUFFICIENT reason', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: 'vault_gas_insufficient',
+        message: 'Survey gas pool is insufficient; sponsorship unavailable for this claim',
+      }),
+    })
+
+    const tx = new Transaction()
+    tx.build = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
+
+    let fallbackCalled = false
+    let seenError: Error | undefined
+    const result = await executeTxWithFallback({
+      tx,
+      senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
+      client: mockSuiClient,
+      backendUrl: 'http://localhost:3100',
+      signAndExecute: mockSignAndExecute,
+      onSelfPaidFallback: async (_est, bffError) => {
+        fallbackCalled = true
+        seenError = bffError
+        return true
+      },
+    })
+
+    expect(fallbackCalled).toBe(true)
+    expect(seenError?.message?.startsWith('VAULT_GAS_INSUFFICIENT')).toBe(true)
+    expect(result.mode).toBe('self_paid')
+  })
+
   it('should fall back to self-paid when gas_exceeds_compensation', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -95,6 +128,61 @@ describe('Frontend Sponsored Transaction Fallback Tests', () => {
 
     expect(fallbackCalled).toBe(true)
     expect(result.mode).toBe('self_paid')
+  })
+
+  it('forceSelfPaid skips sponsorship entirely and goes straight to self-paid', async () => {
+    // Any sponsor call would be a failure: fetch must not be hit.
+    const fetchSpy = vi.fn()
+    global.fetch = fetchSpy
+
+    const tx = new Transaction()
+    tx.build = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
+
+    const result = await executeTxWithFallback({
+      tx,
+      senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
+      client: mockSuiClient,
+      backendUrl: 'http://localhost:3100',
+      signAndExecute: mockSignAndExecute,
+      forceSelfPaid: true,
+    })
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(result.mode).toBe('self_paid')
+    expect(result).toHaveProperty('digest', 'self_paid_digest_mock')
+    expect(mockSignAndExecute).toHaveBeenCalledWith(tx)
+  })
+
+  it('estimateSelfPaidGasMist returns computation + storage - rebate', async () => {
+    const tx = new Transaction()
+    tx.build = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
+
+    const est = await estimateSelfPaidGasMist({
+      tx,
+      client: mockSuiClient,
+      senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
+    })
+
+    // 1000000 + 2000000 - 500000 = 2500000
+    expect(est).toBe(2500000n)
+  })
+
+  it('estimateSelfPaidGasMist throws when pre-flight dry run fails', async () => {
+    const failingClient = {
+      dryRunTransactionBlock: vi.fn().mockResolvedValue({
+        effects: { status: { status: 'failure', error: 'MoveAbort(...)' } },
+      }),
+    } as any
+    const tx = new Transaction()
+    tx.build = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
+
+    await expect(
+      estimateSelfPaidGasMist({
+        tx,
+        client: failingClient,
+        senderAddress: '0x0000000000000000000000000000000000000000000000000000000000000003',
+      })
+    ).rejects.toThrow()
   })
 })
 

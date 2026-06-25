@@ -104,7 +104,7 @@ export function bytesToBase64url(bytes: Uint8Array): string {
  */
 export async function sha256(text: string): Promise<Uint8Array> {
   const data = new TextEncoder().encode(text)
-  const digest = await crypto.subtle.digest('SHA-256', data as any)
+  const digest = await crypto.subtle.digest('SHA-256', data as BufferSource)
   return new Uint8Array(digest)
 }
 
@@ -150,7 +150,7 @@ export async function deriveCreatorKeyPair(
     // V2: Derive seeds using HKDF-SHA256 with the survey-specific salt
     const hkdfKey = await crypto.subtle.importKey(
       'raw',
-      walletSignatureBytes as any,
+      walletSignatureBytes as BufferSource,
       'HKDF',
       false,
       ['deriveBits']
@@ -161,7 +161,7 @@ export async function deriveCreatorKeyPair(
       {
         name: 'HKDF',
         hash: 'SHA-256',
-        salt: salt as any,
+        salt: salt as BufferSource,
         info: new TextEncoder().encode('surveysui-x25519-v2')
       },
       hkdfKey,
@@ -174,7 +174,7 @@ export async function deriveCreatorKeyPair(
       {
         name: 'HKDF',
         hash: 'SHA-256',
-        salt: salt as any,
+        salt: salt as BufferSource,
         info: new TextEncoder().encode('surveysui-mlkem768-v2')
       },
       hkdfKey,
@@ -184,7 +184,7 @@ export async function deriveCreatorKeyPair(
   } else {
     // V1 (Legacy):
     // ── X25519: seed = SHA-256(walletSig) ──
-    seed = new Uint8Array(await crypto.subtle.digest('SHA-256', walletSignatureBytes as any))
+    seed = new Uint8Array(await crypto.subtle.digest('SHA-256', walletSignatureBytes as BufferSource))
     // ── ML-KEM-768: 64-byte seed = HKDF-SHA256(walletSig), domain-separated ──
     mlkemSeed = await _deriveMlkemSeed(walletSignatureBytes)
   }
@@ -192,7 +192,7 @@ export async function deriveCreatorKeyPair(
   const der = seedToX25519Pkcs8(seed)
   const extractable = await crypto.subtle.importKey(
     'pkcs8',
-    der as any,
+    der as BufferSource,
     { name: 'X25519' },
     true, // extractable so we can export JWK to retrieve pubkey
     ['deriveBits']
@@ -204,7 +204,7 @@ export async function deriveCreatorKeyPair(
   // Re-import private key as non-extractable for the caller
   const x25519PrivateKey = await crypto.subtle.importKey(
     'pkcs8',
-    der as any,
+    der as BufferSource,
     { name: 'X25519' },
     false, // non-extractable
     ['deriveBits']
@@ -337,7 +337,7 @@ export async function decryptSurveyContent(
 
   const aesKey = await crypto.subtle.importKey(
     'raw',
-    contentKey as any,
+    contentKey as BufferSource,
     { name: 'AES-GCM' },
     false,
     ['decrypt']
@@ -405,7 +405,7 @@ export async function encryptAnswers(
 
   const creatorPub = await crypto.subtle.importKey(
     'raw',
-    x25519Pub as any,
+    x25519Pub as BufferSource,
     { name: 'X25519' },
     false,
     []
@@ -416,10 +416,10 @@ export async function encryptAnswers(
     'deriveBits',
   ])) as CryptoKeyPair
   const ephemeralPubRaw = new Uint8Array(
-    await crypto.subtle.exportKey('raw', ephemeral.publicKey as any)
+    await crypto.subtle.exportKey('raw', ephemeral.publicKey)
   )
   const ss1 = new Uint8Array(
-    await crypto.subtle.deriveBits({ name: 'X25519', public: creatorPub }, ephemeral.privateKey as any, 256)
+    await crypto.subtle.deriveBits({ name: 'X25519', public: creatorPub }, ephemeral.privateKey, 256)
   )
 
   // ML-KEM-768: encapsulate to creator ek → ciphertext + shared secret (ss2)
@@ -476,13 +476,13 @@ export async function decryptAnswers(
 
   const ephemeralPub = await crypto.subtle.importKey(
     'raw',
-    ephemeralPubRaw as any,
+    ephemeralPubRaw as BufferSource,
     { name: 'X25519' },
     false,
     []
   )
   const ss1 = new Uint8Array(
-    await crypto.subtle.deriveBits({ name: 'X25519', public: ephemeralPub }, kp.x25519PrivateKey as any, 256)
+    await crypto.subtle.deriveBits({ name: 'X25519', public: ephemeralPub }, kp.x25519PrivateKey, 256)
   )
   const ss2 = ml_kem768.decapsulate(kemCt, kp.mlkemSecretKey)
 
@@ -498,7 +498,7 @@ export async function decryptAnswers(
 async function _deriveMlkemSeed(walletSignatureBytes: Uint8Array): Promise<Uint8Array> {
   const hkdfKey = await crypto.subtle.importKey(
     'raw',
-    walletSignatureBytes as any,
+    walletSignatureBytes as BufferSource,
     'HKDF',
     false,
     ['deriveBits']
@@ -534,13 +534,13 @@ async function _deriveHybridAesKey(
   const transcript = new Uint8Array(ephemeralPub.length + kemCt.length)
   transcript.set(ephemeralPub, 0)
   transcript.set(kemCt, ephemeralPub.length)
-  const transcriptHash = new Uint8Array(await crypto.subtle.digest('SHA-256', transcript as any))
+  const transcriptHash = new Uint8Array(await crypto.subtle.digest('SHA-256', transcript as BufferSource))
 
   const info = new Uint8Array(ANSWERS_HKDF_INFO_PREFIX.length + transcriptHash.length)
   info.set(ANSWERS_HKDF_INFO_PREFIX, 0)
   info.set(transcriptHash, ANSWERS_HKDF_INFO_PREFIX.length)
 
-  const hkdfKey = await crypto.subtle.importKey('raw', ikm as any, 'HKDF', false, ['deriveKey'])
+  const hkdfKey = await crypto.subtle.importKey('raw', ikm as BufferSource, 'HKDF', false, ['deriveKey'])
   return crypto.subtle.deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt: HKDF_SALT, info },
     hkdfKey,

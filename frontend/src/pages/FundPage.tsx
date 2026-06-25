@@ -6,8 +6,10 @@ import {
   useSignAndExecuteTransaction,
   useSignPersonalMessage,
   useSuiClient,
+  useSuiClientContext,
   useSuiClientQuery,
 } from '@mysten/dapp-kit'
+import type { SuiClient } from '@mysten/sui/client'
 import { parseFrontmatter, parseFullSurveyMarkdown, serializeFullSurveyToMarkdown, type QuestionType } from '../lib/frontmatter'
 import { renderMarkdown } from '../lib/markdown'
 import {
@@ -33,6 +35,7 @@ import {
 import { translateMoveAbort } from '../lib/moveAbort'
 import { useT } from '../i18n'
 import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
+import { useGasCompensationAmount } from '../hooks/useGasCompensationAmount'
 import { uploadToDecentralizedStorage } from '../lib/storage'
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? ''
@@ -82,6 +85,9 @@ export default function FundPage() {
   const suiClient = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessageAsync } = useSignPersonalMessage()
+  const { network } = useSuiClientContext()
+  // 顯式鎖定目標鏈，避免錢包停在其他網路時把交易送錯鏈。
+  const chain = `sui:${network}` as `${string}:${string}`
   const t = useT('fund')
 
   const typeLabel = (type: QuestionType): string => {
@@ -147,7 +153,11 @@ export default function FundPage() {
     if (poolData?.data?.content?.dataType !== 'moveObject') {
       return { totalFeeBps: 2000n, discountBps: 5000n }
     }
-    const fields = (poolData.data.content as { fields: Record<string, any> }).fields
+    const fields = (
+      poolData.data.content as {
+        fields: { fee_config?: { fields?: { total_fee_bps?: string | number; discount_bps?: string | number } } }
+      }
+    ).fields
     const feeFields = fields?.fee_config?.fields
     if (!feeFields) {
       return { totalFeeBps: 2000n, discountBps: 5000n }
@@ -183,16 +193,10 @@ export default function FundPage() {
     })
   }, [])
 
-  const gasCompensationAmount = useMemo(() => {
-    if (!gasHealth?.available) return 0n
-    return BigInt(gasHealth.gasCompensationAmount ?? '0')
-  }, [gasHealth])
+  const { gasCompensationAmount, ready: gasCompReady } = useGasCompensationAmount(gasHealth)
 
-  const storageCompensationAmountMIST = useMemo(() => {
-    if (!frontmatter?.ok) return 0n
-    const amount = frontmatter.data.storageCompensationAmount ?? 0.01
-    return BigInt(Math.round(amount * 1_000_000_000))
-  }, [frontmatter])
+  // 答卷一律 inline、storage 補償已廢除:不再向 gas 池預存 storage 補償,避免過度鎖倉。
+  const storageCompensationAmountMIST = 0n
 
   const ticketFeeMist = useMemo(() => getTicketFeeMist(), [])
 
@@ -252,7 +256,7 @@ export default function FundPage() {
 
   if (!draftId || !draft) {
     return (
-      <main className="flex-1 p-8 max-w-xl mx-auto">
+      <main className="w-full flex-1 p-8 max-w-xl mx-auto">
         <h1 className="text-h1 mb-4">{t.pageTitle}</h1>
         <p className="text-red-600">
           {t.draftNotFound(draftId ?? '?')}
@@ -263,7 +267,7 @@ export default function FundPage() {
 
   if (!frontmatter?.ok) {
     return (
-      <main className="flex-1 p-8 max-w-xl mx-auto">
+      <main className="w-full flex-1 p-8 max-w-xl mx-auto">
         <h1 className="text-h1 mb-4">{t.pageTitle}</h1>
         <p className="text-red-600">{t.frontmatterParseFailed(frontmatter?.error ?? t.unknownError)}</p>
       </main>
@@ -372,7 +376,6 @@ export default function FundPage() {
 
     let surveyBlobId: Uint8Array | undefined = undefined
     let surveyBlobObjectId: string | undefined = undefined
-    let surveyBlobIdStr = ''
     if (encryptedBlob.length > SURVEY_SIZE_THRESHOLD_KB * 1024) {
       setStatus('uploading')
       try {
@@ -380,7 +383,6 @@ export default function FundPage() {
         if (uploadRes.provider !== 'walrus' || !uploadRes.blobObjectId) {
           throw new Error('Walrus upload did not return a blob object ID')
         }
-        surveyBlobIdStr = uploadRes.blobId
         surveyBlobObjectId = uploadRes.blobObjectId
         surveyBlobId = new TextEncoder().encode(uploadRes.blobId)
       } catch (err) {
@@ -414,6 +416,8 @@ export default function FundPage() {
         schemaHash,
         creatorPubKey: creatorPubKeyForChain,
         questions: fullSurvey.data.questions,
+        // 加密問卷：題幹與選項明文不進交易輸入（schema_hash 仍用真實題目計算）
+        redactQuestionContent: encrypt,
         allowedSources: fullSurvey.data.allowedSources,
         offsetIn: cost.offsetIn,
         creatorSsrCoins: ssrCoins,
@@ -432,10 +436,8 @@ export default function FundPage() {
     // 但 build / RPC 自己出錯時降級放行，讓後續 signAndExecute 的 onError 處理。
     try {
       const dryRunTx = buildTx()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ; (dryRunTx as any).setSender(account.address)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const dryRunBytes = await (dryRunTx as any).build({ client: suiClient })
+      dryRunTx.setSender(account.address)
+      const dryRunBytes = await dryRunTx.build({ client: suiClient as unknown as SuiClient })
       const dryRunResult = await suiClient.dryRunTransactionBlock({
         transactionBlock: dryRunBytes,
       })
@@ -453,16 +455,19 @@ export default function FundPage() {
     setStatus('submitting')
     const actualTx = buildTx()
     signAndExecute(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       {
-        transaction: actualTx as any,
+        transaction: actualTx as unknown as Parameters<typeof signAndExecute>[0]['transaction'],
+        chain,
       },
       {
         onSuccess: async (result) => {
-          console.log('E2E Debug: signAndExecute onSuccess result:', JSON.stringify(result))
+          if (import.meta.env.DEV)
+            console.log('E2E Debug: signAndExecute onSuccess result:', JSON.stringify(result))
           try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            let txResult = (window as any).mockLastExecutedTransactionResult
+            type TxBlockResult = Awaited<ReturnType<typeof suiClient.getTransactionBlock>>
+            let txResult: TxBlockResult | undefined = (
+              window as unknown as { mockLastExecutedTransactionResult?: TxBlockResult }
+            ).mockLastExecutedTransactionResult
             if (!txResult) {
               try {
                 await suiClient.waitForTransaction({
@@ -500,31 +505,34 @@ export default function FundPage() {
               throw new Error(friendly ?? t.errTxOnchainFailed(rawErr))
             }
 
-            let vaultId = null
-            let surveyId = null
+            let vaultId: string | null = null
+            let surveyId: string | null = null
 
             // 1. Try to extract from on-chain events (primary)
             if (txResult.events && txResult.events.length > 0) {
               const hit = txResult.events.find(
-                (e: any) =>
+                (e) =>
                   e.type.endsWith('::survey_registry::SurveyRegistered') ||
                   e.type.includes('::survey_registry::SurveyRegistered')
               )
               if (hit && hit.parsedJson) {
-                vaultId = (hit.parsedJson as any).vault_id
-                surveyId = (hit.parsedJson as any).survey_id
-                console.log(
-                  '[FundPage] Successfully extracted vaultId and surveyId from events:',
-                  vaultId,
-                  surveyId
-                )
+                const pj = hit.parsedJson as { vault_id?: string; survey_id?: string }
+                vaultId = pj.vault_id ?? null
+                surveyId = pj.survey_id ?? null
+                if (import.meta.env.DEV)
+                  console.log(
+                    '[FundPage] Successfully extracted vaultId and surveyId from events:',
+                    vaultId,
+                    surveyId
+                  )
               }
             }
 
             // 2. Fallback to objectChanges (secondary)
             if (!vaultId && txResult.objectChanges) {
               const changes = txResult.objectChanges
-              console.log('E2E Debug: fetched changes fallback:', JSON.stringify(changes))
+              if (import.meta.env.DEV)
+                console.log('E2E Debug: fetched changes fallback:', JSON.stringify(changes))
               vaultId = extractVaultIdFromEffects(changes)
               surveyId = extractSurveyIdFromEffects(changes)
             }
@@ -544,27 +552,17 @@ export default function FundPage() {
                   createdAt: Date.now(),
                 })
               )
-              if (surveyBlobIdStr) {
-                try {
-                  const bffUrl = import.meta.env.VITE_BFF_URL || 'http://localhost:3100'
-                  await fetch(`${bffUrl}/api/cache/survey`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ surveyId, blobId: surveyBlobIdStr })
-                  })
-                } catch (e) {
-                  console.warn('Failed to notify BFF to cache survey:', e)
-                }
-              }
+              // BFF storage/cache 層已移除：前端直連 Walrus 並以鏈上 content_hash 自驗，
+              // 無需再通知 BFF 暖機快取。
             }
             window.localStorage.removeItem(`${DRAFT_KEY_PREFIX}${draftId}`)
 
             const fragment = contentKey.length > 0 ? bytesToBase64url(contentKey) : ''
             setStatus('success')
             navigate(`/dashboard/${vaultId}${fragment ? `#${fragment}` : ''}`)
-          } catch (err: any) {
+          } catch (err) {
             console.error('E2E Debug: onSuccess query error:', err)
-            setErrorMsg(err.message || t.errQueryTxFailed)
+            setErrorMsg((err instanceof Error ? err.message : '') || t.errQueryTxFailed)
             setStatus('error')
           }
         },
@@ -582,7 +580,7 @@ export default function FundPage() {
   const ssr = (base: bigint) => formatSsr(base)
 
   return (
-    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
+    <main className="w-full flex-1 p-4 sm:p-8 max-w-4xl mx-auto">
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800/80 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6 animate-fadeIn transition-colors">
         {/* 頂部標題 */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 border-slate-100 dark:border-neutral-800">
@@ -619,7 +617,7 @@ export default function FundPage() {
                 )}
               </div>
 
-              {fullSurvey.questions.map((q: any, i: number) => (
+              {fullSurvey.questions.map((q, i: number) => (
                 <div
                   key={q.id}
                   className="bg-white dark:bg-neutral-900 border border-slate-100 dark:border-neutral-800/80 rounded-2xl p-5 space-y-4 shadow-sm hover:bg-slate-50/30 dark:hover:bg-neutral-800/30 transition-colors"
@@ -983,6 +981,7 @@ export default function FundPage() {
                         disabled={
                           (isKeyRequired && !keypair) ||
                           suiToSpend == null ||
+                          !gasCompReady ||
                           status === 'tx-signing' ||
                           status === 'submitting' ||
                           status === 'uploading' ||

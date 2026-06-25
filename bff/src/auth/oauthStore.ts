@@ -1,39 +1,73 @@
+import { getDbClient } from '../security/db.js'
+
 export interface OAuthStateEntry {
   verifier: string   // PKCE code_verifier（base64url random）
   provider: string
   owner: string      // Sui address of the connected wallet
+  sidHash: string    // sha256(sid)；sid 存於發起者瀏覽器的 HttpOnly cookie，用以綁定同一瀏覽器
   expiresAt: number
 }
 
-export class MemoryOAuthStore {
-  private store = new Map<string, OAuthStateEntry>()
+/**
+ * OAuth PKCE state store，D1-backed（取代原 MemoryOAuthStore；Worker 無常駐記憶體）。
+ * 方法改為 async。過期以 expires_at 過濾，實體清理由 cron prune。
+ */
+export class D1OAuthStore {
   private readonly ttlMs: number
 
   constructor(ttlMs = 600_000) {
     this.ttlMs = ttlMs
   }
 
-  set(state: string, entry: Omit<OAuthStateEntry, 'expiresAt'>): void {
-    this.store.set(state, { ...entry, expiresAt: Date.now() + this.ttlMs })
+  async set(state: string, entry: Omit<OAuthStateEntry, 'expiresAt'>): Promise<void> {
+    const db = getDbClient()
+    await db.execute({
+      sql: `INSERT INTO oauth_state (state, verifier, provider, owner, sid_hash, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(state) DO UPDATE SET
+              verifier = excluded.verifier, provider = excluded.provider,
+              owner = excluded.owner, sid_hash = excluded.sid_hash,
+              expires_at = excluded.expires_at`,
+      args: [state, entry.verifier, entry.provider, entry.owner, entry.sidHash, Date.now() + this.ttlMs],
+    })
   }
 
-  get(state: string): OAuthStateEntry | null {
-    const entry = this.store.get(state)
-    if (!entry) return null
-    if (Date.now() > entry.expiresAt) {
-      this.store.delete(state)
+  async get(state: string): Promise<OAuthStateEntry | null> {
+    const db = getDbClient()
+    const r = await db.execute({
+      sql: `SELECT verifier, provider, owner, sid_hash, expires_at FROM oauth_state WHERE state = ?`,
+      args: [state],
+    })
+    if (r.rows.length === 0) return null
+    const row = r.rows[0] as {
+      verifier: string
+      provider: string
+      owner: string
+      sid_hash: string | null
+      expires_at: number
+    }
+    if (Date.now() > Number(row.expires_at)) {
+      await this.invalidate(state)
       return null
     }
-    return entry
+    return {
+      verifier: String(row.verifier),
+      provider: String(row.provider),
+      owner: String(row.owner),
+      sidHash: row.sid_hash == null ? '' : String(row.sid_hash),
+      expiresAt: Number(row.expires_at),
+    }
   }
 
-  invalidate(state: string): void {
-    this.store.delete(state)
+  async invalidate(state: string): Promise<void> {
+    const db = getDbClient()
+    await db.execute({ sql: `DELETE FROM oauth_state WHERE state = ?`, args: [state] })
   }
 
-  clear(): void {
-    this.store.clear()
+  async clear(): Promise<void> {
+    const db = getDbClient()
+    await db.execute(`DELETE FROM oauth_state`)
   }
 }
 
-export const oauthStore = new MemoryOAuthStore()
+export const oauthStore = new D1OAuthStore()

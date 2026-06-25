@@ -22,6 +22,7 @@ export interface GasConfig {
   coinQueueAcquireRetries: number
   coinInventoryRefreshMs: number
   sponsorCoinDryRunMaxRetries: number
+  platformClaimSponsorEnabled: boolean
 }
 
 const DEFAULT_GAS_BUDGET_CAP_MIST = 100_000_000n
@@ -40,6 +41,16 @@ function parseEnvNumber(
   if (!raw) return fallback
   const n = Number(raw.replace(/_/g, '').replace(/,/g, '').trim())
   return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
+function parseEnvBool(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: boolean
+): boolean {
+  const raw = env[name]
+  if (raw === undefined) return fallback
+  return raw.trim().toLowerCase() === 'true'
 }
 
 function parseCoinMergeThresholdMist(env: Record<string, string | undefined>): bigint {
@@ -95,6 +106,7 @@ export function loadGasConfig(env: Record<string, string | undefined> = {}): Gas
     coinQueueAcquireRetries: parseEnvNumber(env, 'COIN_QUEUE_ACQUIRE_RETRIES', 3),
     coinInventoryRefreshMs: parseEnvNumber(env, 'COIN_INVENTORY_REFRESH_MS', 5_000),
     sponsorCoinDryRunMaxRetries: parseEnvNumber(env, 'SPONSOR_COIN_DRY_RUN_MAX_RETRIES', 1),
+    platformClaimSponsorEnabled: parseEnvBool(env, 'PLATFORM_CLAIM_SPONSOR_ENABLED', false),
   }
 }
 

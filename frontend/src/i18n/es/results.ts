@@ -2,7 +2,7 @@ import type { ResultsDict } from '../zh/results'
 
 const results: ResultsDict = {
   title: 'Resultados de la encuesta',
-  subtitle: 'Gráficos de resultados estadísticos',
+  subtitle: 'Progreso de respuestas',
   loading: 'Cargando datos estadísticos de la encuesta...',
   errLoadFailed: 'Error al cargar la encuesta. Confirma si el Vault ID es correcto.',
   errEncrypted: 'Esta encuesta está configurada como "respuestas encriptadas". Los datos de las respuestas están encriptados y protegidos en la blockchain. Solo el creador de la encuesta puede desencriptar y ver los resultados mediante una firma de billetera; no se pueden mostrar públicamente.',

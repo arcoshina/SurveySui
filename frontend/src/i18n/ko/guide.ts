@@ -5,7 +5,6 @@ const guide: GuideDict = {
   title: '초보자 가이드: Sui 지갑 만들기',
   intro:
     'SurveySui는 Sui 퍼블릭 블록체인에 구축된 설문조사 플랫폼입니다. 무료 Sui 지갑을 연결하고 SurveyPass를 발급받기만 하면 설문조사에 참여할 수 있습니다. 참여 비용은 완전히 무료이며, 수수료는 설문조사 개설자가 대신 지불합니다. 다음 5단계를 거쳐 Slush 지갑의 zkLogin(Google 로그인)을 사용하여 빠르게 시작해 보세요. 복구 문구나 암호화폐 보유는 전혀 필요하지 않습니다.',
-  stepLabel: '단계',
   steps: [
     {
       title: 'Slush 지갑 확장 프로그램 설치',

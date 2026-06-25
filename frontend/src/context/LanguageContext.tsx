@@ -124,7 +124,6 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } else if (!urlLang) {
       applyLang(lang)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
   const toggleLang = () => applyLang(nextLang)

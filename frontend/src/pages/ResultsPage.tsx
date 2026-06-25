@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useSuiClient, useSuiClientQuery } from '@mysten/dapp-kit'
-import type { SuiClient } from '@mysten/sui/client'
-import { AlertTriangle } from 'lucide-react'
+import type { SuiClient, EventId, SuiEvent } from '@mysten/sui/client'
+import { AlertTriangle, Info } from 'lucide-react'
 import {
   aggregateStats,
   decodeAllPlainResponses,
@@ -26,7 +26,13 @@ function normalizeSuiId(id: string): string {
   return cleaned.padStart(64, '0')
 }
 
-function getOptionVec(opt: any): Uint8Array | null {
+/** survey_registry::SurveyRegistered 事件 parsedJson 中本頁用到的欄位。 */
+type RegisteredEvent = { vault_id?: string; survey_id?: string }
+
+/** Sui 物件 moveObject content 的動態 fields 包裝。 */
+type MoveContent = { dataType?: string; fields?: Record<string, unknown> }
+
+function getOptionVec(opt: unknown): Uint8Array | null {
   if (!opt) return null
   if (Array.isArray(opt)) {
     if (opt.length === 0) return null
@@ -38,15 +44,14 @@ function getOptionVec(opt: any): Uint8Array | null {
     }
     return new Uint8Array(opt.map(Number))
   }
-  const vec = opt.fields?.vec || opt.vec
+  const o = opt as { fields?: { vec?: unknown }; vec?: unknown }
+  const vec = o.fields?.vec || o.vec
   if (!Array.isArray(vec) || vec.length === 0) return null
   const first = vec[0]
   if (Array.isArray(first)) {
     return new Uint8Array(first.map(Number))
   } else if (typeof first === 'string') {
     return new Uint8Array(first.match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
-  } else if (typeof (vec as any) === 'string') {
-    return new Uint8Array((vec as any).match(/.{1,2}/g)?.map((byte: string) => parseInt(byte, 16)) || [])
   }
   return new Uint8Array(vec.map(Number))
 }
@@ -74,6 +79,14 @@ function getPackageId(): string {
   return import.meta.env.VITE_PACKAGE_ID ?? ''
 }
 
+function formatValidCount(count: number): string {
+  if (count >= 10000) {
+    const kVal = Math.round(count / 1000)
+    return `${kVal}k`
+  }
+  return String(count)
+}
+
 export default function ResultsPage() {
   const { vaultId } = useParams<{ vaultId: string }>()
   const suiClient = useSuiClient()
@@ -89,10 +102,10 @@ export default function ResultsPage() {
 
   const vault = useMemo(() => {
     const content = (
-      vaultData as { data?: { content?: { dataType: string; fields: any } } } | undefined
+      vaultData as { data?: { content?: MoveContent } } | undefined
     )?.data?.content
     if (!content || content.dataType !== 'moveObject') return null
-    return content.fields
+    return content.fields ?? null
   }, [vaultData])
 
   // ── SurveyClaimed events ───────────────────────────────────────────────────
@@ -102,7 +115,7 @@ export default function ResultsPage() {
   // ── 鏈上 survey 物件 ────────────────────────────────────────────────────────
   const [surveyId, setSurveyId] = useState<string | null>(null)
   const [surveyResolveFailed, setSurveyResolveFailed] = useState(false)
-  const [surveyData, setSurveyData] = useState<any>(null)
+  const [surveyData, setSurveyData] = useState<{ content?: MoveContent | null } | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [surveyMeta, setSurveyMeta] = useState<{
     allowedSources: number[]
@@ -131,8 +144,8 @@ export default function ResultsPage() {
       )
         return
       try {
-        let cursor: any = null
-        let hit: any = null
+        let cursor: EventId | null = null
+        let hit: SuiEvent | undefined = undefined
         let pageCount = 0
         do {
           const res = await suiClient.queryEvents({
@@ -143,25 +156,24 @@ export default function ResultsPage() {
             limit: 50,
             order: 'descending',
           })
-          hit = res.data.find(
-            (e: any) =>
-              e.parsedJson &&
-              normalizeSuiId(e.parsedJson.vault_id) === normalizeSuiId(vaultId ?? '')
-          )
+          hit = res.data.find((e) => {
+            const pj = e.parsedJson as RegisteredEvent | undefined
+            return !!pj && normalizeSuiId(pj.vault_id ?? '') === normalizeSuiId(vaultId ?? '')
+          })
           if (hit) break
-          cursor = res.hasNextPage ? res.nextCursor : null
+          cursor = res.hasNextPage ? (res.nextCursor ?? null) : null
           pageCount++
         } while (cursor && pageCount < 10)
 
         if (hit && !cancelled) {
-          const sId = hit.parsedJson.survey_id
+          const sId = (hit.parsedJson as RegisteredEvent).survey_id ?? ''
           setSurveyId(sId)
           const obj = await suiClient.getObject({
             id: sId,
             options: { showContent: true },
           })
           if (obj.data && !cancelled) {
-            setSurveyData(obj.data)
+            setSurveyData(obj.data as { content?: MoveContent | null })
           }
         } else if (!cancelled) {
           setSurveyResolveFailed(true)
@@ -182,7 +194,7 @@ export default function ResultsPage() {
   // 2. 解析 Survey Markdown 題目
   useEffect(() => {
     if (!surveyData) return
-    const fields = surveyData.content?.fields as any
+    const fields = surveyData.content?.fields
     if (!fields) return
 
     let hashBytes = fields.schema_hash ? normalizeBytes(fields.schema_hash) : new Uint8Array(0)
@@ -203,14 +215,14 @@ export default function ResultsPage() {
 
     async function loadQuestions() {
       try {
-        const surveyBlobIdBytes = getOptionVec(fields.survey_blob_id)
+        const surveyBlobIdBytes = getOptionVec(fields?.survey_blob_id)
         let rawContent: Uint8Array
 
         if (surveyBlobIdBytes) {
           const blobId = new TextDecoder().decode(surveyBlobIdBytes)
           rawContent = await downloadFromDecentralizedStorage(blobId)
         } else {
-          const encryptedContentBytes = getOptionVec(fields.encrypted_content)
+          const encryptedContentBytes = getOptionVec(fields?.encrypted_content)
           if (!encryptedContentBytes) {
             throw new Error('Survey content data corrupted')
           }
@@ -278,8 +290,8 @@ export default function ResultsPage() {
   useEffect(() => {
     if (surveyMeta?.encryptAnswers === false && questions && events && schemaHashStr) {
       try {
-        const { responses } = decodeAllPlainResponses(events, questions, schemaHashStr)
-        const s = aggregateStats(responses, events.length)
+        const { responses, schemaMismatch } = decodeAllPlainResponses(events, questions, schemaHashStr)
+        const s = aggregateStats(responses, events.length, schemaMismatch)
         setStats(s)
         setDecryptedResponses(responses)
       } catch (err) {
@@ -296,10 +308,10 @@ export default function ResultsPage() {
 
   if (isResolving && !surveyMeta) {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
-          <p aria-live="polite" className="text-sm text-slate-500 dark:text-neutral-400 font-medium">
+          <p aria-live="polite" className="text-muted">
             {t.loading}
           </p>
         </div>
@@ -309,12 +321,10 @@ export default function ResultsPage() {
 
   if (hasError) {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
-        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-4 animate-fadeIn w-full">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
-            <AlertTriangle size={24} />
-          </div>
-          <p role="alert" className="text-sm text-rose-600 font-semibold">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+        <div className="alert-error p-8 text-center space-y-4 flex flex-col items-center justify-center w-full animate-fadeIn">
+          <AlertTriangle size={24} className="text-rose-800 dark:text-rose-300" />
+          <p role="alert" className="text-sm font-normal">
             {t.errLoadFailed}
           </p>
         </div>
@@ -327,15 +337,17 @@ export default function ResultsPage() {
 
   if (isEncrypted) {
     return (
-      <main className="flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
+      <main className="w-full flex-1 p-4 sm:p-8 max-w-2xl mx-auto flex items-center justify-center">
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-slate-100 dark:border-neutral-800 shadow-xl p-8 text-center space-y-5 animate-fadeIn w-full">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-amber-50 text-amber-500 border border-amber-100">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-500 border border-blue-100 dark:border-blue-900/30">
             <AlertTriangle size={24} />
           </div>
-          <h2 className="text-h2 text-amber-800 dark:text-amber-400">{t.protectedData}</h2>
-          <p role="alert" className="text-sm text-slate-600 dark:text-neutral-300 leading-relaxed text-left bg-slate-50 dark:bg-neutral-950 p-4 rounded-xl border border-neutral-100 dark:border-neutral-800">
-            {t.errEncrypted}
-          </p>
+          <h2 className="text-h2">{t.protectedData}</h2>
+          <div className="alert-info p-4 text-left leading-relaxed w-full">
+            <p role="alert" className="text-sm font-normal">
+              {t.errEncrypted}
+            </p>
+          </div>
           {surveyId && (
             <Link
               to={`/s/${surveyId}`}
@@ -354,41 +366,41 @@ export default function ResultsPage() {
   const displayTitle = surveyTitle || t.title
 
   return (
-    <main className="flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
-      <h1 className="text-h1 mb-2 overflow-x-auto whitespace-nowrap pb-1.5">{displayTitle}</h1>
-      <p className="text-base text-slate-500 dark:text-neutral-400 mb-6">{t.subtitle}</p>
+    <main className="w-full flex-1 p-4 sm:p-8 max-w-4xl mx-auto text-slate-800 dark:text-neutral-300">
+      <h1 className="text-h1 mb-2 pb-1.5">{displayTitle}</h1>
+      <p className="text-muted mb-6">{t.subtitle}</p>
 
       {/* ── 基本資訊與統計卡片 ─────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
-          <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statResponseCount}</p>
-          <p className="text-xl font-normal text-slate-900 dark:text-neutral-100 mt-2 font-mono tracking-tight" aria-label="response-count">
+          <p className="text-muted">{t.statResponseCount}</p>
+          <p className="text-h2 mt-2 font-mono tracking-tight text-right" aria-label="response-count">
             {responseCount}
           </p>
         </div>
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
-          <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statResponseProgress}</p>
-          <p className="text-xl font-normal text-slate-900 dark:text-neutral-100 mt-2 font-mono tracking-tight">
+          <p className="text-muted">{t.statResponseProgress}</p>
+          <p className="text-h2 mt-2 font-mono tracking-tight text-right">
             {responseCount} / {maxResponses || '—'}
           </p>
         </div>
         <div className="bg-slate-100 dark:bg-neutral-900 rounded p-4 transition-colors">
-          <p className="text-sm text-slate-600 dark:text-neutral-400">{t.statDeadline}</p>
+          <p className="text-muted">{t.statDeadline}</p>
           {surveyMeta && surveyMeta.deadlineMs ? (
             (() => {
               const dt = formatDateTime(surveyMeta.deadlineMs)
-              if (!dt) return <p className="text-xl font-normal text-slate-900 dark:text-neutral-100 mt-2 font-mono tracking-tight">—</p>
+              if (!dt) return <p className="text-h2 mt-2 font-mono tracking-tight text-right">—</p>
               return (
-                <div className="text-slate-900 dark:text-neutral-200 mt-2 font-mono tracking-tight">
-                  <p className="text-xl font-normal">{dt.date}</p>
-                  <p className="text-lg text-slate-500 dark:text-neutral-400 font-medium mt-1">
-                    {dt.time} <span className="text-lg ml-1">{dt.tz}</span>
+                <div className="mt-2 font-mono tracking-tight text-right">
+                  <p className="text-h2">{dt.date}</p>
+                  <p className="text-h3 text-muted mt-1">
+                    {dt.time} <span className="ml-1">{dt.tz}</span>
                   </p>
                 </div>
               )
             })()
           ) : (
-            <p className="text-xl font-normal text-slate-900 dark:text-neutral-100 mt-2 font-mono tracking-tight">—</p>
+            <p className="text-h2 mt-2 font-mono tracking-tight text-right">—</p>
           )}
         </div>
       </div>
@@ -405,7 +417,7 @@ export default function ResultsPage() {
               <h3 className="text-h3">
                 {t.responsesTitlePublic}
               </h3>
-              <span className="text-xs text-slate-600 dark:text-neutral-400 font-mono">
+              <span className="text-sm text-muted font-mono">
                 {t.displayCount(responseCount)}
               </span>
             </div>
@@ -417,6 +429,78 @@ export default function ResultsPage() {
                 const questionStats = stats?.questions?.[q.id]
                 const totalAnswers = stats?.decrypted_count || 0
 
+                if (q.type === 'scale') {
+                  const validScores = decryptedResponses
+                    ?.map((resp) => resp.answers[q.id])
+                    .filter((val) => val !== undefined && val !== null && val !== '')
+                    .map(Number)
+                    .filter((num) => !isNaN(num)) || []
+                  const totalValid = validScores.length
+
+                  if (totalValid === 0) {
+                    return (
+                      <div
+                        key={q.id}
+                        className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 transition-colors shadow-xs"
+                      >
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className={`text-sm font-normal ${q.required ? 'text-rose-800 dark:text-rose-400/80' : 'text-slate-700 dark:text-neutral-200'}`}>
+                            {t.questionIndex(idx + 1)}
+                          </span>
+                          <span className="badge-decentralized">
+                            {t.questionTypeScale}
+                          </span>
+                        </div>
+                        <h4 className="text-base font-normal text-slate-900 dark:text-neutral-100 mb-4 break-words">
+                          {q.prompt}
+                        </h4>
+                        <p className="text-sm text-slate-400 dark:text-neutral-500 italic">
+                          無填答數據
+                        </p>
+                      </div>
+                    )
+                  }
+
+                  const avg = (validScores.reduce((sum, val) => sum + val, 0) / totalValid).toFixed(1)
+                  const pct = (Number(avg) / 5) * 100
+
+                  return (
+                    <div
+                      key={q.id}
+                      className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 transition-colors shadow-xs"
+                    >
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className={`text-sm font-normal ${q.required ? 'text-rose-800 dark:text-rose-400/80' : 'text-slate-700 dark:text-neutral-200'}`}>
+                          {t.questionIndex(idx + 1)}
+                        </span>
+                        <span className="badge-decentralized">
+                          {t.questionTypeScale}
+                        </span>
+                      </div>
+                      <h4 className="text-base font-normal text-slate-900 dark:text-neutral-100 mb-4 break-words">
+                        {q.prompt}
+                      </h4>
+
+                      <div className="space-y-2.5">
+                        <div className="flex items-baseline justify-start gap-1.5">
+                          <span className="text-2xl font-normal text-slate-900 dark:text-neutral-100 font-mono tracking-tight">
+                            {avg}
+                          </span>
+                          <span className="text-sm text-slate-400 dark:text-neutral-500 font-normal font-mono">
+                            ({formatValidCount(totalValid)})
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-100 dark:bg-neutral-800/80 rounded-full h-4 overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-500 bg-blue-600 dark:bg-blue-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+
                 if (q.type === 'text') {
                   return (
                     <div
@@ -424,31 +508,18 @@ export default function ResultsPage() {
                       className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 transition-colors shadow-xs"
                     >
                       <div className="flex items-center gap-2 mb-1.5">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-neutral-400">
+                        <span className={`text-sm font-normal ${q.required ? 'text-rose-800 dark:text-rose-400/80' : 'text-slate-700 dark:text-neutral-200'}`}>
                           {t.questionIndex(idx + 1)}
                         </span>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+                        <span className="chip-optional">
                           {t.questionTypeText}
                         </span>
                       </div>
-                      <h4 className="text-base font-semibold text-slate-900 dark:text-neutral-100 mb-3 break-words">
+                      <h4 className="text-base font-normal text-slate-900 dark:text-neutral-100 mb-3 break-words">
                         {q.prompt}
                       </h4>
-                      <div className="p-4 bg-slate-50 dark:bg-neutral-950/50 rounded-xl border border-dashed border-neutral-200 dark:border-neutral-800 text-sm text-slate-500 dark:text-neutral-400 flex items-start gap-2.5 leading-relaxed">
-                        <svg
-                          className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                          xmlns="http://www.w3.org/2000/svg"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                          ></path>
-                        </svg>
+                      <div className="alert-info flex items-start gap-2.5 leading-relaxed">
+                        <Info size={18} className="text-blue-800 dark:text-blue-300 flex-shrink-0 mt-0.5" />
                         <span>{t.textAnswersHiddenInfo}</span>
                       </div>
                     </div>
@@ -470,27 +541,20 @@ export default function ResultsPage() {
                       ? t.questionTypeMulti
                       : t.questionTypeScale
 
-                const badgeStyle =
-                  q.type === 'single_choice'
-                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400 border-blue-200/30'
-                    : q.type === 'multi_choice'
-                      ? 'bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400 border-purple-200/30'
-                      : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400 border-indigo-200/30'
-
                 return (
                   <div
                     key={q.id}
                     className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 transition-colors shadow-xs"
                   >
                     <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-xs font-semibold text-slate-500 dark:text-neutral-400">
+                      <span className={`text-sm font-normal ${q.required ? 'text-rose-800 dark:text-rose-400/80' : 'text-slate-700 dark:text-neutral-200'}`}>
                         {t.questionIndex(idx + 1)}
                       </span>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${badgeStyle}`}>
+                      <span className="badge-decentralized">
                         {typeLabel}
                       </span>
                     </div>
-                    <h4 className="text-base font-semibold text-slate-900 dark:text-neutral-100 mb-4 break-words">
+                    <h4 className="text-base font-normal text-slate-900 dark:text-neutral-100 mb-4 break-words">
                       {q.prompt}
                     </h4>
 
@@ -503,21 +567,16 @@ export default function ResultsPage() {
                         return (
                           <div key={opt} className="space-y-1.5">
                             <div className="flex items-center justify-between text-sm">
-                              <span className="text-slate-800 dark:text-neutral-200 font-medium break-all pr-4">
+                              <span className="text-slate-800 dark:text-neutral-200 font-normal break-all pr-4">
                                 {opt}
                               </span>
-                              <span className="text-slate-500 dark:text-neutral-400 text-xs font-mono whitespace-nowrap">
+                              <span className="text-slate-500 dark:text-neutral-400 text-sm font-mono whitespace-nowrap">
                                 {count} 次 ({displayPct}%)
                               </span>
                             </div>
                             <div className="w-full bg-slate-100 dark:bg-neutral-800/80 rounded-full h-3 overflow-hidden">
                               <div
-                                className={`h-full rounded-full transition-all duration-500 ${q.type === 'single_choice'
-                                  ? 'bg-blue-600 dark:bg-blue-500'
-                                  : q.type === 'multi_choice'
-                                    ? 'bg-purple-600 dark:bg-purple-500'
-                                    : 'bg-indigo-600 dark:bg-indigo-500'
-                                  }`}
+                                className="h-full rounded-full transition-all duration-500 bg-blue-600 dark:bg-blue-500"
                                 style={{ width: `${pct}%` }}
                               />
                             </div>

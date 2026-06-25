@@ -342,7 +342,7 @@ export async function initProtocolAndCanonicalPool(
   console.log(`  protocolConfigId: ${protocolConfigId}`)
 
   const minGasComp = parseEnvU64('MIN_GAS_COMPENSATION_AMOUNT', 100_000_000n)
-  const purgeBatch = parseEnvU64('PURGE_ANSWERS_BATCH', 100n)
+  const purgeBatch = parseEnvU64('PURGE_ANSWERS_BATCH', 500n)
   console.log(
     `Configuring protocol limits (min_gas_compensation=${minGasComp}, purge_batch=${purgeBatch})…`
   )

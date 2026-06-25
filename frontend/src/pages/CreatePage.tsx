@@ -15,6 +15,7 @@ import { getTicketFeeMist } from '../lib/ticketFee'
 import { formatSsr, formatSui, formatFullPrecision, formatSuiFullPrecision } from '../lib/format'
 import { useT } from '../i18n'
 import { probeGasSponsorHealth, type GasHealth } from '../lib/sponsoredTx'
+import { useGasCompensationAmount } from '../hooks/useGasCompensationAmount'
 
 const DRAFT_KEY_PREFIX = 'surveysui:draft:'
 
@@ -153,7 +154,11 @@ export default function CreatePage() {
     if (poolData?.data?.content?.dataType !== 'moveObject') {
       return { totalFeeBps: 2000n, discountBps: 5000n }
     }
-    const fields = (poolData.data.content as { fields: Record<string, any> }).fields
+    const fields = (
+      poolData.data.content as {
+        fields: { fee_config?: { fields?: { total_fee_bps?: string | number; discount_bps?: string | number } } }
+      }
+    ).fields
     const feeFields = fields?.fee_config?.fields
     if (!feeFields) return { totalFeeBps: 2000n, discountBps: 5000n }
     return {
@@ -176,10 +181,7 @@ export default function CreatePage() {
     })
   }, [])
 
-  const gasCompensationAmount = useMemo(() => {
-    if (!gasHealth?.available) return 0n
-    return BigInt(gasHealth.gasCompensationAmount ?? '0')
-  }, [gasHealth])
+  const { gasCompensationAmount } = useGasCompensationAmount(gasHealth)
 
   const ticketFeeMist = useMemo(() => getTicketFeeMist(), [])
 

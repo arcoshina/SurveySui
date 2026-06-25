@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
+import type { Context, Hono } from 'hono'
 import { insertRevokedNullifier, deleteRevokedNullifier } from './db.js'
 
 interface RevokeRequestBody {
@@ -13,59 +13,61 @@ interface UnrevokeRequestBody {
   source: number
 }
 
-function verifyAdminSecret(req: FastifyRequest, reply: FastifyReply): boolean {
-  const adminSecret = process.env.ADMIN_SECRET
-  if (!adminSecret) {
-    reply.status(500).send({ error: 'server_misconfigured', message: 'ADMIN_SECRET not set on server' })
-    return false
-  }
-
-  const authHeader = req.headers.authorization
-  if (!authHeader || authHeader !== `Bearer ${adminSecret}`) {
-    reply.status(401).send({ error: 'unauthorized', message: 'Invalid or missing admin credentials' })
-    return false
-  }
-  return true
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
-export function registerAdminRevocationRoutes(app: FastifyInstance): void {
-  app.post(
-    '/api/admin/revocation/revoke',
-    async (req: FastifyRequest<{ Body: RevokeRequestBody }>, reply: FastifyReply) => {
-      if (!verifyAdminSecret(req, reply)) return
+/** 驗證 admin bearer token；通過回 null，否則回應錯誤 Response。 */
+function adminAuthError(c: Context): Response | null {
+  const adminSecret = process.env.ADMIN_SECRET
+  if (!adminSecret) {
+    return c.json({ error: 'server_misconfigured', message: 'ADMIN_SECRET not set on server' }, 500)
+  }
+  const authHeader = c.req.header('authorization')
+  if (!authHeader || authHeader !== `Bearer ${adminSecret}`) {
+    return c.json({ error: 'unauthorized', message: 'Invalid or missing admin credentials' }, 401)
+  }
+  return null
+}
 
-      const { nullifier, source, passId, reason } = req.body ?? {}
-      if (!nullifier || source === undefined) {
-        return reply.status(400).send({ error: 'missing_params', message: 'nullifier and source are required' })
-      }
+export function registerAdminRevocationRoutes(app: Hono): void {
+  app.post('/api/admin/revocation/revoke', async (c) => {
+    const authErr = adminAuthError(c)
+    if (authErr) return authErr
 
-      try {
-        await insertRevokedNullifier(nullifier, source, passId, reason)
-        return { success: true, message: `Nullifier ${nullifier} has been revoked successfully` }
-      } catch (err: any) {
-        req.log.error(err)
-        return reply.status(500).send({ error: 'revocation_failed', message: err.message })
-      }
+    const { nullifier, source, passId, reason } = await c.req
+      .json<RevokeRequestBody>()
+      .catch(() => ({}) as RevokeRequestBody)
+    if (!nullifier || source === undefined) {
+      return c.json({ error: 'missing_params', message: 'nullifier and source are required' }, 400)
     }
-  )
 
-  app.post(
-    '/api/admin/revocation/unrevoke',
-    async (req: FastifyRequest<{ Body: UnrevokeRequestBody }>, reply: FastifyReply) => {
-      if (!verifyAdminSecret(req, reply)) return
-
-      const { nullifier, source } = req.body ?? {}
-      if (!nullifier || source === undefined) {
-        return reply.status(400).send({ error: 'missing_params', message: 'nullifier and source are required' })
-      }
-
-      try {
-        await deleteRevokedNullifier(nullifier, source)
-        return { success: true, message: `Nullifier ${nullifier} has been unrevoked successfully` }
-      } catch (err: any) {
-        req.log.error(err)
-        return reply.status(500).send({ error: 'unrevocation_failed', message: err.message })
-      }
+    try {
+      await insertRevokedNullifier(nullifier, source, passId, reason)
+      return c.json({ success: true, message: `Nullifier ${nullifier} has been revoked successfully` })
+    } catch (err) {
+      console.error('[Revocation] revoke failed', err)
+      return c.json({ error: 'revocation_failed', message: errorMessage(err) }, 500)
     }
-  )
+  })
+
+  app.post('/api/admin/revocation/unrevoke', async (c) => {
+    const authErr = adminAuthError(c)
+    if (authErr) return authErr
+
+    const { nullifier, source } = await c.req
+      .json<UnrevokeRequestBody>()
+      .catch(() => ({}) as UnrevokeRequestBody)
+    if (!nullifier || source === undefined) {
+      return c.json({ error: 'missing_params', message: 'nullifier and source are required' }, 400)
+    }
+
+    try {
+      await deleteRevokedNullifier(nullifier, source)
+      return c.json({ success: true, message: `Nullifier ${nullifier} has been unrevoked successfully` })
+    } catch (err) {
+      console.error('[Revocation] unrevoke failed', err)
+      return c.json({ error: 'unrevocation_failed', message: errorMessage(err) }, 500)
+    }
+  })
 }

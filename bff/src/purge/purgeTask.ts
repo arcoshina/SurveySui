@@ -1,4 +1,4 @@
-import type { SuiClient } from '@mysten/sui/client'
+import type { SuiClient, EventId } from '@mysten/sui/client'
 import type { SponsorSigner } from '@surveysui/gas-station-core'
 import { signAndExecuteWithSponsor } from '@surveysui/gas-station-core'
 import {
@@ -31,6 +31,15 @@ export interface PurgeTaskConfig {
 
 const MAX_PURGE_ROUNDS_PER_VAULT = 200
 
+/** SurveyVault Move 物件中本任務用到的生命週期欄位。 */
+interface VaultMoveFields {
+  status?: string | number
+  closed_at_ms?: string | number
+  deadline_ms?: string | number
+  purge_grace_ms?: string | number
+  creator?: string
+}
+
 interface VaultState {
   status: number
   closedAtMs: bigint
@@ -43,9 +52,11 @@ interface VaultState {
 async function readVaultState(suiClient: SuiClient, vaultId: string): Promise<VaultState | null> {
   try {
     const res = await suiClient.getObject({ id: vaultId, options: { showContent: true } })
-    const content = res.data?.content as any
+    const content = res.data?.content as
+      | { dataType?: string; fields?: VaultMoveFields }
+      | undefined
     if (!content || content.dataType !== 'moveObject') return null
-    const f = content.fields
+    const f = content.fields ?? {}
     return {
       status: Number(f.status),
       closedAtMs: BigInt(f.closed_at_ms ?? 0),
@@ -85,7 +96,7 @@ export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
   const nowMs = BigInt(Date.now())
 
   const surveys: Array<{ surveyId: string; vaultId: string }> = []
-  let cursor: any = null
+  let cursor: EventId | null = null
   let pageCount = 0
   const maxPages = 50
   try {
@@ -96,7 +107,7 @@ export async function checkAndPurge(config: PurgeTaskConfig): Promise<number> {
         limit: 50,
       })
       for (const ev of page.data) {
-        const p = ev.parsedJson as any
+        const p = ev.parsedJson as { survey_id?: string; vault_id?: string } | null
         if (p?.survey_id && p?.vault_id) {
           surveys.push({ surveyId: p.survey_id, vaultId: p.vault_id })
         }

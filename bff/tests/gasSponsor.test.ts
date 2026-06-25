@@ -1,16 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
+import { Hono } from 'hono'
 import { Transaction } from '@mysten/sui/transactions'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { bcs } from '@mysten/sui/bcs'
-import { createMultisigSponsorSigner, keypairFromHex } from '@surveysui/gas-station-core'
+import { createMultisigSponsorSigner, keypairFromHex, InMemoryCoinLockStore } from '@surveysui/gas-station-core'
 import { registerGasRoutes, __useInMemoryPassReservationsForTests } from '../src/gas/handler.js'
-import { __resetGasConfigCache } from '../src/gas/gasConfig.js'
+import { __resetGasConfigCache, getGasConfig } from '../src/gas/gasConfig.js'
 import { __resetSponsorState } from '../src/gas/sponsorLedger.js'
-import { __resetPlatformSponsorLedger } from '../src/gas/platformSponsorLedger.js'
+import { __resetPlatformSponsorLedger, getPlatformSponsorCount } from '../src/gas/platformSponsorLedger.js'
+import { tryReserveVaultGasSlot, __resetVaultGasLedger } from '../src/gas/vaultGasLedger.js'
+import * as sponsorAuth from '../src/gas/sponsorAuth.js'
 import { signTicket } from '../src/auth/ticket.js'
-import { initializeDb } from '../src/security/db.js'
+import { setupFakeD1 } from './helpers/fakeD1.js'
 
 const ISSUER_CONFIG_ID = '0x000000000000000000000000000000000000000000000000000000000000000b'
 const VOID_NFT_ID = '0x000000000000000000000000000000000000000000000000000000000000000d'
@@ -66,13 +67,24 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   let userAddress: string
   const registryId = '0x000000000000000000000000000000000000000000000000000000000000000a'
 
+  // Hono app.request 配接成 Fastify-like inject（可指定 app，支援第二個 server2）
+  async function inject(opts: { method: string; url: string; payload?: unknown }, app: Hono = server) {
+    const res = await app.request(opts.url, {
+      method: opts.method,
+      headers: opts.payload !== undefined ? { 'content-type': 'application/json' } : undefined,
+      body: opts.payload !== undefined ? JSON.stringify(opts.payload) : undefined,
+    })
+    const payload = await res.text()
+    return { statusCode: res.status, payload, json: () => JSON.parse(payload) }
+  }
+
   async function gasSponsorPayload(txBytes: string) {
     return { txBytes, senderAddress: userAddress }
   }
 
   // 走完整單簽流程:/sponsor 取得代付 bytes → 使用者簽交易(同意憑證)→ /execute 扣額度並廣播。
   async function sponsorThenExecute(txBytes: string) {
-    const sponsorRes = await server.inject({
+    const sponsorRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -82,7 +94,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     const { signature: userSignature } = await userKeypair.signTransaction(
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
-    return server.inject({
+    return inject({
       method: 'POST',
       url: '/api/gas/execute',
       payload: { sponsoredTxBytes, userSignature, sponsorSignature },
@@ -108,6 +120,9 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     process.env.GAS_SPONSOR_PRIV_2 = sponsorPriv2
     process.env.GAS_SPONSOR_PUBKEY_3 = coldPubkey3
     process.env.SUI_PACKAGE_ID = packageId
+    // 放寬 HTTP/錢包速率限制（本套件測審查/額度/簽章邏輯，非限流）。
+    process.env.GAS_SPONSOR_RATE_LIMIT_MAX = '100000'
+    process.env.GAS_SPONSOR_RATE_LIMIT_MAX_PER_WALLET = '100000'
     delete process.env.GAS_STATION_MODE
     delete process.env.GAS_STATION_URL
     delete process.env.GAS_STATION_SHARED_SECRET
@@ -116,12 +131,12 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     userKeypair = keypairFromHex(userPriv)
     userAddress = userKeypair.toSuiAddress()
     __resetSponsorState()
+    __resetVaultGasLedger()
     __useInMemoryPassReservationsForTests()
-    initializeDb()
+    await setupFakeD1()
     await __resetPlatformSponsorLedger()
 
-    server = Fastify()
-    await server.register(cors, { origin: true })
+    server = new Hono()
 
     mockSuiClient = {
       queryTransactionBlocks: vi.fn().mockResolvedValue({ data: [], hasNextPage: false }),
@@ -282,10 +297,11 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   })
 
   afterEach(async () => {
-    await server.close()
     __resetSponsorState()
     await __resetPlatformSponsorLedger()
     __resetGasConfigCache()
+    delete process.env.GAS_SPONSOR_RATE_LIMIT_MAX
+    delete process.env.GAS_SPONSOR_RATE_LIMIT_MAX_PER_WALLET
     delete process.env.SURVEY_PASS_ISSUER_PRIV
     delete process.env.GAS_SPONSOR_PRIV_1
     delete process.env.GAS_SPONSOR_PRIV_2
@@ -293,6 +309,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     delete process.env.SUI_PACKAGE_ID
     delete process.env.MAX_PLATFORM_CLAIM_GAS_MIST
     delete process.env.MIN_PLATFORM_SPONSOR_TIER
+    delete process.env.PLATFORM_CLAIM_SPONSOR_ENABLED
     delete process.env.GAS_STATION_MODE
     delete process.env.GAS_STATION_URL
     delete process.env.GAS_STATION_SHARED_SECRET
@@ -348,7 +365,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -438,7 +455,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     tx.setSender(userAddress)
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    const sponsorRes = await server.inject({
+    const sponsorRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: { txBytes, senderAddress: userAddress },
@@ -454,7 +471,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
 
-    const execRes = await server.inject({
+    const execRes = await inject({
       method: 'POST',
       url: '/api/gas/execute',
       payload: { sponsoredTxBytes, userSignature: forgedSig, sponsorSignature },
@@ -491,7 +508,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     })
     tx.setSender(userAddress)
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
-    const sponsorRes = await server.inject({
+    const sponsorRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: { txBytes, senderAddress: userAddress },
@@ -507,7 +524,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     const { signature: fakeSponsorSig } = await fakeSponsor.signTransaction(
       new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
     )
-    const execRes = await server.inject({
+    const execRes = await inject({
       method: 'POST',
       url: '/api/gas/execute',
       payload: { sponsoredTxBytes, userSignature, sponsorSignature: fakeSponsorSig },
@@ -542,7 +559,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     tx.setSender(userAddress)
     const txBytes = Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
 
-    const res = await server.inject({
+    const res = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -612,7 +629,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await buildBatchMintExtraTx().then((tx) => tx.build({ client: mockSuiClient, onlyTransactionKind: true }))
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -629,7 +646,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       )
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -686,7 +703,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -697,7 +714,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   })
 
   it('should report count 0 / remaining 2 when there is no on-chain history', async () => {
-    const res = await server.inject({
+    const res = await inject({
       method: 'GET',
       url: `/api/gas/sponsor-count?address=${userAddress}`,
     })
@@ -712,7 +729,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     // One sponsored pass tx already landed on chain → count 1, remaining 1
     mockSuiClient.queryTransactionBlocks.mockResolvedValue(sponsoredTxPage(1))
 
-    const res = await server.inject({
+    const res = await inject({
       method: 'GET',
       url: `/api/gas/sponsor-count?address=${userAddress}`,
     })
@@ -727,7 +744,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     // A sponsored pass tx that aborted on chain still consumed gas → must count.
     mockSuiClient.queryTransactionBlocks.mockResolvedValue(sponsoredTxPage(1, 'failure'))
 
-    const res = await server.inject({
+    const res = await inject({
       method: 'GET',
       url: `/api/gas/sponsor-count?address=${userAddress}`,
     })
@@ -782,7 +799,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     mockSuiClient.dryRunTransactionBlock
       .mockResolvedValueOnce(dryRunFailure)
       .mockResolvedValueOnce(dryRunFailure)
-    const failRes = await server.inject({
+    const failRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -791,7 +808,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     // 2. A subsequent valid request (dry-run succeeds again per beforeEach mock)
     //    must still be allowed — the rejected one left no phantom count.
-    const okRes = await server.inject({
+    const okRes = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -821,7 +838,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -854,7 +871,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -897,7 +914,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -908,6 +925,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
   })
 
   it('should reject platform claim when wallet pass is email-only (tier check)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
     process.env.MIN_PLATFORM_SPONSOR_TIER = '1'
     __resetGasConfigCache()
 
@@ -917,9 +935,10 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
         return {
           data: {
             objectId: id,
+            type: `${packageId}::survey_pass::SurveyPass`,
             content: {
               dataType: 'moveObject',
-              fields: { credential_sources: [2] },
+              fields: { credential_sources: [2], owner: userAddress },
             },
           },
         }
@@ -960,7 +979,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -968,6 +987,200 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
 
     expect(response.statusCode).toBe(403)
     expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
+  })
+
+  // H2 回歸：platform tier 檢查須驗證 pass 由 sender 持有，不得借用他人高 tier pass。
+  const buildPlatformClaimTxBytes = async (passId: string) => {
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId,
+      }),
+    })
+    tx.setSender(userAddress)
+    return Buffer.from(await tx.build({ client: mockSuiClient, onlyTransactionKind: true })).toString('base64')
+  }
+
+  // 池為空的 vault mock（觸發平台代付 fallback），其餘物件走預設。
+  const mockPlatformPassObject = (passId: string, fields: Record<string, unknown>, type?: string) => {
+    mockSuiClient.getObject.mockImplementation(async ({ id }: { id: string }) => {
+      if (id === passId) {
+        return {
+          data: {
+            objectId: id,
+            type: type ?? `${packageId}::survey_pass::SurveyPass`,
+            content: { dataType: 'moveObject', fields },
+          },
+        }
+      }
+      return {
+        data: {
+          objectId: id,
+          content: {
+            dataType: 'moveObject',
+            fields: {
+              gas_balance: '0',
+              gas_compensation_amount: '5000000',
+              storage_compensation_amount: '0',
+              max_inline_answer_bytes: '6144',
+            },
+          },
+        },
+      }
+    })
+  }
+
+  it('rejects platform claim when passId points to a high-tier pass owned by someone else (H2)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    process.env.MIN_PLATFORM_SPONSOR_TIER = '2'
+    __resetGasConfigCache()
+
+    const borrowedPassId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    const otherOwner = '0x00000000000000000000000000000000000000000000000000000000000000ff'
+    // 攻擊者錢包 (userAddress) 把 passId 指向他人持有、具 World ID (tier 2) 的高 tier pass。
+    mockPlatformPassObject(borrowedPassId, { credential_sources: [5], owner: otherOwner })
+
+    const txBytes = await buildPlatformClaimTxBytes(borrowedPassId)
+    const response = await inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
+    expect(mockSuiClient.executeTransactionBlock).not.toHaveBeenCalled()
+  })
+
+  it('rejects platform claim when passId points to a non-SurveyPass object (H2 type check)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    process.env.MIN_PLATFORM_SPONSOR_TIER = '1'
+    __resetGasConfigCache()
+
+    const fakePassId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    // owner 正確、tier 足夠，但物件型別不是 SurveyPass（偽造剛好帶 credential_sources 欄位的物件）。
+    mockPlatformPassObject(
+      fakePassId,
+      { credential_sources: [5], owner: userAddress },
+      `${packageId}::evil::FakePass`
+    )
+
+    const txBytes = await buildPlatformClaimTxBytes(fakePassId)
+    const response = await inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(JSON.parse(response.payload).error).toBe('PLATFORM_SPONSOR_TIER_INSUFFICIENT')
+  })
+
+  it('allows platform claim when sender owns a sufficient-tier pass (H2 happy path)', async () => {
+    process.env.PLATFORM_CLAIM_SPONSOR_ENABLED = 'true'
+    process.env.MIN_PLATFORM_SPONSOR_TIER = '2'
+    __resetGasConfigCache()
+
+    const ownPassId = '0x000000000000000000000000000000000000000000000000000000000000000c'
+    mockPlatformPassObject(ownPassId, { credential_sources: [5], owner: userAddress })
+
+    const txBytes = await buildPlatformClaimTxBytes(ownPassId)
+    const response = await inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.payload)).toHaveProperty('sponsorSignature')
+  })
+
+  it('rejects vault-insufficient claim with 409 vault_gas_insufficient when platform fallback disabled (default)', async () => {
+    // Default: PLATFORM_CLAIM_SPONSOR_ENABLED unset → false. Vault gas pool empty → 409, no coin locked.
+    mockSuiClient.getObject.mockResolvedValue({
+      data: {
+        objectId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            gas_balance: '0',
+            gas_compensation_amount: '5000000',
+            storage_compensation_amount: '0',
+            max_inline_answer_bytes: '6144',
+          },
+        },
+      },
+    })
+
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId: '0x000000000000000000000000000000000000000000000000000000000000000c',
+      }),
+    })
+    tx.setSender(userAddress)
+
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const response = await inject({
+      method: 'POST',
+      url: '/api/gas/sponsor',
+      payload: await gasSponsorPayload(txBytes),
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(JSON.parse(response.payload).error).toBe('vault_gas_insufficient')
+    // Rejected before the pipeline → no gas coin acquired/locked.
+    expect(mockSuiClient.dryRunTransactionBlock).not.toHaveBeenCalled()
+  })
+
+  it('/execute releases the spent gas coin lock after broadcast (local mode)', async () => {
+    const spyQueue = InMemoryCoinLockStore.fromGasConfig(getGasConfig())
+    const invalidateSpy = vi.spyOn(spyQueue, 'invalidateCoin')
+    const server2 = new Hono()
+    registerGasRoutes(server2, { suiClient: mockSuiClient as any, packageId, coinQueue: spyQueue })
+
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: '0x0000000000000000000000000000000000000000000000000000000000000008',
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId: '0x000000000000000000000000000000000000000000000000000000000000000c',
+      }),
+    })
+    tx.setSender(userAddress)
+    const txBytes = Buffer.from(
+      await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
+    ).toString('base64')
+
+    const sponsorRes = await inject(
+      { method: 'POST', url: '/api/gas/sponsor', payload: { txBytes, senderAddress: userAddress } },
+      server2
+    )
+    expect(sponsorRes.statusCode).toBe(200)
+    const { sponsoredTxBytes, sponsorSignature } = JSON.parse(sponsorRes.payload)
+    const { signature: userSignature } = await userKeypair.signTransaction(
+      new Uint8Array(Buffer.from(sponsoredTxBytes, 'base64'))
+    )
+    const execRes = await inject(
+      { method: 'POST', url: '/api/gas/execute', payload: { sponsoredTxBytes, userSignature, sponsorSignature } },
+      server2
+    )
+
+    expect(execRes.statusCode).toBe(200)
+    expect(invalidateSpy).toHaveBeenCalled()
   })
 
   it('should reject PTB mixing survey_pass and survey_vault::claim', async () => {
@@ -1014,7 +1227,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       await tx.build({ client: mockSuiClient, onlyTransactionKind: true })
     ).toString('base64')
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -1072,7 +1285,7 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
       )
     )
 
-    const response = await server.inject({
+    const response = await inject({
       method: 'POST',
       url: '/api/gas/sponsor',
       payload: await gasSponsorPayload(txBytes),
@@ -1086,11 +1299,102 @@ describe('BFF Gas Sponsor for SurveyPass Tests', () => {
     })
     const headers = init?.headers as Record<string, string>
     expect(headers['x-gas-station-timestamp']).toBeTruthy()
+    expect(headers['x-gas-station-nonce']).toBeTruthy()
     expect(headers['x-gas-station-signature']).toBeTruthy()
     expect(JSON.parse(response.payload)).toEqual({
       sponsoredTxBytes: 'c3BvbnNvcmVk',
       sponsorSignature: 'sig',
     })
+  })
+
+  // ---- M5: vault 補償額度預留鎖（分類於 /execute 原子決定，杜絕併發漏計）----
+
+  const M5_VAULT_ID = '0x0000000000000000000000000000000000000000000000000000000000000008'
+
+  function buildClaimTxBytes() {
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${packageId}::survey_vault::claim`,
+      typeArguments: [`${packageId}::claim_sentinel::VoidNft`],
+      arguments: unifiedClaimArgs(tx, {
+        vaultId: M5_VAULT_ID,
+        surveyId: '0x0000000000000000000000000000000000000000000000000000000000000009',
+        passId: '0x000000000000000000000000000000000000000000000000000000000000000c',
+      }),
+    })
+    tx.setSender(userAddress)
+    return tx.build({ client: mockSuiClient, onlyTransactionKind: true }).then(
+      (b) => Buffer.from(b).toString('base64')
+    )
+  }
+
+  function mockVault(gasBalance: string, gasCompensationAmount: string) {
+    mockSuiClient.getObject.mockResolvedValue({
+      data: {
+        objectId: M5_VAULT_ID,
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            gas_balance: gasBalance,
+            gas_compensation_amount: gasCompensationAmount,
+            storage_compensation_amount: '0',
+            max_inline_answer_bytes: '6144',
+          },
+        },
+      },
+    })
+  }
+
+  it('M5: vault-funded claim does not consume platform daily quota', async () => {
+    // 預設 vault（gas_balance 100M / compensation 5M = 20 槽）→ vault 代付。
+    const res = await sponsorThenExecute(await buildClaimTxBytes())
+    expect(res.statusCode).toBe(200)
+    expect(await getPlatformSponsorCount(userAddress)).toBe(0)
+  })
+
+  it('M5: overflow claim (vault slots exhausted by in-flight) is classified platform and counted', async () => {
+    // vault 僅 1 槽（gas_balance == compensation）；/sponsor 仍判 vault 代付並簽出。
+    mockVault('5000000', '5000000')
+    // 模擬另一筆併發 claim 已佔走唯一的 vault 槽。
+    expect(await tryReserveVaultGasSlot(M5_VAULT_ID, 1)).toBe(true)
+
+    const res = await sponsorThenExecute(await buildClaimTxBytes())
+    expect(res.statusCode).toBe(200)
+    // 該筆溢出 → 平台代付 → 計入平台每日額度（race 不漏計）。
+    expect(await getPlatformSponsorCount(userAddress)).toBe(1)
+  })
+
+  it('M5: platform overflow whose signed budget exceeds platform cap is rejected (422)', async () => {
+    // 平台單筆上限壓在 dry-run 淨 gas(1.4M) 之下；簽出的 vault 寬預算必定超標。
+    process.env.MAX_PLATFORM_CLAIM_GAS_MIST = '1000000'
+    __resetGasConfigCache()
+    // vault 1 槽且 compensation 夠大讓 /sponsor 以 vault 寬預算簽出。
+    mockVault('50000000', '50000000')
+    expect(await tryReserveVaultGasSlot(M5_VAULT_ID, 1)).toBe(true)
+
+    const res = await sponsorThenExecute(await buildClaimTxBytes())
+    expect(res.statusCode).toBe(422)
+    expect(JSON.parse(res.payload).error).toBe('gas_exceeds_compensation')
+    // 被斷言擋下：不廣播、不計平台額度。
+    expect(mockSuiClient.executeTransactionBlock).not.toHaveBeenCalled()
+    expect(await getPlatformSponsorCount(userAddress)).toBe(0)
+  })
+
+  it('M3: platform overflow whose signed budget is unparseable (null) is rejected fail-closed (422)', async () => {
+    // budget 解析為 null（欄位缺失/非數值）時無法確認上限 → fail-closed 一律拒絕。
+    mockVault('50000000', '50000000')
+    expect(await tryReserveVaultGasSlot(M5_VAULT_ID, 1)).toBe(true)
+    const spy = vi.spyOn(sponsorAuth, 'gasBudgetFromTransactionData').mockReturnValue(null)
+    try {
+      const res = await sponsorThenExecute(await buildClaimTxBytes())
+      expect(res.statusCode).toBe(422)
+      expect(JSON.parse(res.payload).error).toBe('gas_exceeds_compensation')
+      // 不廣播、不計平台額度。
+      expect(mockSuiClient.executeTransactionBlock).not.toHaveBeenCalled()
+      expect(await getPlatformSponsorCount(userAddress)).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

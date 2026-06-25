@@ -1,6 +1,7 @@
 import type { SuiClient, CoinStruct } from '@mysten/sui/client'
 import type { AcquiredGasCoin, CoinLockStore } from './types.js'
 import type { GasConfig } from './gasConfig.js'
+import { pickCoin, fetchSuiCoins } from './coinSelection.js'
 
 type LockEntry = { expiresAt: number }
 
@@ -42,12 +43,13 @@ export class InMemoryCoinLockStore implements CoinLockStore {
     return ids
   }
 
-  release(coinObjectId: string): void {
+  // 介面為 async（DO 版需 await persist）；InMemory 單程序記憶體變更同步立即生效、無持久化。
+  async release(coinObjectId: string): Promise<void> {
     this.locks.delete(coinObjectId)
   }
 
-  invalidateCoin(coinObjectId: string): void {
-    this.release(coinObjectId)
+  async invalidateCoin(coinObjectId: string): Promise<void> {
+    this.locks.delete(coinObjectId)
     this.cachedCoins = this.cachedCoins.filter((c) => c.coinObjectId !== coinObjectId)
     this.lastInventoryFetch = 0
   }
@@ -67,32 +69,10 @@ export class InMemoryCoinLockStore implements CoinLockStore {
     if (!force && this.cachedCoins.length > 0 && now - this.lastInventoryFetch < this.inventoryRefreshMs) {
       return this.cachedCoins
     }
-    const all: CoinStruct[] = []
-    let cursor: string | null | undefined = undefined
-    do {
-      const res = await suiClient.getCoins({
-        owner,
-        coinType: '0x2::sui::SUI',
-        cursor,
-      })
-      all.push(...res.data)
-      cursor = res.hasNextPage ? res.nextCursor : null
-    } while (cursor)
+    const all = await fetchSuiCoins(suiClient, owner)
     this.cachedCoins = all
     this.lastInventoryFetch = now
     return all
-  }
-
-  private pickCoin(coins: CoinStruct[], minBalanceMist: bigint, now: number): CoinStruct | null {
-    const eligible = coins
-      .filter((c) => !this.isLocked(c.coinObjectId, now))
-      .filter((c) => BigInt(c.balance) >= minBalanceMist)
-      .sort((a, b) => {
-        const balA = BigInt(a.balance)
-        const balB = BigInt(b.balance)
-        return balA > balB ? -1 : balA < balB ? 1 : 0
-      })
-    return eligible[0] ?? null
   }
 
   async acquire(
@@ -119,7 +99,7 @@ export class InMemoryCoinLockStore implements CoinLockStore {
         throw lastError
       }
 
-      const picked = this.pickCoin(coins, minBalanceMist, now)
+      const picked = pickCoin(coins, (id, n) => this.isLocked(id, n), minBalanceMist, now)
       if (!picked) {
         lastError = new Error(
           `No unlocked SUI coin with balance >= ${minBalanceMist} MIST for sponsor ${owner}`

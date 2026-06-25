@@ -3,19 +3,29 @@ main = "src/index.ts"
 compatibility_date = "2025-06-07"
 compatibility_flags = ["nodejs_compat"]
 
+# 公開 *.workers.dev 網址：BFF 靠此 URL 串接，保留開啟
+workers_dev = true
+# 後端簽章服務不需逐版預覽網址，關閉以縮小對外曝露面
+preview_urls = false
+
 [[durable_objects.bindings]]
 name = "GAS_STATION"
 class_name = "GasStationDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["GasStationDO"]
+new_sqlite_classes = ["GasStationDO"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "surveysui-gas"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_name = "surveysui-gas-testnet"
+database_id = "0e66b1e3-51fe-459e-a06b-e830e3cf05be"
 
+# CF Worker 執行期讀不到根 .env，故以下為 worker 專屬副本，
+# 須與根 .env「Sui 鏈」「Gas 贊助與 Coin 合併」段對應變數手動保持同步。
 [vars]
-SUI_RPC_URL = "https://fullnode.devnet.sui.io:443"
-COIN_MERGE_TRIGGER_COUNT = "20"
+SUI_RPC_URL = "https://fullnode.testnet.sui.io:443"
+COIN_MERGE_TRIGGER_COUNT = "100"
+SUI_PACKAGE_ID= "0x6cb1cc9163b737bebabb5f8e70ae943388cddc68949691af6faa86117d3e6ee8"
+
+

@@ -2,7 +2,7 @@ import type { ResultsDict } from '../zh/results'
 
 const results: ResultsDict = {
   title: 'Survey Statistics',
-  subtitle: 'Statistical Results Charts',
+  subtitle: 'Response Progress',
   loading: 'Loading statistics data...',
   errLoadFailed: 'Failed to load survey. Please check your Vault ID.',
   errEncrypted: 'This survey is configured with "Encrypted Responses". The response data is securely encrypted on-chain. Only the survey creator can sign with their wallet to decrypt and view results; it cannot be displayed publicly.',

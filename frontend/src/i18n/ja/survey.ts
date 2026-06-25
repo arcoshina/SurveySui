@@ -67,6 +67,9 @@ const survey: SurveyDict = {
   gasLimitReachedConfirmTitle: '代理支払限度額に到達',
   gasLimitReachedConfirmDesc: (estSui: string) => `本日の無料代理支払限度（最大3回）に到達しました。続行するには、Gas代（推定 ${estSui} SUI）の自己負担が必要です。続行しますか？`,
   gasLimitReachedWarning: '本日のプラットフォーム代理支払限度（3回）に到達しました。回答を送信するには自己負担が必要です。',
+  gasVaultEmptyConfirmTitle: 'このアンケートのGasプールが枯渇しています',
+  gasVaultEmptyConfirmDesc: (estSui: string) => `このアンケートの発起者が事前に預けたGasプールが枯渇しています。報酬を受け取るには、Gas代（推定 ${estSui} SUI）の自己負担が必要です。続行しますか？`,
+  gasVaultEmptyWarning: 'このアンケートのGasプールが枯渇しています。報酬を受け取るには自己負担で送信してください。',
   gasSelfPaidContinue: '自己負担で送信',
   gasSelfPaidCancel: 'キャンセル',
   confirmSubmitSelfPaid: '自己負担で回答を送信 ➡',
@@ -122,7 +125,7 @@ const survey: SurveyDict = {
   locale: 'ja',
   errEncryptSubmitFailed: '回答の暗号化および送信に失敗しました',
   errInlineAnswerTooLarge:
-    '回答が大きすぎてオンチェーンに直接保存できません。内容を短くするか、再試行してください（大きいデータは Walrus に保存されます）。',
+    '回答が長すぎてオンチェーンの1件あたりの上限を超えています。内容を短くしてください。大きなファイルを添付したい場合は、回答内にクラウドストレージのリンクを貼り付けてください。',
   errGasExceedsCompensation:
     '推定ガスがアンケートの補償上限を超えたため、スポンサー代行を拒否しました。自己負担するか、作成者にご連絡ください。',
   encryptingSubmit: '回答を暗号化して送信しています...',

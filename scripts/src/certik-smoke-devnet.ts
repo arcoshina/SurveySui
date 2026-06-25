@@ -525,7 +525,6 @@ function unifiedClaimArgs(
     ephemeralNullifier?: number[]
     ticketExpiresAt?: number
     encryptedAnswers?: number[] | null
-    answerBlobId?: number[] | null
   }
 ) {
   const attr =
@@ -555,7 +554,6 @@ function unifiedClaimArgs(
         )
         .toBytes()
     ),
-    tx.pure(bcs.option(bcs.vector(bcs.u8())).serialize(p.answerBlobId ?? null).toBytes()),
     tx.object('0x6'),
   ]
 }
@@ -859,9 +857,9 @@ async function main() {
 
   await ensureDevnetGas(client, admin.getPublicKey().toSuiAddress())
 
-  // ── F45 blob id too long ──
+  // ── F45 inline answer too large (禁止大型答卷;blob 路線已廢除) ──
   {
-    const longBlob = 'b'.repeat(300)
+    const oversizedInline = Array.from({ length: 7000 }, () => 1) // > 預設 6144 上限
     const tx = new Transaction()
     tx.moveCall({
       target: `${packageId}::survey_vault::claim`,
@@ -878,20 +876,19 @@ async function main() {
         passId: passSentinelId,
         useNft: false,
         nftId: voidNftId,
-        answerBlobId: Array.from(new TextEncoder().encode(longBlob)),
-        encryptedAnswers: null,
+        encryptedAnswers: oversizedInline,
       }),
     })
     record(results, {
       finding: 'F45',
-      scenario: 'blob id exceeds max_blob_id_bytes',
+      scenario: 'inline answer exceeds max_inline_answer_bytes',
       expected: 'failure',
       outcome: await runTx(client, tx, admin),
-      moveTestRef: 'test_blob_id_exceeds_max_bytes_aborts',
+      moveTestRef: 'test_inline_answer_exceeds_max_bytes_aborts',
     })
   }
 
-  // ── F45 inline within limit + vault limits read ──
+  // ── F45 inline within limit + vault limit read ──
   {
     const vaultObj = await client.getObject({
       id: baseFixture.vaultId,
@@ -899,12 +896,11 @@ async function main() {
     })
     const fields = (vaultObj.data?.content as { fields?: Record<string, string> })?.fields
     const maxInline = Number(fields?.max_inline_answer_bytes ?? 0)
-    const maxBlob = Number(fields?.max_blob_id_bytes ?? 0)
     results.push({
       finding: 'F45/D-4',
-      scenario: 'RPC read vault max_inline_answer_bytes / max_blob_id_bytes',
-      expected: 'fields present on vault object',
-      actual: `max_inline=${maxInline} max_blob=${maxBlob}`,
+      scenario: 'RPC read vault max_inline_answer_bytes',
+      expected: 'field present on vault object',
+      actual: `max_inline=${maxInline}`,
       digest: baseFixture.digest,
       moveTestRef: 'SurveyPage vaultLimits',
     })
@@ -942,7 +938,6 @@ async function main() {
         nftId: voidNftId,
         attributeNullifiers: [],
         encryptedAnswers: [1, 2, 3],
-        answerBlobId: null,
       }),
     })
     const happy = await runTx(client, tx, attacker)

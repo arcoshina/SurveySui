@@ -85,6 +85,7 @@ const dashboard: DashboardDict = {
   respondentHeader: 'Encuestado (Respondent)',
   submittedTimeHeader: 'Hora de envío (Submitted Time)',
   decryptFailedCount: (n: number) => `Hay ${n} respuestas que no se pudieron desencriptar (claves incorrectas o datos corruptos).`,
+  schemaMismatchCount: (n: number) => `Se excluyeron ${n} respuestas de las estadísticas por tener una estructura de preguntas incompatible.`,
   closeSuccess: 'La encuesta se ha cerrado con éxito; el saldo restante de SSR se ha devuelto a tu billetera.',
   btnClosed: 'Cerrada',
   btnClosing: 'Cerrando...',

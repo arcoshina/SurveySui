@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import {
   createMultisigSponsorSigner,
   createSponsorSignerFromEnv,

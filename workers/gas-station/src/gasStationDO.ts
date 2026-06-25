@@ -8,19 +8,16 @@ import {
   runSponsorPipeline,
   validateSponsorTransaction,
   verifyGasStationSignature,
-  type SponsorPipelineContext,
   type SponsorSigner,
 } from '@surveysui/gas-station-core'
 import { toGasConfigEnv, toSponsorSignerEnv, type GasStationEnv } from './env.js'
 import { DurableObjectCoinLockStore } from './durableObjectCoinLockStore.js'
+import { DurableObjectNonceStore } from './durableObjectNonceStore.js'
 import { ensureD1Schema } from './d1Stores.js'
 
 export interface SponsorRequestBody {
   txBytes: string
   senderAddress: string
-  requestId?: string
-  /** Ignored — DO re-derives from txBytes via validateSponsorTransaction. */
-  pipelineContext?: SponsorPipelineContext
 }
 
 type DoMetrics = {
@@ -37,6 +34,7 @@ export class GasStationDO implements DurableObject {
     resolve: (res: Response) => void
   }> = []
   private coinStore: DurableObjectCoinLockStore
+  private nonceStore: DurableObjectNonceStore
   private metrics: DoMetrics = { queueDepth: 0, lockedCoinCount: 0, unlockedCoinCount: 0 }
 
   constructor(
@@ -50,8 +48,10 @@ export class GasStationDO implements DurableObject {
       gasConfig.coinQueueAcquireRetries,
       gasConfig.coinInventoryRefreshMs
     )
+    this.nonceStore = new DurableObjectNonceStore(this.state.storage)
     void this.state.blockConcurrencyWhile(async () => {
       await this.coinStore.load()
+      await this.nonceStore.load()
       if (this.env.DB) await ensureD1Schema(this.env.DB)
       const gasConfig = loadGasConfig(toGasConfigEnv(this.env))
       const intervalMs = gasConfig.coinMergeIntervalMs
@@ -68,12 +68,34 @@ export class GasStationDO implements DurableObject {
       return Response.json(await this.health())
     }
 
+    if (request.method === 'POST' && url.pathname === '/release') {
+      const rawBody = await request.text()
+      const authError = await this.verifyRequestAuth(request, rawBody)
+      if (authError) {
+        return Response.json({ error: 'unauthorized', message: authError }, { status: 401 })
+      }
+      let releaseBody: { coinObjectIds?: string[] }
+      try {
+        releaseBody = JSON.parse(rawBody) as { coinObjectIds?: string[] }
+      } catch {
+        return Response.json({ error: 'invalid_json', message: 'Malformed JSON body' }, { status: 400 })
+      }
+      // Spent coins: drop the lock + cache directly (not via the sponsor queue).
+      // Racing with acquire is benign — worst case the next acquire re-fetches inventory.
+      const ids = Array.isArray(releaseBody.coinObjectIds) ? releaseBody.coinObjectIds : []
+      for (const id of ids) {
+        if (typeof id === 'string') await this.coinStore.invalidateCoin(id)
+      }
+      this.metrics.lockedCoinCount = this.coinStore.getLockedCoinIds().size
+      return Response.json({ released: ids.length })
+    }
+
     if (request.method !== 'POST' || url.pathname !== '/sponsor') {
       return new Response('Not found', { status: 404 })
     }
 
     const rawBody = await request.text()
-    const authError = this.verifyRequestAuth(request, rawBody)
+    const authError = await this.verifyRequestAuth(request, rawBody)
     if (authError) {
       return Response.json({ error: 'unauthorized', message: authError }, { status: 401 })
     }
@@ -92,19 +114,25 @@ export class GasStationDO implements DurableObject {
     })
   }
 
-  private verifyRequestAuth(request: Request, rawBody: string): string | null {
+  private async verifyRequestAuth(request: Request, rawBody: string): Promise<string | null> {
     const secret = this.env.GAS_STATION_SHARED_SECRET?.trim()
     if (!secret) {
       return 'GAS_STATION_SHARED_SECRET is not configured'
     }
     const timestamp = request.headers.get('x-gas-station-timestamp')
+    const nonce = request.headers.get('x-gas-station-nonce')
     const signature = request.headers.get('x-gas-station-signature')
-    if (!timestamp || !signature) {
+    if (!timestamp || !nonce || !signature) {
       return 'Missing HMAC headers'
     }
-    if (!verifyGasStationSignature(secret, timestamp, rawBody, signature)) {
+    if (!verifyGasStationSignature(secret, timestamp, nonce, rawBody, signature)) {
       return 'Invalid or expired HMAC signature'
     }
+    // 驗章通過後才消費 nonce，並 await 寫入確保 DO 重啟也擋得住重放。
+    if (!this.nonceStore.consume(nonce, Number(timestamp))) {
+      return 'Replayed request'
+    }
+    await this.nonceStore.persist()
     return null
   }
 
@@ -194,6 +222,7 @@ export class GasStationDO implements DurableObject {
         enforcePassLimit: false,
         enforcePlatformQuota: false,
         enforcePlatformTier: false,
+        platformClaimEnabled: gasConfig.platformClaimSponsorEnabled,
       },
     })
     if (!validation.ok) {
@@ -212,7 +241,6 @@ export class GasStationDO implements DurableObject {
       coinStore: this.coinStore,
       gasConfig,
       context: validation.pipelineContext,
-      requestId: body.requestId,
     })
 
     this.metrics.lastOutcome = outcome.metrics.outcome
@@ -222,7 +250,6 @@ export class GasStationDO implements DurableObject {
       console.log(
         JSON.stringify({
           event: 'gas_sponsor',
-          requestId: body.requestId,
           sender: body.senderAddress,
           outcome: outcome.metrics.outcome,
           queueWaitMs: outcome.metrics.queueWaitMs,
@@ -239,7 +266,6 @@ export class GasStationDO implements DurableObject {
     console.log(
       JSON.stringify({
         event: 'gas_sponsor',
-        requestId: body.requestId,
         sender: body.senderAddress,
         outcome: 'success',
         queueWaitMs: outcome.metrics.queueWaitMs,

@@ -1,4 +1,5 @@
 import type { IDKitResult, RpContext } from '@worldcoin/idkit'
+import { bffUrl } from './bffUrl'
 
 // World ID 4.0 (Tier 2, Orb only) — BFF 互動封裝。
 // 把與 BFF 的兩段 fetch 抽離 AuthPage，便於單元測試與重用。
@@ -29,7 +30,7 @@ export class WorldIdError extends Error {
 
 /** Step 1: 向 BFF 取 RP 簽名 context（signing_key 在後端，不會回傳到前端）。 */
 export async function fetchWorldIdSignRequest(): Promise<WorldIdSignRequest> {
-  const res = await fetch('/auth/worldid/sign-request', { method: 'POST' })
+  const res = await fetch(bffUrl('/auth/worldid/sign-request'), { method: 'POST' })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new WorldIdError('config', data?.error)
   return {
@@ -47,7 +48,7 @@ export async function submitWorldIdProof(
   owner: string,
   payload: IDKitResult
 ): Promise<WorldIdTicket> {
-  const res = await fetch('/auth/worldid/verify', {
+  const res = await fetch(bffUrl('/auth/worldid/verify'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ owner, payload }),

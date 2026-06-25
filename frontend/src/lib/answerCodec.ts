@@ -6,7 +6,19 @@ export interface EncodedAnswersPayload {
   version: number
 }
 
-export function normalizeBytes(input: any): Uint8Array {
+/**
+ * 回覆的題目結構與目前問卷不相容（version 不符或 schema_hash 不符），
+ * 無法按 index 可信對映。上層應將此類回覆獨立計數、排除於統計之外，
+ * 而非靜默錯位對映或當成空答案。
+ */
+export class SchemaMismatchError extends Error {
+  constructor(public readonly reason: 'version' | 'schema_hash') {
+    super(`Answer payload is incompatible with current schema: ${reason}`)
+    this.name = 'SchemaMismatchError'
+  }
+}
+
+export function normalizeBytes(input: unknown): Uint8Array {
   if (Array.isArray(input)) {
     return new Uint8Array(input.map(Number))
   }
@@ -101,8 +113,7 @@ export function decodeAnswers(
   }
 
   if (payload.version !== 1) {
-    console.warn(`Unsupported payload version: ${payload.version}. Discarding.`)
-    return {}
+    throw new SchemaMismatchError('version')
   }
 
   const expectedHash =
@@ -117,9 +128,8 @@ export function decodeAnswers(
       : ''
 
   if (cleanExpected !== cleanPayload) {
-    console.warn(
-      `Schema hash mismatch! Expected: ${cleanExpected}, Payload: ${cleanPayload}. Answers might be misaligned.`
-    )
+    // schema_hash 不符代表此回覆是依不同題序／題目集編碼，按 index 對映會錯位。
+    throw new SchemaMismatchError('schema_hash')
   }
 
   const answersMap: Record<string, string | string[] | number | number[]> = {}

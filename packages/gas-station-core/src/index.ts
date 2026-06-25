@@ -1,6 +1,7 @@
 export * from './gasMath.js'
 export * from './gasConfig.js'
 export * from './types.js'
+export * from './coinSelection.js'
 export * from './inMemoryCoinLockStore.js'
 export * from './mergeCoins.js'
 export * from './splitCoins.js'

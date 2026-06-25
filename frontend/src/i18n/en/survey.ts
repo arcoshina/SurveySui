@@ -67,6 +67,9 @@ const survey: SurveyDict = {
   gasLimitReachedConfirmTitle: 'Sponsorship Limit Reached',
   gasLimitReachedConfirmDesc: (estSui: string) => `Your daily platform sponsorship limit (max 3 times) has been reached. To submit, you will need to pay the on-chain gas fee (~${estSui} SUI). Continue?`,
   gasLimitReachedWarning: 'Daily platform sponsorship limit (3 times) reached. Please submit with self-paid gas.',
+  gasVaultEmptyConfirmTitle: "This survey's gas pool is empty",
+  gasVaultEmptyConfirmDesc: (estSui: string) => `The gas pool pre-funded by this survey's creator is empty. To claim your reward, you need to pay the on-chain gas yourself (~${estSui} SUI). Continue?`,
+  gasVaultEmptyWarning: "This survey's gas pool is empty. Please submit with self-paid gas to claim.",
   gasSelfPaidContinue: 'Pay Gas & Submit',
   gasSelfPaidCancel: 'Cancel',
   confirmSubmitSelfPaid: 'Self-paid Gas Submit ➡',
@@ -122,7 +125,7 @@ const survey: SurveyDict = {
   locale: 'en-US',
   errEncryptSubmitFailed: 'Failed to encrypt and submit response',
   errInlineAnswerTooLarge:
-    'Response is too large for on-chain inline storage. Shorten your answers or retry (the app should route large payloads to Walrus).',
+    'Your answer is too long and exceeds the on-chain per-submission limit. Please shorten it; if you need to attach a large file, paste a cloud drive link in your answer instead.',
   errGasExceedsCompensation:
     'Estimated gas exceeds this survey vault compensation; sponsorship was denied. Pay gas yourself or contact the creator.',
   encryptingSubmit: 'Encrypting and submitting response...',
